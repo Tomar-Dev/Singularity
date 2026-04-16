@@ -1,20 +1,16 @@
-# Değişiklikleri tara
+# Stage all changes
 git add .
 
-# Kullanıcıdan commit mesajı iste
-$msg = Read-Host "Güncelleme notu (Commit message) girin"
+# Prompt user for commit message
+$msg = Read-Host "Enter commit message"
 if ([string]::IsNullOrWhiteSpace($msg)) { $msg = "Minor updates" }
 
-# Yerel depoya kaydet
+# Commit to local repository
 git commit -m "$msg"
 
-# GitHub'a gönder
-Write-Host "GitHub güncelleniyor..." -ForegroundColor Cyan
+# Push to GitHub
+Write-Host "Updating GitHub repository..." -ForegroundColor Cyan
 git push origin main
 
-# Codeberg'e gönder
-Write-Host "Codeberg güncelleniyor..." -ForegroundColor Blue
-git push codeberg main
-
-Write-Host "İşlem başarıyla tamamlandı!" -ForegroundColor Green
+Write-Host "Sync completed successfully!" -ForegroundColor Green
 pause
