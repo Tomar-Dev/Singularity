@@ -35,6 +35,7 @@ NVMeDriver::NVMeDriver(PCIeDevice* pci)
     io_phase = 1;
     db_stride = 4;
     namespace_id = 1; 
+    initialized_early = false;
     
     spinlock_init(&lock); 
 }
@@ -150,7 +151,7 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
     
     *out_prp_page_virt = nullptr;
     cmd->prp1 = phys_addr;
-    pmm_inc_ref((void*)phys_addr); // PIN 1. Sayfa
+    pmm_inc_ref((void*)phys_addr); 
     
     uint32_t page_offset = current_virt & (PAGE_SIZE - 1);
     uint32_t first_page_cap = PAGE_SIZE - page_offset;
@@ -166,7 +167,7 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
     if (bytes_left <= PAGE_SIZE) {
         uint64_t p2 = get_physical_address(current_virt);
         cmd->prp2 = p2;
-        pmm_inc_ref((void*)p2); // PIN 2. Sayfa
+        pmm_inc_ref((void*)p2); 
         return 0;
     }
     
@@ -200,7 +201,7 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
         
         phys_addr = get_physical_address(current_virt);
         current_prp_list[prp_idx++] = phys_addr;
-        pmm_inc_ref((void*)phys_addr); // PIN Geri kalan sayfalar
+        pmm_inc_ref((void*)phys_addr); 
         
         if (bytes_left > PAGE_SIZE) bytes_left -= PAGE_SIZE;
         else bytes_left = 0;
@@ -264,7 +265,8 @@ bool NVMeDriver::createIOQueues() {
     return waitForAdminCompletion(3);
 }
 
-int NVMeDriver::init() {
+// OPTİMİZASYON YAMASI: Asenkron Donanım Başlatma (Phase 1)
+int NVMeDriver::earlyInit() {
     pciDev->enableBusMaster();
     pciDev->enableMemorySpace();
 
@@ -282,7 +284,7 @@ int NVMeDriver::init() {
     
     regs->cc &= ~NVME_CC_EN;
     uint64_t start = rdtsc();
-    while ((regs->csts & NVME_CSTS_RDY) && (rdtsc() - start) < 1000000000ULL);
+    while ((regs->csts & NVME_CSTS_RDY) && (rdtsc() - start) < 1000000000ULL) { hal_cpu_relax(); }
     
     regs->intms = 0xFFFFFFFF;
 
@@ -305,8 +307,18 @@ int NVMeDriver::init() {
     regs->acq = get_physical_address((uint64_t)cq_virt);
     regs->aqa = (63 << 16) | 63;
 
+    // Kontrolcüyü başlat ve ASLA BEKLEMEDEN dön! (Arka planda uyanacak)
     regs->cc = NVME_CC_IOCQES_16 | NVME_CC_IOSQES_64 | NVME_CC_EN;
-    waitReady();
+    
+    initialized_early = true;
+    return 1;
+}
+
+// OPTİMİZASYON YAMASI: Asenkron Donanım Başlatma (Phase 2)
+int NVMeDriver::finalize() {
+    if (!initialized_early) return 0;
+    
+    waitReady(); // SMP süreci geçtiği için bu bekleme anında (0ms) tamamlanır.
 
     if (!createIOQueues()) return 0;
     
@@ -371,6 +383,11 @@ int NVMeDriver::init() {
     return 0;
 }
 
+int NVMeDriver::init() {
+    if (earlyInit()) { return finalize(); }
+    return 0;
+}
+
 int NVMeDriver::shutdown() {
     regs->cc &= ~NVME_CC_EN; 
     while (regs->csts & NVME_CSTS_RDY) {
@@ -390,7 +407,6 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
 
     storage_kiovec_t vec;
     vec.virt_addr = buffer;
-    // GÜVENLİK YAMASI: Type Truncation (Matematiksel Taşma) giderildi
     vec.size = (size_t)count * 512;
     vec.phys_addr = 0; 
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
@@ -463,7 +479,6 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
 
     storage_kiovec_t vec;
     vec.virt_addr = (void*)buffer;
-    // GÜVENLİK YAMASI: Type Truncation (Matematiksel Taşma) giderildi
     vec.size = (size_t)count * 512;
     vec.phys_addr = 0; 
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
@@ -534,7 +549,6 @@ int NVMeDriver::read_vector(uint64_t lba, kiovec_t* vectors, int vector_count) {
     }
     
     bool is_aligned = true;
-    // GÜVENLİK YAMASI: Size overflow (uint32_t -> size_t) giderildi
     size_t total_bytes = 0;
     
     for (int i = 0; i < vector_count; i++) {
@@ -599,7 +613,6 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
     }
     
     bool is_aligned = true;
-    // GÜVENLİK YAMASI: Size overflow (uint32_t -> size_t) giderildi
     size_t total_bytes = 0;
     for (int i = 0; i < vector_count; i++) {
         total_bytes += vectors[i].size;
@@ -649,16 +662,38 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
     return success ? total_sectors : 0;
 }
 
+// Global instances array
+static NVMeDriver* g_nvme_drivers[4] = {nullptr};
+static int g_nvme_count = 0;
+
 extern "C" {
     __attribute__((used, noinline))
-    int init_nvme() {
+    void init_nvme_early() {
         for (int i = 0; i < PCIe::getDeviceCount(); i++) {
             PCIeDevice* pci = PCIe::getDevice(i);
             if (pci->class_id == 0x01 && pci->subclass_id == 0x08) {
-                NVMeDriver* drv = new NVMeDriver(pci);
-                return drv->init();
+                if (g_nvme_count < 4) {
+                    NVMeDriver* drv = new NVMeDriver(pci);
+                    if (drv->earlyInit()) {
+                        g_nvme_drivers[g_nvme_count++] = drv;
+                    } else {
+                        delete drv;
+                    }
+                }
             }
         }
-        return 0;
+    }
+
+    __attribute__((used, noinline))
+    int init_nvme_late() {
+        int initialized = 0;
+        for (int i = 0; i < g_nvme_count; i++) {
+            if (g_nvme_drivers[i]) {
+                if (g_nvme_drivers[i]->finalize()) {
+                    initialized++;
+                }
+            }
+        }
+        return initialized > 0 ? 1 : 0;
     }
 }

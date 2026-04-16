@@ -10,13 +10,12 @@ section .text
 syscall_entry:
     swapgs
     
-    mov [gs:16], rsp
-    ; SSE & Fast Syscall safety bypass implicit
-    mov rsp, [gs:8]
+    mov[gs:0x10], rsp
+    ; GÜVENLİK YAMASI: Syscall Stack Isolation
+    ; Artık Ring 3'ten gelen çağrılar, Thread'in kendi Kernel Stack'ini (gs:0x08)
+    ; değil, sadece Syscall'lara özel tahsis edilmiş izole yığını (gs:0x30) kullanır.
+    mov rsp, [gs:0x30]
 
-    ; [SECURITY PATCH]: SYSRET Canonical Address Vulnerability Fix
-    ; If RCX (Return RIP) is non-canonical, SYSRET generates #GP in Ring 0, crashing the kernel.
-    ; We must validate RCX (bits 47-63 must be identical).
     mov r10, rcx
     sar r10, 47
     inc r10
@@ -24,7 +23,7 @@ syscall_entry:
     ja .invalid_rip
     
     push 0x1B          ; User SS
-    push qword[gs:16]  ; User RSP
+    push qword[gs:0x10]; User RSP
     push r11           ; User RFLAGS
     push 0x23          ; User CS
     push rcx           ; User RIP
@@ -69,16 +68,14 @@ syscall_entry:
 
     add rsp, 16 
     
-    pop r11 ; FIX 3: Restore Original User RFLAGS
-    pop rcx ; FIX 2: Restore Original User RIP
+    pop r11 
+    pop rcx 
     add rsp, 8
     
-    ; [SECURITY PATCH]: Clear dangerous flags from User RFLAGS (e.g., IOPL, IF)
-    ; Force IF=1 (0x200), clear IOPL, AC, NT, TF
-    and r11, 0xFFFFFFFFFFFFCDFF ; Clear IOPL
-    and r11, 0xFFFFFFFFFFFBFFFF ; Clear AC
-    and r11, 0xFFFFFFFFFFFFBFFF ; Clear NT
-    or  r11, 0x200              ; Set IF
+    and r11, 0xFFFFFFFFFFFFCDFF 
+    and r11, 0xFFFFFFFFFFFBFFFF 
+    and r11, 0xFFFFFFFFFFFFBFFF 
+    or  r11, 0x200              
 
     pop rsp     
     
@@ -86,10 +83,8 @@ syscall_entry:
     o64 sysret
 
 .invalid_rip:
-    ; Terminate the malicious task silently instead of crashing the kernel
     swapgs
-    mov rsp, [gs:16]
-    ; Fallback logic would go here (e.g., call process_exit), for now loop
+    mov rsp,[gs:0x10]
     jmp $
 
 enter_user_mode:

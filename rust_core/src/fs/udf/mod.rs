@@ -110,7 +110,7 @@ fn find_anchor(dev: *mut c_void) -> Option<(u32, u32, u32)> {
             let len = read_u32_le(&buf, 16);     
             return Some((loc, len, 512));
         } else {
-            crate::ffi::debug_print("[UDF] Anchor (AVDP) not found at Sector 256.\n\0");
+            crate::ffi::debug_print("Anchor (AVDP) not found at Sector 256.\n\0");
         }
     }
     
@@ -120,7 +120,7 @@ fn find_anchor(dev: *mut c_void) -> Option<(u32, u32, u32)> {
             let len = read_u32_le(&buf, 16);
             return Some((loc, len, 2048));
         } else {
-            crate::ffi::debug_print("[UDF] Anchor (AVDP) not found at Sector 1024.\n\0");
+            crate::ffi::debug_print("Anchor (AVDP) not found at Sector 1024.\n\0");
         }
     }
     
@@ -190,7 +190,7 @@ fn read_node_data(node: &UdfNode, offset: u64, size: u32) -> Option<Vec<u8>> {
                     res.copy_from_slice(&data[offset_in_sector..offset_in_sector+to_read]);
                     return Some(res);
                 } else {
-                    crate::ffi::debug_print("[UDF] Error: Failed to read allocated data sector.\n\0");
+                    crate::ffi::debug_print("Error: Failed to read allocated data sector.\n\0");
                     return None;
                 }
             } else {
@@ -198,7 +198,7 @@ fn read_node_data(node: &UdfNode, offset: u64, size: u32) -> Option<Vec<u8>> {
             }
         }
     } else {
-        crate::ffi::debug_print("[UDF] Error: Unsupported allocation descriptor type.\n\0");
+        crate::ffi::debug_print("Error: Unsupported allocation descriptor type.\n\0");
     }
     
     None
@@ -215,7 +215,7 @@ fn initialize_node(mount: Arc<UdfMount>, icb_loc: LongAd) -> Option<UdfNode> {
         } else if tag_id == TAGID_EFE {
             (16, read_u64_le(&buf, 64))
         } else {
-            crate::ffi::debug_print("[UDF] Error: Invalid ICB Tag ID.\n\0");
+            crate::ffi::debug_print("Error: Invalid ICB Tag ID.\n\0");
             return None;
         };
         
@@ -279,11 +279,11 @@ impl FsNode for UdfNode {
                             if let Some(child_node) = initialize_node(self.mount.clone(), LongAd { len: icb_len, loc: icb_loc, part_ref: icb_ref }) {
                                 return Some(FsBackend::Udf(child_node));
                             } else {
-                                crate::ffi::debug_print("[UDF] Error: Failed to initialize child node from FID.\n\0");
+                                crate::ffi::debug_print("Error: Failed to initialize child node from FID.\n\0");
                             }
                         }
                     } else {
-                        crate::ffi::debug_print("[UDF] Warning: FID name buffer out of bounds.\n\0");
+                        crate::ffi::debug_print("Warning: FID name buffer out of bounds.\n\0");
                     }
                 }
                 
@@ -399,22 +399,22 @@ pub unsafe extern "C" fn rust_udf_mount(dev: *mut c_void) -> *mut c_void {
                             let node = FsBackend::Udf(root_node);
                             return Box::into_raw(Box::new(node)) as *mut c_void;
                         } else {
-                            crate::ffi::debug_print("[UDF] Error: Failed to init root node.\n\0");
+                            crate::ffi::debug_print("Error: Failed to init root node.\n\0");
                         }
                     } else {
-                        crate::ffi::debug_print("[UDF] Error: FSD Tag verification failed.\n\0");
+                        crate::ffi::debug_print("Error: FSD Tag verification failed.\n\0");
                     }
                 } else {
-                    crate::ffi::debug_print("[UDF] Error: Failed to read FSD sector.\n\0");
+                    crate::ffi::debug_print("Error: Failed to read FSD sector.\n\0");
                 }
             } else {
-                crate::ffi::debug_print("[UDF] Error: LVD (Logical Volume Descriptor) not found.\n\0");
+                crate::ffi::debug_print("Error: LVD (Logical Volume Descriptor) not found.\n\0");
             }
         } else {
-            crate::ffi::debug_print("[UDF] Error: Failed to read MVDS.\n\0");
+            crate::ffi::debug_print("Error: Failed to read MVDS.\n\0");
         }
     } else {
-        crate::ffi::debug_print("[UDF] Error: Anchor volume descriptor missing.\n\0");
+        crate::ffi::debug_print("Error: Anchor volume descriptor missing.\n\0");
     }
     core::ptr::null_mut()
 }

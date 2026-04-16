@@ -43,28 +43,34 @@ void rwlock_acquire_read(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_acquire_read: called with NULL lock");
         return;
-    } else {
-        while (true) {
-            uint64_t flags = spinlock_acquire(&lock->lock);
+    }
+    while (true) {
+        // FIX: Lost Wakeup Koruma Zırhı
+        uint64_t rflags;
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
+        
+        uint64_t flags = spinlock_acquire(&lock->lock);
 
-            if (!lock->writer_active &&
-                lock->write_waiters == 0 &&
-                lock->readers < RWLOCK_MAX_READERS)
-            {
-                lock->readers++;
+        if (!lock->writer_active &&
+            lock->write_waiters == 0 &&
+            lock->readers < RWLOCK_MAX_READERS)
+        {
+            lock->readers++;
+            spinlock_release(&lock->lock, flags);
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            return;
+        } else {
+            process_t* proc = (process_t*)get_current_thread_fast();
+            if (proc) {
+                proc->state = PROCESS_BLOCKED;
+                wait_queue_push(&lock->read_q, proc);
                 spinlock_release(&lock->lock, flags);
-                return;
+                schedule();
+                if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
             } else {
-                process_t* proc = (process_t*)get_current_thread_fast();
-                if (proc) {
-                    proc->state = PROCESS_BLOCKED;
-                    wait_queue_push(&lock->read_q, proc);
-                    spinlock_release(&lock->lock, flags);
-                    schedule();
-                } else {
-                    spinlock_release(&lock->lock, flags);
-                    hal_cpu_relax();
-                }
+                spinlock_release(&lock->lock, flags);
+                if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+                hal_cpu_relax();
             }
         }
     }
@@ -74,65 +80,82 @@ void rwlock_release_read(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_read: called with NULL lock");
         return;
-    } else {
-        uint64_t flags = spinlock_acquire(&lock->lock);
-
-        if (lock->readers > 0) {
-            lock->readers--;
-        } else {
-            spinlock_release(&lock->lock, flags);
-            panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_read: underflow -- more releases than acquires");
-            return;
-        }
-
-        if (lock->readers == 0 && lock->write_waiters > 0) {
-            process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &lock->write_waiters);
-            if (next_writer) {
-                spinlock_release(&lock->lock, flags);
-                sched_wake_task(next_writer);
-                return;
-            }
-        }
-        
-        if (lock->write_waiters == 0) {
-            spinlock_release(&lock->lock, flags);
-            while (true) {
-                process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
-                if (!r) break;
-                sched_wake_task(r);
-            }
-            return;
-        }
-
-        spinlock_release(&lock->lock, flags);
     }
+    uint64_t flags = spinlock_acquire(&lock->lock);
+
+    if (lock->readers > 0) {
+        lock->readers--;
+    } else {
+        spinlock_release(&lock->lock, flags);
+        panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_read: underflow -- more releases than acquires");
+        return;
+    }
+
+    // FIX: write_waiters Race Condition ve Inconsistent State çözüldü
+    if (lock->readers == 0 && lock->write_waiters > 0) {
+        uint32_t skipped = 0;
+        process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &skipped);
+        
+        if (lock->write_waiters >= (int)skipped) {
+            lock->write_waiters -= skipped;
+        } else {
+            lock->write_waiters = 0;
+        }
+
+        if (next_writer) {
+            lock->write_waiters--;
+            spinlock_release(&lock->lock, flags);
+            sched_wake_task(next_writer);
+            return;
+        } else {
+            lock->write_waiters = 0;
+        }
+    }
+    
+    if (lock->write_waiters == 0) {
+        spinlock_release(&lock->lock, flags);
+        while (true) {
+            process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
+            if (!r) break;
+            sched_wake_task(r);
+        }
+        return;
+    }
+
+    spinlock_release(&lock->lock, flags);
 }
 
 void rwlock_acquire_write(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_acquire_write: called with NULL lock");
         return;
-    } else {
-        while (true) {
-            uint64_t flags = spinlock_acquire(&lock->lock);
+    }
+    while (true) {
+        // FIX: Lost Wakeup Koruma Zırhı
+        uint64_t rflags;
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
+        
+        uint64_t flags = spinlock_acquire(&lock->lock);
 
-            if (!lock->writer_active && lock->readers == 0) {
-                lock->writer_active = true;
+        if (!lock->writer_active && lock->readers == 0) {
+            lock->writer_active = true;
+            spinlock_release(&lock->lock, flags);
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            return;
+        } else {
+            lock->write_waiters++;
+            process_t* proc = (process_t*)get_current_thread_fast();
+            if (proc) {
+                proc->state = PROCESS_BLOCKED;
+                wait_queue_push(&lock->write_q, proc);
                 spinlock_release(&lock->lock, flags);
-                return;
+                schedule();
+                if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
             } else {
-                lock->write_waiters++;
-                process_t* proc = (process_t*)get_current_thread_fast();
-                if (proc) {
-                    proc->state = PROCESS_BLOCKED;
-                    wait_queue_push(&lock->write_q, proc);
-                    spinlock_release(&lock->lock, flags);
-                    schedule();
-                } else {
-                    lock->write_waiters--;
-                    spinlock_release(&lock->lock, flags);
-                    hal_cpu_relax();
-                }
+                lock->write_waiters--;
+                spinlock_release(&lock->lock, flags);
+                if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+                hal_cpu_relax();
             }
         }
     }
@@ -142,24 +165,35 @@ void rwlock_release_write(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_write: called with NULL lock");
         return;
-    } else {
-        uint64_t flags = spinlock_acquire(&lock->lock);
-        lock->writer_active = false;
+    }
+    uint64_t flags = spinlock_acquire(&lock->lock);
+    lock->writer_active = false;
 
-        if (lock->write_waiters > 0) {
-            process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &lock->write_waiters);
-            if (next_writer) {
-                spinlock_release(&lock->lock, flags);
-                sched_wake_task(next_writer);
-                return;
-            }
-        }
+    // FIX: write_waiters Race Condition ve Inconsistent State çözüldü
+    if (lock->write_waiters > 0) {
+        uint32_t skipped = 0;
+        process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &skipped);
         
-        spinlock_release(&lock->lock, flags);
-        while (true) {
-            process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
-            if (!r) break;
-            sched_wake_task(r);
+        if (lock->write_waiters >= (int)skipped) {
+            lock->write_waiters -= skipped;
+        } else {
+            lock->write_waiters = 0;
         }
+
+        if (next_writer) {
+            lock->write_waiters--;
+            spinlock_release(&lock->lock, flags);
+            sched_wake_task(next_writer);
+            return;
+        } else {
+            lock->write_waiters = 0;
+        }
+    }
+    
+    spinlock_release(&lock->lock, flags);
+    while (true) {
+        process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
+        if (!r) break;
+        sched_wake_task(r);
     }
 }

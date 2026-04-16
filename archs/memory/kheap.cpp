@@ -95,14 +95,7 @@ void KernelHeap::init() {
         buckets[i].init("kmalloc_bucket", bucket_sizes[i]);
     }
     
-    gwp_asan_init(); // GWP-ASAN Sistemi başlatılıyor
-
-    char buf[160];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    snprintf(buf, sizeof(buf),
-             "[HEAP] Hardened v6.9 Active. Magic: %lx  Canary: %lx  ASLR: %lx\n",
-             magic, canary, aslr);
-    serial_write(buf);
+    gwp_asan_init(); 
 
     g_Heap = this;
 }
@@ -120,15 +113,22 @@ void* KernelHeap::vmm_alloc(size_t pages) {
     uint64_t virt = vm_arena.alloc(pages);
     if (unlikely(!virt)) return nullptr;
 
-    void* phys = pmm_alloc_contiguous(pages);
+    // OPTİMİZASYON YAMASI: 2MB Huge Page Desteği (TLB Baskısını Azaltır)
+    bool use_huge = (pages >= 512) && ((virt & 0x1FFFFF) == 0);
+    size_t align_req = use_huge ? 512 : 1;
+
+    void* phys = pmm_alloc_contiguous_aligned(pages, align_req);
     if (likely(phys)) {
-        if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages,
-                            PAGE_PRESENT | PAGE_WRITE | PAGE_NX)) {
+        uint64_t flags = PAGE_PRESENT | PAGE_WRITE | PAGE_NX;
+        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) flags |= PAGE_HUGE;
+
+        if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages, flags)) {
             pmm_free_contiguous(phys, pages);
             vm_arena.free(virt, pages);
             return nullptr;
         }
         memzero_nt_avx(reinterpret_cast<void*>(virt), pages * PAGE_SIZE);
+        return reinterpret_cast<void*>(virt);
     } else {
         for (size_t i = 0; i < pages; i++) {
             void* p = pmm_alloc_frame();
@@ -164,15 +164,22 @@ void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
     uint64_t virt = vm_arena.alloc_aligned(pages, align_pages);
     if (unlikely(!virt)) return nullptr;
 
-    void* phys = pmm_alloc_contiguous(pages);
+    // OPTİMİZASYON YAMASI: 2MB Huge Page Desteği (VRAM/DMA için)
+    bool use_huge = (pages >= 512) && ((virt & 0x1FFFFF) == 0);
+    size_t align_req = use_huge ? 512 : align_pages;
+
+    void* phys = pmm_alloc_contiguous_aligned(pages, align_req);
     if (likely(phys)) {
-        if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages,
-                            PAGE_PRESENT | PAGE_WRITE | PAGE_NX)) {
+        uint64_t flags = PAGE_PRESENT | PAGE_WRITE | PAGE_NX;
+        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) flags |= PAGE_HUGE;
+
+        if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages, flags)) {
             pmm_free_contiguous(phys, pages);
             vm_arena.free(virt, pages);
             return nullptr;
         }
         memzero_nt_avx(reinterpret_cast<void*>(virt), pages * PAGE_SIZE);
+        return reinterpret_cast<void*>(virt);
     } else {
         for (size_t i = 0; i < pages; i++) {
             void* p = pmm_alloc_frame();
@@ -207,7 +214,6 @@ void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
 void* KernelHeap::malloc(size_t size, uint64_t caller) {
     if (unlikely(size == 0)) return nullptr;
     
-    // GÜVENLİK YAMASI: GWP-ASAN Rastgele Örneklemeli Bellek Koruması
     if (likely(size < PAGE_SIZE)) {
         if (unlikely(gwp_asan_should_sample())) {
             void* gwp_ptr = gwp_asan_malloc(size, caller);
@@ -256,7 +262,6 @@ void KernelHeap::free(void* ptr) {
     
     uint64_t caller = reinterpret_cast<uint64_t>(__builtin_return_address(0));
     
-    // GÜVENLİK YAMASI: GWP-ASAN Belleği İade Ediliyorsa Özel İşleme Sok
     if (unlikely(gwp_asan_is_managed(ptr))) {
         gwp_asan_free(ptr, caller);
         return;
@@ -331,7 +336,6 @@ void* KernelHeap::realloc(void* ptr, size_t new_size, uint64_t caller) {
     if (!ptr) return malloc(new_size, caller);
     if (!new_size) { free(ptr); return nullptr; }
     
-    // GWP-ASAN realloc kontrolü
     if (unlikely(gwp_asan_is_managed(ptr))) {
         void* np = malloc(new_size, caller);
         if (np) {

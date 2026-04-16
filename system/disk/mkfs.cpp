@@ -192,7 +192,7 @@ extern "C" void mkfs_fat32_impl(Device* dev, const char* label) {
 
     struct fat32_bs* bs = (struct fat32_bs*)zero_buf;
     bs->jump[0] = 0xEB; bs->jump[1] = 0x58; bs->jump[2] = 0x90;
-    memcpy(bs->oem, "MEOWOS  ", 8);
+    memcpy(bs->oem, "SINGULAR", 8);
     bs->bytes_per_sector = 512;
     bs->sectors_per_cluster = (uint8_t)sectors_per_cluster;
     bs->reserved_sectors = (uint16_t)reserved_sectors;

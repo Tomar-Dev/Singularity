@@ -165,7 +165,6 @@ static void detect_cache_topology() {
         cpu_info.l2_cache_size = (c >> 16) & 0xFFFF;
         cpu_info.l3_cache_size = (d >> 18) * 512;
     } else {
-        // Unknown cache topology
     }
 }
 
@@ -230,7 +229,6 @@ static void detect_core_topology() {
             cpu_info.logical_cores  = nc * threads_per_core;
         } else {}
     } else {
-        // Generic topology values left as 1
     }
 }
 
@@ -254,6 +252,12 @@ void detect_cpu() {
     else if (strcmp(cpu_info.vendor_string, "KVMKVMKVM") == 0) { cpu_info.vendor = VENDOR_QEMU; }
     else if (strcmp(cpu_info.vendor_string, "VBoxVBoxVBox") == 0) { cpu_info.vendor = VENDOR_VIRTUALBOX; }
     else { cpu_info.vendor = VENDOR_UNKNOWN; }
+
+    if (max_std_func >= 7) {
+        cpuid_count(7, 0, &eax, &ebx, &ecx, &edx);
+        cpu_info.has_smep = (ebx & (1 << 7));  // GÜVENLİK YAMASI
+        cpu_info.has_smap = (ebx & (1 << 20)); // GÜVENLİK YAMASI
+    } else {}
 
     if (max_std_func >= 1) {
         cpuid(1, &eax, &ebx, &ecx, &edx);
@@ -398,5 +402,4 @@ void detect_cpu() {
 }
 
 void print_cpu_z_info() {
-    // Boş fonksiyon, mimari gereği tutulmaktadır.
 }

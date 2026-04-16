@@ -47,11 +47,6 @@ void init_rng() {
     }
     
     rng_initialized = true;
-    
-    char buf[128];
-    sprintf(buf, "[RNG] Initialized. Source: %s\n", 
-            has_rdseed ? "RDSEED (Best)" : (has_rdrand ? "RDRAND (Good)" : "TSC+Hardware Noise (Fallback)"));
-    serial_write(buf);
 }
 
 uint64_t get_secure_random() {
@@ -68,7 +63,6 @@ uint64_t get_secure_random() {
         if (success) return val;
     }
 
-    // FIX: Hardware Noise Integration (Prevent Predictable VM Entropy)
     uint32_t lo, hi;
     __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
     uint64_t tsc = ((uint64_t)hi << 32) | lo;

@@ -53,14 +53,14 @@ fn panic(info: &PanicInfo) -> ! {
         let _ = write!(&mut file_buf, "{}", location.file());
         line = location.line() as i32;
     } else {
-        let _ = write!(&mut file_buf, "rust_unknown");
+        let _ = write!(&mut file_buf, "unknown_file");
     }
 
     unsafe {
         crate::ffi::panic_at(
             file_bytes.as_ptr(),
             line,
-            KernelError::RustPanic as u32,
+            KernelError::CorePanic as u32,
             msg_bytes.as_ptr()
         );
     }
@@ -70,7 +70,6 @@ fn panic(info: &PanicInfo) -> ! {
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_init_pmm(multiboot_addr: usize, kernel_end: usize) {
     if multiboot_addr != 0 {
-        // FIX: pmm::init_pmm -> pmm::pmm_init olarak düzeltildi
         pmm::pmm_init(multiboot_addr, kernel_end);
     } else {
         unsafe {

@@ -58,17 +58,4 @@ void init_fpu() {
     }
 
     fpu_load_mxcsr_asm(fpu_default_mxcsr);
-
-    // FIX: FPU Logu sadece CPU 0 (BSP) tarafından, tek satırda basılır.
-    if (get_cpu_id_fast() == 0) {
-        const char* mode_str    = "Legacy SSE (FXSAVE)";
-        const char* align_req   = "16";
-        if      (g_fpu_mode == 2) { mode_str = "XSAVEOPT"; align_req = "64"; }
-        else if (g_fpu_mode == 1) { mode_str = "XSAVE";    align_req = "64"; }
-
-        char buf[160];
-        sprintf(buf, "[FPU] Hardware initialized. Mode: %s | XCR0: 0x%lx | Align: %s-byte\n",
-                mode_str, g_xsave_mask, align_req);
-        serial_write(buf);
-    }
 }

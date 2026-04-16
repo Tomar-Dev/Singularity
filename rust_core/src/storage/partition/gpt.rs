@@ -19,7 +19,6 @@ unsafe extern "C" {
     fn cpp_device_get_block_size(dev: *mut c_void) -> u32;
     fn cpp_create_partition_device(parent: *mut c_void, name: *const c_char, start: u64, end: u64, type_name: *const c_char);
     fn cpp_invalidate_device_cache(dev: *mut c_void);
-    fn serial_write(s: *const c_char);
     fn printf(format: *const c_char, ...);
 
     fn device_unlock_write(dev: *mut c_void, magic: u32);
@@ -30,11 +29,6 @@ unsafe extern "C" {
 }
 
 const DEVICE_MAGIC_UNLOCK: u32 = 0x1337BEEF;
-
-fn debug_print(msg: &str) {
-    let c_str = alloc::ffi::CString::new(msg).unwrap();
-    unsafe { serial_write(c_str.as_ptr()); }
-}
 
 fn user_print(msg: &str) {
     let c_str = alloc::ffi::CString::new(msg).unwrap();
@@ -92,7 +86,7 @@ struct GptHeaderLogic {
     backup_lba: u64,
     first_usable_lba: u64,
     last_usable_lba: u64,
-    disk_guid: [u8; 16],
+    disk_guid:[u8; 16],
     partition_entry_lba: u64,
     num_partition_entries: u32,
     size_partition_entry: u32,
@@ -167,7 +161,7 @@ fn get_guid_for_type(type_str: &str) -> [u8; 16] {
 }
 
 fn get_name_from_guid(guid: &[u8; 16]) -> &'static str {
-    const DATA_GUID:  [u8; 16] =[0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7];
+    const DATA_GUID:[u8; 16] =[0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7];
     const LINUX_GUID:[u8; 16] =[0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4];
     const EFI_GUID:   [u8; 16] =[0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B];
 
@@ -178,7 +172,7 @@ fn get_name_from_guid(guid: &[u8; 16]) -> &'static str {
 }
 
 fn generate_pseudo_guid() ->[u8; 16] {
-    let mut guid = [0u8; 16];
+    let mut guid =[0u8; 16];
     let tsc = crate::ffi::exports::get_system_ticks(); 
     let p1 = tsc.to_le_bytes();
     for i in 0..8 {
@@ -197,7 +191,7 @@ unsafe fn remove_old_partitions(parent_dev: *mut c_void) {
 
     let path        = alloc::ffi::CString::new("/devices").unwrap();
     let mut idx     = 0u32;
-    let mut name_buf = [0u8; 64];
+    let mut name_buf =[0u8; 64];
     let mut obj_type: u8 = 0;
 
     while unsafe { ons_enumerate(path.as_ptr(), idx, name_buf.as_mut_ptr() as *mut c_char, &mut obj_type) } {
@@ -280,8 +274,7 @@ pub unsafe extern "C" fn rust_gpt_scan_partitions(dev: *mut c_void) {
                 part_num += 1;
             }
         } else {
-            let msg = format!("[GPT] No GPT found on {}. Device is raw/unpartitioned.\n", disk_name);
-            debug_print(&msg);
+            // Sessiz mod: GPT bulunamadıysa log basma
         }
     }
 }
@@ -415,7 +408,7 @@ pub unsafe extern "C" fn rust_gpt_create_partition(
         for i in 0..entry_count {
             let offset    = i * entry_size;
             let entry_ptr = table_buf.as_ptr().add(offset);
-            let mut type_guid = [0u8; 16];
+            let mut type_guid =[0u8; 16];
             ptr::copy_nonoverlapping(entry_ptr, type_guid.as_mut_ptr(), 16);
             let end_lba = read_u64(entry_ptr, 40);
 

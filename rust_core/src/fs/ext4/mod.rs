@@ -63,7 +63,7 @@ impl ExtMount {
         let mut buf =[0u8; 512];
         let ret = unsafe { disk_cache_read_block(self.dev, target_bg_sector, 1, buf.as_mut_ptr()) };
         if ret != 1 { 
-            crate::ffi::debug_print("[EXT4] Error: Failed to read Block Group Descriptor.\n\0");
+            crate::ffi::debug_print("Error: Failed to read Block Group Descriptor.\n\0");
             return None; 
         }
         
@@ -78,7 +78,7 @@ impl ExtMount {
         
         let ret2 = unsafe { disk_cache_read_block(self.dev, target_block_lba, self.block_size / 512, inode_buf.as_mut_ptr()) };
         if ret2 != 1 { 
-            crate::ffi::debug_print("[EXT4] Error: Failed to read Inode Table sector.\n\0");
+            crate::ffi::debug_print("Error: Failed to read Inode Table sector.\n\0");
             return None; 
         }
         
@@ -97,7 +97,6 @@ impl ExtMount {
         })
     }
 
-    // FIX 2: B-Tree Deep Traversal onarımı (Index düğümleri veri sanılmayacak)
     fn find_extent_block(&self, i_block: &[u32; 15], logical_block: u32) -> u32 {
         let mut header_buf = [0u8; 60];
         for i in 0..15 {
@@ -110,7 +109,7 @@ impl ExtMount {
         loop {
             let magic = read_u16_le(&current_buf, 0);
             if magic != 0xF30A { 
-                crate::ffi::debug_print("[EXT4] Error: Invalid Extent Magic.\n\0");
+                crate::ffi::debug_print("Error: Invalid Extent Magic.\n\0");
                 return 0; 
             }
 
@@ -118,7 +117,6 @@ impl ExtMount {
             let depth = read_u16_le(&current_buf, 6);
 
             if depth == 0 {
-                // Yaprak (Leaf) Düğüm: Gerçek veriye ulaştık
                 for i in 0..entries as usize {
                     let off = 12 + (i * 12);
                     let ee_block = read_u32_le(&current_buf, off);
@@ -131,9 +129,8 @@ impl ExtMount {
                         return (phys_block + (logical_block - ee_block) as u64) as u32;
                     }
                 }
-                return 0; // Bulunamadı
+                return 0; 
             } else {
-                // İndeks (Index) Düğüm: Ağaçta daha derine inmemiz gerek
                 let mut next_phys = 0;
                 for i in 0..entries as usize {
                     let off = 12 + (i * 12);
@@ -150,14 +147,13 @@ impl ExtMount {
                 
                 if next_phys == 0 { return 0; }
 
-                // İndeks bloğunu diskten oku ve döngüye devam et (Recursive Fallback)
                 let bs = self.block_size;
                 let target_lba = next_phys as u64 * (bs as u64 / 512);
                 let mut new_buf = vec![0u8; bs as usize];
                 
                 let ret = unsafe { disk_cache_read_block(self.dev, target_lba, bs / 512, new_buf.as_mut_ptr()) };
                 if ret != 1 {
-                    crate::ffi::debug_print("[EXT4] Error: Failed to read Extent Index Block.\n\0");
+                    crate::ffi::debug_print("Error: Failed to read Extent Index Block.\n\0");
                     return 0;
                 }
                 current_buf = new_buf;
@@ -172,7 +168,7 @@ impl ExtMount {
             if logical_block < 12 { 
                 data.i_block[logical_block as usize]
             } else {
-                crate::ffi::debug_print("[EXT4] Error: Indirect blocks not supported without Extents.\n\0");
+                crate::ffi::debug_print("Error: Indirect blocks not supported without Extents.\n\0");
                 0 
             }
         }
@@ -238,7 +234,7 @@ impl FsNode for ExtNode {
                     };
                     let ret = unsafe { disk_cache_read_vector(self.mount.dev, start_lba, &vec, 1) };
                     if ret != 1 { 
-                        crate::ffi::debug_print("[EXT4] DMA Vector Read Failed.\n\0");
+                        crate::ffi::debug_print("DMA Vector Read Failed.\n\0");
                         return Err(8); 
                     }
                 } else {
@@ -251,7 +247,7 @@ impl FsNode for ExtNode {
                     let ret = unsafe { disk_cache_read_block(self.mount.dev, start_lba, sectors_to_read, bounce_buf) };
                     if ret != 1 {
                         unsafe { kfree_contiguous(bounce_buf as *mut c_void, bounce_size); }
-                        crate::ffi::debug_print("[EXT4] Block Read Failed.\n\0");
+                        crate::ffi::debug_print("Block Read Failed.\n\0");
                         return Err(8);
                     }
 
@@ -287,7 +283,7 @@ impl FsNode for ExtNode {
 
             let ret = unsafe { disk_cache_read_block(self.mount.dev, phys as u64 * (bs as u64 / 512), bs / 512, dir_buf.as_mut_ptr()) };
             if ret != 1 { 
-                crate::ffi::debug_print("[EXT4] Warning: Directory block read failed.\n\0");
+                crate::ffi::debug_print("Warning: Directory block read failed.\n\0");
                 continue; 
             }
 
@@ -316,7 +312,7 @@ impl FsNode for ExtNode {
                                 is_dir: is_directory,
                             }));
                         } else {
-                            crate::ffi::debug_print("[EXT4] Error: Could not resolve target inode.\n\0");
+                            crate::ffi::debug_print("Error: Could not resolve target inode.\n\0");
                         }
                     }
                 }
@@ -374,7 +370,7 @@ pub unsafe extern "C" fn rust_ext4_mount(dev: *mut c_void) -> *mut c_void {
     let mut buf = [0u8; 1024];
     let ret = unsafe { disk_cache_read_block(dev, 2, 2, buf.as_mut_ptr()) };
     if ret != 1 { 
-        crate::ffi::debug_print("[EXT4] Error: Superblock read failed.\n\0");
+        crate::ffi::debug_print("Error: Superblock read failed.\n\0");
         return core::ptr::null_mut(); 
     }
 
@@ -404,10 +400,10 @@ pub unsafe extern "C" fn rust_ext4_mount(dev: *mut c_void) -> *mut c_void {
             });
             return Box::into_raw(Box::new(node)) as *mut c_void;
         } else {
-            crate::ffi::debug_print("[EXT4] Error: Root inode (2) could not be read.\n\0");
+            crate::ffi::debug_print("Error: Root inode (2) could not be read.\n\0");
         }
     } else {
-        crate::ffi::debug_print("[EXT4] Error: EXT2/4 Magic Signature (0xEF53) not found.\n\0");
+        crate::ffi::debug_print("Error: EXT2/4 Magic Signature (0xEF53) not found.\n\0");
     }
     core::ptr::null_mut()
 }

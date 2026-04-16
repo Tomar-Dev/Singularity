@@ -2,7 +2,6 @@
 
 use crate::drivers::bus::pcie;
 use crate::ffi::{sync_print_color, ioremap};
-// FIX: Doğru Rust fonksiyon ismi içe aktarıldı
 use crate::memory::pmm::pmm_alloc_contiguous;
 use core::ptr::{read_volatile, write_volatile};
 use alloc::format;

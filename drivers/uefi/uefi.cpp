@@ -85,7 +85,6 @@ UEFIDriver::UEFIDriver(uint64_t st_phys)
 
     verify_efi_table_header(&st->hdr, sizeof(efi_system_table_t));
 
-    // Check the EFI signature (0x5453595320494249 = "IBI SYST").
     if (st->hdr.signature != 0x5453595320494249ULL) {
         serial_write("[UEFI] WARN: EFI System Table signature mismatch. "
                      "Table may be invalid.\n");
@@ -106,7 +105,6 @@ UEFIDriver::UEFIDriver(uint64_t st_phys)
                                           PAGE_PRESENT | PAGE_WRITE);
     if (!rt) {
         serial_write("[UEFI] Failed to map EFI Runtime Services.\n");
-        // FIX: Avoid memory leak — unmap the already-mapped system table.
         iounmap(st, sizeof(efi_system_table_t));
         st = nullptr;
         return;
@@ -114,8 +112,6 @@ UEFIDriver::UEFIDriver(uint64_t st_phys)
     }
 
     verify_efi_table_header(&rt->hdr, sizeof(efi_runtime_services_t));
-
-    serial_write("[UEFI] Runtime Services Mapped.\n");
 }
 
 UEFIDriver::~UEFIDriver() {
@@ -141,7 +137,6 @@ int UEFIDriver::init() {
     if (st && rt) {
         DeviceManager::registerDevice(this);
         g_uefi = this;
-        printf("[UEFI] Runtime Services Active.\n");
         return 1;
     } else {
         serial_write("[UEFI] init() called but st or rt is NULL. "
@@ -295,7 +290,6 @@ extern "C" {
                     return;
                 } else {
                     UEFIDriver* drv = new UEFIDriver(st_addr);
-                    // FIX: Delete driver object if init() fails to avoid leak.
                     if (!drv->init()) {
                         delete drv;
                     } else {

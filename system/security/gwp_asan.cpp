@@ -35,11 +35,6 @@ void gwp_asan_init(void) {
     spinlock_init(&g_lock);
     memset(g_slots, 0, sizeof(g_slots));
     g_initialized = true;
-    char init_buf[128];
-    snprintf(init_buf, sizeof(init_buf),
-             "[GWP-ASAN] Kernel Guard Page Allocator Active. Slots: %d | Rate: 1/%d\n",
-             GWP_ASAN_SLOTS, GWP_ASAN_SAMPLE_RATE);
-    serial_write(init_buf);
 }
 
 bool gwp_asan_should_sample(void) {
@@ -114,7 +109,6 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
     }
 
     if (slot == -1) {
-        // GWP bölgesinde ama aktif slot değil → Use-After-Free veya geçersiz pointer.
         spinlock_release(&g_lock, flags);
         __atomic_fetch_add(&g_stat_uaf, 1, __ATOMIC_RELAXED);
         panic_at("GWP-ASAN", 0, KERR_HEAP_USE_AFTER_FREE,
@@ -125,7 +119,6 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
     uint64_t data_virt = slot_data_page(slot);
     memset((void*)data_virt, 0xDE, PAGE_SIZE);
 
-    // Veri sayfasını da haritalamadan çıkar — sonraki erişim #PF üretir.
     uint64_t phys = get_physical_address(data_virt);
     unmap_page(data_virt);
     if (phys) { pmm_free_frame((void*)phys); }
@@ -137,7 +130,6 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
     return true;
 }
 
-// Page Fault handler tarafından çağrılır. Adresin bir GWP guard page'e ait
 extern "C" bool gwp_asan_check_fault(uint64_t fault_addr) {
     if (!g_initialized) { return false; }
     if (fault_addr < GWP_VIRT_BASE || fault_addr >= GWP_VIRT_LIMIT) {
@@ -154,7 +146,6 @@ extern "C" bool gwp_asan_check_fault(uint64_t fault_addr) {
     GwpSlot* s = &g_slots[slot];
 
     if (s->state == GWP_SLOT_FREED) {
-        // Serbest bırakılmış belleğe erişim: Use-After-Free.
         __atomic_fetch_add(&g_stat_uaf, 1, __ATOMIC_RELAXED);
         snprintf(buf, sizeof(buf),
                  "GWP-ASAN: Use-After-Free!\n"
@@ -169,7 +160,6 @@ extern "C" bool gwp_asan_check_fault(uint64_t fault_addr) {
                  (unsigned long)s->free_caller);
         panic_at("GWP-ASAN", 0, KERR_HEAP_USE_AFTER_FREE, buf);
     } else if (s->state == GWP_SLOT_ACTIVE) {
-        // Aktif tahsis → guard page erişimi → Buffer Overflow veya Underflow.
         bool is_overflow  = (in_slot >= 2 * PAGE_SIZE);
         bool is_underflow = (in_slot <  PAGE_SIZE);
         const char* kind  = is_overflow ? "Buffer Overflow" :

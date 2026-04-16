@@ -1,5 +1,5 @@
 # scripts/config.mk
-# MeowOS LLVM/Clang Toolchain Configuration
+# Singularity LLVM/Clang Toolchain Configuration
 
 CC = clang
 CXX = clang++

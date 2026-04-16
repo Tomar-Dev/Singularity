@@ -3,7 +3,7 @@ import sys
 import subprocess
 import os
 
-KERNEL_BIN = "../iso/boot/meowkernel.bin"
+KERNEL_BIN = "../iso/boot/singularity_kernel.bin"
 ADDR2LINE = "addr2line"
 
 def main():
@@ -21,8 +21,7 @@ def main():
     print(f"Adres Çözümleniyor: {rip} ...")
     
     try:
-        result = subprocess.check_output(
-            [ADDR2LINE, "-e", KERNEL_BIN, "-f", "-C", "-i", rip],
+        result = subprocess.check_output([ADDR2LINE, "-e", KERNEL_BIN, "-f", "-C", "-i", rip],
             stderr=subprocess.STDOUT
         ).decode("utf-8").strip()
         

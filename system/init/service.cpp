@@ -19,13 +19,15 @@ spinlock_t ServiceManager::lock = {0, 0, {0}};
 void ServiceManager::init() {
     spinlock_init(&lock);
     service_count = 0;
-    print_status("[ MEOWD]", "Service Manager v6.9 Initialized", "INFO");
+    print_status("[ SINGD]", "Service Manager v6.9 Initialized", "INFO");
 }
 
 void ServiceManager::registerService(const char* name, void (*func)(), ServiceType type, RestartPolicy policy, const char* dep) {
     if (service_count >= MAX_SERVICES) {
-        serial_write("[MEOWD] Error: Max service limit reached!\n");
+        serial_write("[SINGD] Error: Max service limit reached!\n");
         return;
+    } else {
+        // Proceed with registration
     }
     
     ServiceUnit* s = &services[service_count++];
@@ -42,7 +44,7 @@ void ServiceManager::registerService(const char* name, void (*func)(), ServiceTy
 }
 
 void ServiceManager::startAll() {
-    print_status("[ MEOWD]", "Starting System Services...", "INFO");
+    print_status("[ SINGD]", "Starting System Services...", "INFO");
     
     for (int i = 0; i < service_count; i++) {
         ServiceUnit* s = &services[i];
@@ -54,12 +56,18 @@ void ServiceManager::startAll() {
                    (services[j].state == SERVICE_RUNNING || services[j].state == SERVICE_FINISHED)) {
                     dep_ok = true;
                     break;
+                } else {
+                    // Not the dependency or not ready
                 }
             }
             if (!dep_ok) {
-                serial_printf("[MEOWD] Delaying %s (waiting for %s)\n", s->name, s->dependency);
+                serial_printf("[SINGD] Delaying %s (waiting for %s)\n", s->name, s->dependency);
                 continue;
+            } else {
+                // Dependency is met, proceed
             }
+        } else {
+            // No dependency
         }
         
         if (s->state == SERVICE_STOPPED) {
@@ -70,7 +78,9 @@ void ServiceManager::startAll() {
             char buf[64];
             // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
             snprintf(buf, sizeof(buf), "Started %s", s->name);
-            print_status("[ MEOWD]", buf, "OK");
+            print_status("[ SINGD]", buf, "OK");
+        } else {
+            // Service already started or in another state
         }
     }
 }
@@ -81,8 +91,12 @@ void ServiceManager::signalFinished(const char* name) {
         if(strcmp(services[i].name, name) == 0) {
             if (services[i].type == SERVICE_TYPE_ONESHOT || services[i].type == SERVICE_TYPE_BACKGROUND) {
                 services[i].state = SERVICE_FINISHED;
+            } else {
+                // Daemon services don't "finish" normally
             }
             break;
+        } else {
+            // Not the target service
         }
     }
     spinlock_release(&lock, flags);
@@ -108,9 +122,13 @@ void ServiceManager::monitor() {
                         {
                             alive = true;
                             break;
+                        } else {
+                            // Not the target thread or thread is dead
                         }
                         curr = curr->next;
                     } while (curr != process_list_head);
+                } else {
+                    // No processes
                 }
                 rwlock_release_read(task_list_lock);
                 
@@ -119,16 +137,22 @@ void ServiceManager::monitor() {
                         s->state = SERVICE_FINISHED;
                     } else {
                         s->state = SERVICE_DEAD;
-                        serial_printf("[MEOWD] Service %s died unexpectedly!\n", s->name);
+                        serial_printf("[SINGD] Service %s died unexpectedly!\n", s->name);
                         
                         if (s->policy == RESTART_ALWAYS || s->policy == RESTART_ON_FAILURE) {
-                            serial_printf("[MEOWD] Restarting %s (%d)...\n", s->name, s->restarts + 1);
+                            serial_printf("[SINGD] Restarting %s (%d)...\n", s->name, s->restarts + 1);
                             create_kernel_task(s->entry_point);
                             s->state = SERVICE_RUNNING;
                             s->restarts++;
+                        } else {
+                            // Do not restart
                         }
                     }
+                } else {
+                    // Service is still alive
                 }
+            } else {
+                // Service is not running, no need to monitor liveness
             }
         }
     }
@@ -144,14 +168,22 @@ void ServiceManager::waitForOneshots() {
             if (services[i].type == SERVICE_TYPE_ONESHOT && services[i].state == SERVICE_RUNNING) {
                 all_done = false;
                 break;
+            } else {
+                // Not a running oneshot
             }
         }
         
-        if (all_done) break; 
+        if (all_done) {
+            break; 
+        } else {
+            // Keep waiting
+        }
         
         if (timer_get_ticks() - start_tick > timeout_ticks) {
-            serial_write("[MEOWD] Warning: Timeout waiting for ONESHOT services.\n");
+            serial_write("[SINGD] Warning: Timeout waiting for ONESHOT services.\n");
             break;
+        } else {
+            // Still within timeout
         }
         
         yield(); 

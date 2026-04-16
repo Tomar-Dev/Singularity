@@ -11,26 +11,26 @@ KEvent::~KEvent() {}
 
 void KEvent::wait() {
     while (1) {
-        // Spinlock_acquire zaten RFLAGS'i kaydeder ve kesmeleri (CLI) kapatır.
+        // FIX: Lost Wakeup Koruma Zırhı
+        uint64_t rflags;
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
+        
         uint64_t flags = spinlock_acquire(&this->lock);
         
         if (signaled) {
-            // Sinyal alındı! Olayı sıfırla ve thread'i özgür bırak.
             if (auto_reset) signaled = false;
             spinlock_release(&this->lock, flags);
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
             return;
         }
         
-        // Sinyal yoksa thread'i uykuya yatır.
         process_t* proc = (process_t*)get_current_thread_fast();
         proc->state = PROCESS_BLOCKED;
         wait_queue_push(&wait_q, proc);
         
-        // Spinlock bırakıldığı an kesmeler (eğer açıksa) otomatik geri gelir.
         spinlock_release(&this->lock, flags);
-        
-        // İşlemciyi terk et. Bir IRQ bizi uyandırana kadar buradayız.
         schedule();
+        if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
     }
 }
 
@@ -42,9 +42,6 @@ void KEvent::signal() {
     
     spinlock_release(&this->lock, flags);
     
-    // Uyuyan bir görev varsa onu Runqueue'ya (Hazır Kuyruğuna) ekle.
-    // Görev uyandığında yukarıdaki while(1) döngüsüne tekrar girecek 
-    // ve signaled bayrağını kendisi temizleyecek.
     if (next) sched_wake_task(next);
 }
 

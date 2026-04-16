@@ -75,12 +75,12 @@ impl FsNode for IsoNode {
             buf[..count].copy_from_slice(&data[offset_in_sector..offset_in_sector + count]);
             Ok(count)
         } else {
-            Err(8) // KOM_ERR_IO
+            Err(8) 
         }
     }
     
     fn write(&self, _offset: u64, _buf: &[u8]) -> Result<usize, u32> {
-        Err(2) // KOM_ERR_CAP_DENIED
+        Err(2) 
     }
     
     fn finddir(&self, name: &str) -> Option<FsBackend> {
@@ -111,7 +111,7 @@ impl FsNode for IsoNode {
                             }));
                         }
                     } else {
-                        crate::ffi::debug_print("[ISO9660] Warning: Directory entry out of bounds.\n\0");
+                        crate::ffi::debug_print("Warning: Directory entry out of bounds.\n\0");
                     }
                     offset += len;
                 }
@@ -171,10 +171,10 @@ pub unsafe extern "C" fn rust_iso9660_mount(dev: *mut c_void) -> *mut c_void {
             
             return Box::into_raw(Box::new(node)) as *mut c_void;
         } else {
-            crate::ffi::debug_print("[ISO9660] Error: Missing CD001 Primary Volume Descriptor.\n\0");
+            crate::ffi::debug_print("Error: Missing CD001 Primary Volume Descriptor.\n\0");
         }
     } else {
-        crate::ffi::debug_print("[ISO9660] Error: PVD Sector read failed.\n\0");
+        crate::ffi::debug_print("Error: PVD Sector read failed.\n\0");
     }
     
     core::ptr::null_mut()

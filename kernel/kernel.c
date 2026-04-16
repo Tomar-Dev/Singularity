@@ -57,7 +57,8 @@ extern void rtc_init();
 extern void init_speaker();
 extern void init_ahci_early();
 extern void init_ahci_late();
-extern int  init_nvme();
+extern void init_nvme_early(); 
+extern int  init_nvme_late();  
 extern void init_virtio();
 extern void init_intel_hda();
 extern void init_string_optimization();
@@ -101,7 +102,6 @@ void show_system_info() {
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     printf("\n===================================\n");
     printf("     %s %s (%s)      \n", SINGULARITY_SYS_NAME, SINGULARITY_SYS_VER, SINGULARITY_SYS_ARCH);
-    printf("   Native KOM & Zero-Overhead FFI  \n");
     printf("===================================\n\n");
     vga_set_color(VGA_WHITE, VGA_BLACK);
 }
@@ -146,13 +146,16 @@ void print_status(const char* prefix, const char* msg, const char* status) {
     stdio_release_lock(flags);
 }
 
+// DİKKAT: Bu fonksiyon çağrıldığı anki zamanı ölçer. Yani ekrana basılan süre, 
+// YENİ başlayan kategorinin değil, BİR ÖNCEKİ kategorinin tamamlanma süresidir. 
+// Bu mantığı değiştirmeyin, aksi takdirde log formatı ve hizalaması bozulur!
 void print_section_header(const char* title) {
     static uint64_t last_tsc = 0;
     if (last_tsc == 0) last_tsc = kernel_boot_start_tsc;
     
     uint64_t current_tsc = rdtsc_ordered();
     uint64_t freq = get_tsc_freq();
-    if (freq == 0) freq = 2000000000ULL; // Fallback: 2 GHz
+    if (freq == 0) freq = 2000000000ULL; 
     
     uint64_t diff_ms = ((current_tsc - last_tsc) * 1000) / freq;
     uint64_t total_ms = ((current_tsc - kernel_boot_start_tsc) * 1000) / freq;
@@ -163,10 +166,8 @@ void print_section_header(const char* title) {
     vga_set_color(VGA_YELLOW, VGA_BLACK);
     
     char buf[128];
-    // Sadeleştirilmiş ve ms değerleri direkt yazılmış format
     snprintf(buf, sizeof(buf), "\n>>> %-25s [ +%lu ms | %lu ms ] <<<\n", title, diff_ms, total_ms);
     
-    // GÜVENLİK YAMASI: Çıktı hem ekrana hem de seri porta kilit altında güvenle yazılıyor.
     serial_write(buf);
     console_write(buf);
     
@@ -205,7 +206,7 @@ void memory_monitor_task() {
     }
 }
 
-void meowd_monitor_entry() {
+void singd_monitor_entry() {
     service_monitor();
 }
 
@@ -305,12 +306,13 @@ void kmain(void* multiboot_structure_addr) {
     print_status("[ ACPI ]", "Tables Parsed (RSDP)",        "OK");
     
     init_tsc();
-    print_status("[ TIME ]", "TSC + PIT (ASM Driver)",      "OK");
+    print_status("[ TIME ]", "TSC + PIT",                   "OK");
     rtc_init();
     init_syscalls();
     print_status("[ CORE ]", "Fast Syscall (MSR) Enabled",  "OK");
 
     init_ahci_early(); 
+    init_nvme_early(); 
 
     print_section_header("STORAGE STARTING");
     disk_cache_init();      
@@ -321,7 +323,7 @@ void kmain(void* multiboot_structure_addr) {
     init_smbus();
     
     init_ahci_late();       print_status("[ DISK ]", "AHCI Driver (SATA)",               "OK");
-    if (init_nvme()) {      print_status("[ DISK ]", "NVMe Driver (PCIe SSD)",           "OK"); }
+    if (init_nvme_late()) { print_status("[ DISK ]", "NVMe Driver (PCIe SSD)",           "OK"); }
     init_virtio();          
 
     struct multiboot_tag* f_tag;
@@ -409,7 +411,7 @@ void kmain(void* multiboot_structure_addr) {
     service_register("Speaker",       svc_speaker,         SERVICE_TYPE_ONESHOT, RESTART_NEVER);
 
     service_start_all();
-    create_kernel_task(meowd_monitor_entry);
+    create_kernel_task(singd_monitor_entry);
 
     enable_scheduler();
     hal_interrupts_enable();

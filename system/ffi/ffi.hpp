@@ -13,7 +13,7 @@ struct FFIStats {
     uint64_t total_cycles;
 };
 
-namespace MeowFFI {
+namespace SingularityFFI {
 
     // FIX: Üretim Modunda (Release) FFI maliyetini fiziksel olarak sıfırlamak için
     // profil alma işlemleri log_level'a bağlandı.

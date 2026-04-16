@@ -34,7 +34,6 @@ static inline uint32_t swap_uint32(uint32_t val) {
            ((val >> 8)  & 0xff00) | ((val << 24) & 0xff000000);
 }
 
-// Ensure precise hardware timing without infinite stalls
 static inline bool check_timeout(uint64_t start, uint32_t ms) {
     uint64_t freq = get_tsc_freq();
     if (freq == 0) freq = 2000000000ULL;
@@ -170,7 +169,6 @@ bool AHCIPort::identify() {
         else { break; }
     }
 
-    serial_printf("[AHCI] Port %d (%s) Model: %s\n", id, is_atapi ? "ATAPI" : "SATA", this->model_name);
     result = true;
 
 identify_done:

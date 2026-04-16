@@ -57,7 +57,6 @@ void mtrr_set_wc(uint64_t base, uint64_t length) {
         
         uint64_t base_msr = rdmsr(MSR_MTRR_PHYS_BASE0 + (i * 2));
         if ((base_msr & ~0xFFF) == base && (base_msr & 0xFF) == MTRR_TYPE_WC) {
-            serial_write("[MTRR] Range already set to WC.\n");
             return;
         }
     }
@@ -67,7 +66,6 @@ void mtrr_set_wc(uint64_t base, uint64_t length) {
         return;
     }
 
-    // FIX: PANİĞE YOL AÇAN BLIND STI KALDIRILDI! RFLAGS kaydedilerek güvenli dönüş yapıldı.
     uint64_t rflags;
     __asm__ volatile("pushfq; pop %0; cli; wbinvd" : "=r"(rflags) :: "memory");
     
@@ -85,10 +83,4 @@ void mtrr_set_wc(uint64_t base, uint64_t length) {
     if (rflags & 0x200) {
         __asm__ volatile("sti" ::: "memory");
     }
-
-    char buf[128];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    sprintf(buf, "[MTRR] Slot %d set to WC for 0x%lx (Len: %lu MB)\n", 
-            free_slot, base, aligned_len / 1024 / 1024);
-    serial_write(buf);
 }

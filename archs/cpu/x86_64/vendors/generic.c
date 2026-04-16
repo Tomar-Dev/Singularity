@@ -7,7 +7,6 @@ static int generic_get_temp() {
 }
 
 static void generic_init() {
-    serial_write("[CPU] Generic x86_64 initialization.\n");
 }
 
 cpu_driver_t cpu_driver_generic = {

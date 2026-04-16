@@ -13,23 +13,19 @@ extern "C" {
 struct PerCPU;
 
 typedef struct PerCPU {
-    struct PerCPU* self;
-    uint64_t kernel_stack;
-    uint64_t user_rsp_scratch;
-    uint32_t lapic_id;
-    uint32_t cpu_id;
-    void* current_process;
-    
-    uintptr_t stack_canary;
-    
-    void* switching_task;
-    void* pending_task;
-    
-    uint64_t idle_ticks;
-    
-    volatile int32_t preempt_count;
-    
-    uint8_t _pad[64 - (0x4C % 64)]; 
+    struct PerCPU* self;          // 0x00
+    uint64_t kernel_stack;        // 0x08
+    uint64_t user_rsp_scratch;    // 0x10
+    uint32_t lapic_id;            // 0x18
+    uint32_t cpu_id;              // 0x1C
+    void* current_process;        // 0x20
+    uintptr_t stack_canary;       // 0x28
+    uint64_t syscall_stack;       // 0x30  <-- GÜVENLİK YAMASI: İzole Syscall Yığını
+    void* switching_task;         // 0x38
+    void* pending_task;           // 0x40
+    uint64_t idle_ticks;          // 0x48
+    volatile int32_t preempt_count; // 0x50
+    uint8_t _pad[64 - (0x54 % 64)]; 
 } __attribute__((packed, aligned(64))) per_cpu_t;
 
 typedef struct {

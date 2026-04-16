@@ -343,7 +343,8 @@ static size_t meminfo_read_cb(uint64_t offset, void* buffer, size_t count) {
 
 static size_t version_read_cb(uint64_t offset, void* buffer, size_t count) {
     char ver[128];
-    snprintf(ver, sizeof(ver), "%s %s (%s) - Pure Object-Oriented KOM Architecture\n", SINGULARITY_SYS_NAME, SINGULARITY_SYS_VER, SINGULARITY_SYS_ARCH);
+    // OPTİMİZASYON YAMASI: Gereksiz dil ve mimari etiketleri temizlendi
+    snprintf(ver, sizeof(ver), "%s %s (%s)\n", SINGULARITY_SYS_NAME, SINGULARITY_SYS_VER, SINGULARITY_SYS_ARCH);
     size_t len = strlen(ver);
     if (offset >= len) {
         return 0;

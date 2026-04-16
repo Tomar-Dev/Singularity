@@ -172,9 +172,11 @@ void sched_sleep_current(uint64_t ticks) {
 
     if (curr && curr->pid != 0) {
         uint64_t flags  = spinlock_acquire(&sched_queues[cpu_id].lock);
-        uint64_t target = system_ticks + ticks;
+        
+        uint64_t now_ticks = timer_get_ticks();
+        uint64_t target = now_ticks + ticks;
 
-        if (target < system_ticks) {
+        if (target < now_ticks) {
             target = 0xFFFFFFFFFFFFFFFFULL;
         }
 
@@ -194,10 +196,12 @@ void sched_sleep_current(uint64_t ticks) {
     }
 }
 
-static int get_cpu_distance(uint8_t cpu_a, uint8_t cpu_b) {
+static inline int get_cpu_distance(uint8_t cpu_a, uint8_t cpu_b) {
     if (cpu_a == cpu_b) return 0;
-    if (cpu_topologies[cpu_a].package_id != cpu_topologies[cpu_b].package_id) return 3;
-    if (cpu_topologies[cpu_a].core_id != cpu_topologies[cpu_b].core_id) return 2;
+    cpu_topology_t* ta = &cpu_topologies[cpu_a];
+    cpu_topology_t* tb = &cpu_topologies[cpu_b];
+    if (ta->package_id != tb->package_id) return 3;
+    if (ta->core_id != tb->core_id) return 2;
     return 1;
 }
 
@@ -247,12 +251,21 @@ process_t* sched_pick_next(uint8_t cpu_id) {
     int     min_distance = 255;
     int     max_load     = 0;
 
+    // OPTİMİZASYON YAMASI: Lock-Free Work Stealing (İş Çalma)
+    // Thundering Herd (Sürü Psikolojisi) kilitlenmelerini önlemek için taramaya
+    // rastgele bir çekirdekten başlanır ve kilit alınmadan önce kuyruk boyutu atomik kontrol edilir.
+    uint8_t start_cpu = (uint8_t)(timer_get_ticks() % num_cpus);
+
     for (uint8_t i = 0; i < num_cpus; i++) {
-        uint8_t target = (cpu_id + 1 + i) % num_cpus;
+        uint8_t target = (start_cpu + i) % num_cpus;
         if (target == cpu_id) continue;
+        
+        int count = __atomic_load_n(&sched_queues[target].total_tasks, __ATOMIC_RELAXED);
+        if (count == 0) continue;
+
         uint64_t remote_flags;
         if (spinlock_try_acquire(&sched_queues[target].lock, &remote_flags)) {
-            int count = sched_queues[target].total_tasks;
+            count = sched_queues[target].total_tasks;
             if (count > 0) {
                 int dist = get_cpu_distance(cpu_id, target);
                 if (dist == 1) {
@@ -382,9 +395,6 @@ __attribute__((no_stack_protector))
 void schedule(void) {
     if (unlikely(global_panic_active)) return;
 
-    // GÜVENLİK YAMASI: Blind STI Koruma Zırhı
-    // Zamanlayıcıya girerken RFLAGS kaydedilir. Eğer iptal edilip dönülecekse
-    // kesmeler SADECE başlangıçta açıksa açılır. Körlemesine STI atılmaz!
     uint64_t rflags;
     __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
 
@@ -509,7 +519,12 @@ void process_tick(void) {
         if (per_cpu_data[cpu_id]) per_cpu_data[cpu_id]->idle_ticks++;
     }
 
-    if (cpu_id == 0) system_ticks++;
+    if (cpu_id == 0) {
+        extern volatile uint64_t system_ticks;
+        system_ticks++; 
+    }
+
+    uint64_t now_ticks = timer_get_ticks();
 
     uint64_t  flags = spinlock_acquire(&sched_queues[cpu_id].lock);
     process_t* prev = NULL;
@@ -517,7 +532,7 @@ void process_tick(void) {
 
     while (p) {
         process_t* next_p = p->sleep_next;
-        if (system_ticks >= p->wake_tick) {
+        if (now_ticks >= p->wake_tick) {
             if (prev) prev->sleep_next = next_p;
             else sched_queues[cpu_id].sleep_queue = next_p;
 
@@ -548,8 +563,9 @@ void timer_handler(registers_t* regs) {
 
 void task_sleep(uint64_t ticks) {
     if (!scheduler_active) {
-        uint64_t target = system_ticks + ticks;
-        while (system_ticks < target) {
+        uint64_t now_ticks = timer_get_ticks();
+        uint64_t target = now_ticks + ticks;
+        while (timer_get_ticks() < target) {
             __asm__ volatile("pause");
         }
         return;

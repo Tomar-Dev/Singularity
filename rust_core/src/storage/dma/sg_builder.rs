@@ -1,10 +1,8 @@
 // rust_core/src/storage/dma/sg_builder.rs
-// DMA Guard & Scatter/Gather Builder
 
 use crate::ffi::bindings::{StorageKioVec, StorageDmaChain};
 use crate::memory::safemem::SafeMem;
 use crate::ffi::{ioremap, iounmap, kprintf_string};
-// FIX: Doğru Rust fonksiyon isimleri içe aktarıldı
 use crate::memory::pmm::{pmm_alloc_contiguous, pmm_free_contiguous, pmm_inc_ref, pmm_dec_ref};
 use alloc::format;
 use core::ptr;
@@ -18,7 +16,7 @@ pub extern "C" fn rust_dma_guard_validate(
     _caller_pid: u64
 ) -> bool {
     if vectors.is_null() || count == 0 { 
-        unsafe { kprintf_string(c"[DMA GUARD] Blocked: Vector Array is Null or Empty!\n".as_ptr()); }
+        unsafe { kprintf_string(c"Blocked: Vector Array is Null or Empty!\n".as_ptr()); }
         return false; 
     }
     
@@ -26,13 +24,13 @@ pub extern "C" fn rust_dma_guard_validate(
     
     for vec in vecs {
         if vec.size == 0 || vec.virt_addr.is_null() {
-            let msg = format!("[DMA GUARD] Blocked: Invalid Vector (Size: {}, VirtAddr: 0x{:X})\n\0", vec.size, vec.virt_addr as u64);
+            let msg = format!("Blocked: Invalid Vector (Size: {}, VirtAddr: 0x{:X})\n\0", vec.size, vec.virt_addr as u64);
             unsafe { kprintf_string(msg.as_ptr() as *const i8); }
             return false;
         }
         
         if !SafeMem::is_valid_kernel_region(vec.virt_addr, vec.size) {
-            let msg = format!("[DMA GUARD] Security Violation: Unsafe memory target 0x{:X}\n\0", vec.virt_addr as u64);
+            let msg = format!("Security Violation: Unsafe memory target 0x{:X}\n\0", vec.virt_addr as u64);
             unsafe { kprintf_string(msg.as_ptr() as *const i8); }
             return false;
         }
@@ -66,14 +64,12 @@ pub extern "C" fn rust_storage_build_sg_list(
                 is_aligned = false;
             }
         }
-        // MEMORY PINNING: PMM seviyesinde donanım işlemi bitene kadar sayfayı kilitleriz (Ref++)
         unsafe { pmm_inc_ref(vec.phys_addr as *mut core::ffi::c_void); }
     }
     
     chain.total_bytes = total_size as u32;
     
     if !is_aligned {
-        // Eğer hizasızsa (Bounce Buffer fallback), orijinal referansları geri bırak
         for vec in vecs.iter() {
             unsafe { pmm_dec_ref(vec.phys_addr as *mut core::ffi::c_void); }
         }
@@ -136,7 +132,6 @@ pub extern "C" fn rust_storage_build_sg_list(
 pub extern "C" fn rust_storage_free_sg_list(chain: *mut StorageDmaChain, vectors: *const StorageKioVec, count: usize) {
     if chain.is_null() || vectors.is_null() || count == 0 { return; }
     
-    // MEMORY UNPINNING: DMA işlemi bitti, belleği serbest bırak (Ref--)
     let vecs = unsafe { core::slice::from_raw_parts(vectors, count) };
     for vec in vecs.iter() {
         unsafe { pmm_dec_ref(vec.phys_addr as *mut core::ffi::c_void); }

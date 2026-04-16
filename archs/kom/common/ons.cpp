@@ -7,7 +7,6 @@
 inline void* operator new(size_t, void* p) { return p; }
 
 static KContainer* ons_root = nullptr;
-// Defansif: Hizalama zırhı eklendi.
 alignas(KContainer) static uint8_t ons_root_buf[sizeof(KContainer)];
 
 extern "C" {
@@ -32,8 +31,6 @@ void ons_init() {
     kobject_unref(c_system);
     kobject_unref(c_ramdisk);
     kobject_unref(c_ipc);
-
-    printf("[ ONS  ] Object Namespace Tree Initialized (NT Path Resolver Active)\n");
 }
 
 int ons_bind_c(const char* path, void* obj) {
@@ -168,7 +165,6 @@ KObject* ons_resolve_parent(const char* path, char* out_filename) {
     
     char* lastSlash = strrchr(parentPath, '/');
     if (lastSlash) {
-        // FIX: strcpy -> strncpy (Clang-Tidy Security Fix)
         strncpy(out_filename, lastSlash + 1, 127);
         out_filename[127] = '\0';
         

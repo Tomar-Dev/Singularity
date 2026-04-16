@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "archs/cpu/cpu_hal.h" // HAL MIGRATION: Added for hal_cpu_relax
+#include "archs/cpu/cpu_hal.h" 
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,7 +34,6 @@ static inline void barrier() {
     __asm__ volatile("" ::: "memory");
 }
 
-// HAL MIGRATION: CPU Relax abstracted
 static inline void cpu_relax() {
     hal_cpu_relax();
 }
@@ -55,6 +54,10 @@ static inline void prefetch_stack(void* ptr) {
     __asm__ volatile("prefetcht0 (%0)" : : "r"(ptr));
     __asm__ volatile("prefetcht0 -64(%0)" : : "r"(ptr));
 }
+
+// GÜVENLİK YAMASI: SMAP/SMEP User-Copy Koruması
+static inline void stac() { __asm__ volatile("stac" ::: "memory"); }
+static inline void clac() { __asm__ volatile("clac" ::: "memory"); }
 
 #ifdef __cplusplus
 }

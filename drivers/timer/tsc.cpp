@@ -9,7 +9,7 @@
 
 extern "C" {
     void print_status(const char* prefix, const char* msg, const char* status);
-    uint32_t acpi_get_pm_timer_port(void); // ACPI'den gelen PM Timer Portu
+    uint32_t acpi_get_pm_timer_port(void); 
 }
 
 static TSCDriver* g_tsc = nullptr;
@@ -17,22 +17,18 @@ static TSCDriver* g_tsc = nullptr;
 static uint64_t tsc_frequency = 0;
 static uint64_t boot_tsc = 0;
 
-// GÜVENLİK YAMASI: Modern ACPI PM Timer Kalibrasyonu (3.579545 MHz)
 static bool pm_timer_reliable_calibration() {
     uint32_t pm_port = acpi_get_pm_timer_port();
     if (!pm_port) return false;
 
-    // PM Timer genellikle 24-bittir.
     uint32_t t1 = hal_io_inl(pm_port) & 0xFFFFFF;
     uint32_t t2 = t1;
     
-    // Sınırda yakalamak için değişmesini bekle (Precision Edge)
     while ((t2 = (hal_io_inl(pm_port) & 0xFFFFFF)) == t1) { hal_cpu_relax(); }
     
     uint64_t start_tsc = tsc_read_asm();
     t1 = t2;
     
-    // Yaklaşık 10ms bekle. (3.579545 MHz = saniyede 3579545 tick -> 10ms = ~35795 tick)
     uint32_t target_delta = 35795;
     while (true) {
         t2 = hal_io_inl(pm_port) & 0xFFFFFF;
@@ -44,7 +40,6 @@ static bool pm_timer_reliable_calibration() {
     uint64_t end_tsc = tsc_read_asm();
     uint32_t actual_delta = (t2 >= t1) ? (t2 - t1) : (0x1000000 - t1 + t2);
     
-    // Frekans Formülü: (Delta TSC * 3579545) / Delta PM Timer
     tsc_frequency = ((end_tsc - start_tsc) * 3579545ULL) / actual_delta;
     return true;
 }
@@ -93,7 +88,6 @@ int TSCDriver::init() {
     uint32_t eax=0, ebx=0, ecx=0, edx=0;
     bool freq_found = false;
 
-    // 1. CPUID (Donanımsal Kesin Bilgi)
     __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0x15));
     if (eax != 0 && ebx != 0 && ecx != 0) {
         tsc_frequency = ((uint64_t)ecx * ebx) / eax;
@@ -107,7 +101,6 @@ int TSCDriver::init() {
         }
     }
 
-    // 2. ACPI PM Timer (Modern Güvenli Fallback)
     if (!freq_found || tsc_frequency < 1000000) {
         if (pm_timer_reliable_calibration()) {
             serial_write("[TSC] Calibrated via Modern ACPI PM Timer.\n");
@@ -115,7 +108,6 @@ int TSCDriver::init() {
         }
     }
 
-    // 3. PIT (Legacy Son Çare Fallback)
     if (!freq_found || tsc_frequency < 1000000) {
         serial_write("[TSC] ACPI PM Timer absent. Falling back to Legacy PIT...\n");
         pit_reliable_calibration();
@@ -189,8 +181,15 @@ extern "C" {
 
     void timer_sleep(uint64_t ticks) { task_sleep(ticks); }
     
+    // FIX: system_ticks deadlock'u önlendi. Artık zaman doğrudan donanımsal TSC'den okunur.
     uint64_t timer_get_ticks() {
-        extern volatile uint64_t system_ticks;
-        return system_ticks;
+        if (tsc_frequency == 0) {
+            extern volatile uint64_t system_ticks;
+            return system_ticks; // Fallback
+        }
+        uint64_t now = tsc_read_asm();
+        if (now < boot_tsc) return 0;
+        uint64_t delta = now - boot_tsc;
+        return (delta * 250) / tsc_frequency;
     }
 }

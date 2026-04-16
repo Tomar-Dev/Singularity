@@ -72,6 +72,14 @@ void prepare_cpu_data(uint8_t cpu_id, uint32_t lapic_id) {
                 }
             }
 
+            // GÜVENLİK YAMASI: Syscall Stack Allocation (8KB)
+            void* sys_stack = vmm_alloc_stack(2); 
+            if (sys_stack) {
+                cpu_data->syscall_stack = (uint64_t)sys_stack + 8192;
+            } else {
+                panic_at(__FILE__, __LINE__, KERR_MEM_OOM, "Syscall Stack OOM!");
+            }
+
             per_cpu_data[cpu_id] = cpu_data;
         }
     }
@@ -172,11 +180,11 @@ void init_smp() {
         apic_send_ipi(apic_id, 0x00004500); 
         microdelay(100);
         apic_send_ipi(apic_id, 0x00004608); 
-        microdelay(2000); // FIX 11: Older CPU SIPI Stabilization
+        microdelay(2000); 
         apic_send_ipi(apic_id, 0x00004608); 
 
         uint64_t start_tsc = tsc_read_asm();
-        uint64_t timeout_cycles = (freq / 1000) * 50; // 50ms Timeout
+        uint64_t timeout_cycles = (freq / 1000) * 50; 
         bool booted = false;
         
         while ((tsc_read_asm() - start_tsc) < timeout_cycles) {
@@ -187,9 +195,6 @@ void init_smp() {
             hal_cpu_relax();
         }
         
-        // FIX: Eger cekirdek uyanmadiysa (Timeout), bir sonraki cekirdegi baslatmayi durdur.
-        // Aksi takdirde gec uyanan cekirdek (Zombi AP), bir sonraki cekirdegin stack'ini
-        // alip ust uste calisir (Stack Collision) ve sistem cokecekti.
         if (booted) {
             logical_id_counter++;
         } else {

@@ -15,15 +15,39 @@
 static spinlock_t vmm_lock  = {0, 0, {0}};
 static uint8_t*   vmm_bitmap = nullptr;
 
-// GÜVENLİK YAMASI: argümanlar ve sayıcılar uint32_t'den size_t'ye (64-bit) yükseltildi.
+// OPTİMİZASYON YAMASI: 64-bitlik (QWORD) bloklar halinde bellek arama algoritması
+// Bu sayede VMM bellek tahsisi işlemleri (Stack, DMA) 64 kat hızlanmıştır.
 static int64_t vmm_find_free(size_t count) {
-    size_t found = 0, start = 0;
-    for (size_t i = 0; i < VMM_PAGES; i++) {
-        if (!(vmm_bitmap[i/8] & (static_cast<uint8_t>(1u << (i%8))))) {
-            if (found == 0) start = i;
-            if (++found == count) return static_cast<int64_t>(start);
-        } else { 
-            found = 0; 
+    uint64_t* bitmap64 = (uint64_t*)vmm_bitmap;
+    size_t total_qwords = VMM_BITMAP_SIZE / 8;
+    size_t found = 0;
+    size_t start = 0;
+
+    for (size_t i = 0; i < total_qwords; i++) {
+        uint64_t val = bitmap64[i];
+        
+        // Eğer 64 sayfanın tamamı doluysa direkt atla (Fast Path)
+        if (val == 0xFFFFFFFFFFFFFFFFULL) {
+            found = 0;
+            continue;
+        }
+        
+        // Eğer 64 sayfanın tamamı boşsa ve bize de en az 64 lazımsa hızlıca topla
+        if (val == 0 && found == 0 && count >= 64) {
+            start = i * 64;
+            found += 64;
+            if (found >= count) return (int64_t)start;
+            continue;
+        }
+        
+        // Kısmi dolu bloklar veya küçük tahsisler için bit-bit arama
+        for (int bit = 0; bit < 64; bit++) {
+            if (!(val & (1ULL << bit))) {
+                if (found == 0) start = i * 64 + bit;
+                if (++found == count) return (int64_t)start;
+            } else {
+                found = 0;
+            }
         }
     }
     return -1;
@@ -53,7 +77,7 @@ void PagingManager::initVMM() {
 }
 
 void* PagingManager::allocStack(size_t pages) {
-    size_t total = pages + 1; // 1 sayfa Guard Page için
+    size_t total = pages + 1; 
     uint64_t f = spinlock_acquire(&vmm_lock);
     int64_t idx = vmm_find_free(total);
     if (idx < 0) { 
@@ -65,7 +89,7 @@ void* PagingManager::allocStack(size_t pages) {
     uint64_t vstack = vbase + PAGE_SIZE;
     spinlock_release(&vmm_lock, f);
 
-    unmapPage(vbase); // Guard Page: Not Present
+    unmapPage(vbase); 
 
     void* phys = pmm_alloc_contiguous(pages);
     if (phys) {

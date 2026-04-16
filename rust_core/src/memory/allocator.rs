@@ -20,7 +20,7 @@ unsafe impl GlobalAlloc for KernelAllocator {
             if layout.size() > 0x10000000 {
                 panic_at(
                     c"allocator.rs".as_ptr() as *const u8, line!() as i32,
-                    KernelError::RustOOM as u32,
+                    KernelError::AllocatorOOM as u32,
                     c"FATAL: Ridiculous Allocation Size Blocked!".as_ptr() as *const u8,
                 );
             }
@@ -82,10 +82,10 @@ pub static ALLOCATOR: KernelAllocator = KernelAllocator;
 #[alloc_error_handler]
 fn alloc_error_handler(_layout: Layout) -> ! {
     unsafe {
-        crate::ffi::exports::kprintf_string(c"[MEM] FATAL: Out Of Memory (OOM) hit in safe core space!\n".as_ptr());
+        crate::ffi::exports::kprintf_string(c"[MEM] FATAL: Out Of Memory (OOM) hit!\n".as_ptr());
         panic_at(
             c"allocator.rs".as_ptr() as *const u8, 0,
-            KernelError::RustOOM as u32,
+            KernelError::AllocatorOOM as u32,
             c"FATAL OOM: Kernel Heap Exhausted (Allocation Failed)!".as_ptr() as *const u8,
         );
     }

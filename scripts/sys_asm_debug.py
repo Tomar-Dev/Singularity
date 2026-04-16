@@ -23,7 +23,7 @@ try:
 except ImportError:
     HAS_CXXFILT = False
 
-KERNEL_DIS = "../build/meowkernel.dis"
+KERNEL_DIS = "../build/singularity_kernel.dis"
 console = Console()
 
 VOLATILE_REGS =["rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11"]
@@ -68,7 +68,7 @@ LOOP_WHITELIST =[
 IGNORE_PREFIXES =[
     "core::", "alloc::", "compiler_builtins::", "__rust", 
     "rust_begin_unwind", "fmt::", "__ubsan", "__stack_chk", 
-    "std::", "meow_rust::", "_start", "start", "isr_common_stub",
+    "std::", "singularity_rust::", "_start", "start", "isr_common_stub",
     "drop_in_place"
 ]
 
@@ -180,7 +180,7 @@ class FunctionAnalyzer:
         lock_depth = 0
         interrupts_disabled = False
         
-        is_isr = any(x in self.demangled_name.lower() for x in ["isr", "irq", "handler"])
+        is_isr = any(x in self.demangled_name.lower() for x in["isr", "irq", "handler"])
         
         if is_isr:
             for w in ISR_VIOLATION_WHITELIST:
@@ -302,7 +302,7 @@ class FunctionAnalyzer:
                                     pass
                         state.clear_reg(dst_reg)
 
-            elif opcode in ["xor", "xorl", "xorq"]:
+            elif opcode in["xor", "xorl", "xorq"]:
                 ops = operands.split(',')
                 if len(ops) == 2:
                     r1 = ops[0].strip().replace('%', '')
@@ -403,7 +403,7 @@ class AuditEngine:
         
         try:
             with open(output_file, "w", encoding="utf-8") as f:
-                f.write("MeowOS Deep Static Audit Report v8.5\n")
+                f.write("Singularity Deep Static Audit Report v8.5\n")
                 f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write("====================================\n\n")
                 
@@ -428,7 +428,7 @@ class AuditEngine:
             console.print(f"[bold red]Rapor yazılamadı:[/bold red] {e}")
 
     def run_audit(self):
-        console.print("\n[bold cyan]=== MeowOS Derinlemesine Kod Analizi (v8.5) ===[/bold cyan]")
+        console.print("\n[bold cyan]=== Singularity Derinlemesine Kod Analizi (v8.5) ===[/bold cyan]")
         console.print("Register Data Flow, Stack Tracking & Abstract Interpretation...", style="dim")
         console.print(f"Analiz edilen fonksiyon sayısı: {len(self.functions)}\n")
         
@@ -465,7 +465,7 @@ class AuditEngine:
         self.generate_report()
 
 def main():
-    parser = argparse.ArgumentParser(description="MeowOS Deep Static Analyzer")
+    parser = argparse.ArgumentParser(description="Singularity Deep Static Analyzer")
     parser.add_argument("--file", help="Disassembly dosyası yolu", default=KERNEL_DIS)
     args = parser.parse_args()
 

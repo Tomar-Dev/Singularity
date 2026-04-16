@@ -11,7 +11,6 @@ use crate::ffi::bindings::StorageKioVec;
 unsafe extern "C" {
     fn disk_cache_read_block(dev: *mut c_void, lba: u64, count: u32, buffer: *mut u8) -> i32;
     fn disk_cache_read_vector(dev: *mut c_void, lba: u64, vectors: *const StorageKioVec, count: i32) -> i32;
-    // FIX: pmm_alloc_contiguous yerine doğru olan sanal tahsis fonksiyonu eklendi
     fn kmalloc_contiguous(size: usize) -> *mut c_void;
     fn kfree_contiguous(ptr: *mut c_void, size: usize);
 }
@@ -45,17 +44,20 @@ unsafe impl Sync for Fat32Node {}
 
 impl Fat32Mount {
     fn cluster_to_lba(&self, cluster: u32) -> u64 {
+        // FIX: Cluster Underflow Koruması
+        if cluster < 2 { return 0; }
         self.first_data_sector as u64 + ((cluster - 2) as u64 * self.sectors_per_cluster as u64)
     }
 
     fn get_next_cluster(&self, cluster: u32) -> u32 {
+        if cluster < 2 { return 0x0FFFFFFF; } // FIX: Geçersiz küme araması engellendi
         let sector = self.fat_start_sector + (cluster * 4 / 512);
         let offset = (cluster * 4) % 512;
         let mut buf = alloc::vec![0u8; 4096];
         
         let ret = unsafe { disk_cache_read_block(self.dev, sector as u64, 1, buf.as_mut_ptr()) };
         if ret != 1 {
-            crate::ffi::debug_print("[FAT32] Error: Failed to read FAT sector.\n\0");
+            crate::ffi::debug_print("Error: Failed to read FAT sector.\n\0");
             return 0x0FFFFFFF;
         } else {
             let next = read_u32_le(&buf, offset as usize);
@@ -112,7 +114,7 @@ impl FsNode for Fat32Node {
 
         while cluster_chain_idx > 0 {
             cluster = self.mount.get_next_cluster(cluster);
-            if cluster >= 0x0FFFFFF8 { return Err(8); }
+            if cluster < 2 || cluster >= 0x0FFFFFF8 { return Err(8); }
             cluster_chain_idx -= 1;
         }
 
@@ -128,7 +130,7 @@ impl FsNode for Fat32Node {
                     break;
                 }
                 let next_cluster = self.mount.get_next_cluster(current_cluster);
-                if next_cluster == current_cluster + 1 && next_cluster < 0x0FFFFFF8 {
+                if next_cluster == current_cluster + 1 && next_cluster >= 2 && next_cluster < 0x0FFFFFF8 {
                     contiguous_clusters += 1;
                     current_cluster = next_cluster;
                 } else {
@@ -158,7 +160,6 @@ impl FsNode for Fat32Node {
                 let sectors_to_read = (bytes_to_transfer + 511) / 512;
                 let bounce_size = sectors_to_read as usize * 512;
                 
-                // FIX: VMM uyumlu sanal bellek alloc / free
                 let bounce_buf = unsafe { kmalloc_contiguous(bounce_size) as *mut u8 };
                 if bounce_buf.is_null() { return Err(4); }
 
@@ -199,7 +200,7 @@ impl FsNode for Fat32Node {
             let lba = self.mount.cluster_to_lba(cluster);
             let ret = unsafe { disk_cache_read_block(self.mount.dev, lba, self.mount.sectors_per_cluster, cl_buf.as_mut_ptr()) };
             if ret != 1 { 
-                crate::ffi::debug_print("[FAT32] Error: Directory cluster read failed.\n\0");
+                crate::ffi::debug_print("Error: Directory cluster read failed.\n\0");
                 return None; 
             }
 
@@ -223,7 +224,7 @@ impl FsNode for Fat32Node {
                         lfn_to_ascii(&cl_buf, offset + 28, 2, &mut part);
                         current_lfn.insert_str(0, &part); 
                     } else {
-                        crate::ffi::debug_print("[FAT32] Warning: Corrupted LFN entry detected.\n\0");
+                        crate::ffi::debug_print("Warning: Corrupted LFN entry detected.\n\0");
                     }
                 } else if (attr & 0x08) == 0 {
                     let mut final_name = current_lfn.clone();
@@ -246,7 +247,6 @@ impl FsNode for Fat32Node {
                     }
                     current_lfn.clear();
                 } else {
-                    // Volume Label Entry - Safely Ignore
                 }
                 offset += 32;
             }
@@ -313,7 +313,7 @@ pub unsafe extern "C" fn rust_fat32_mount(dev: *mut c_void) -> *mut c_void {
     let mut buf =[0u8; 512];
     let ret = unsafe { disk_cache_read_block(dev, 0, 1, buf.as_mut_ptr()) };
     if ret != 1 { 
-        crate::ffi::debug_print("[FAT32] Error: Boot sector read failed.\n\0");
+        crate::ffi::debug_print("Error: Boot sector read failed.\n\0");
         return core::ptr::null_mut(); 
     }
 
@@ -326,7 +326,7 @@ pub unsafe extern "C" fn rust_fat32_mount(dev: *mut c_void) -> *mut c_void {
         let root_cluster = read_u32_le(&buf, 44);
 
         if bytes_per_sector == 0 || sectors_per_cluster == 0 {
-            crate::ffi::debug_print("[FAT32] Error: Invalid cluster geometry.\n\0");
+            crate::ffi::debug_print("Error: Invalid cluster geometry.\n\0");
             return core::ptr::null_mut();
         }
 
@@ -350,7 +350,7 @@ pub unsafe extern "C" fn rust_fat32_mount(dev: *mut c_void) -> *mut c_void {
 
         return Box::into_raw(Box::new(node)) as *mut c_void;
     } else {
-        crate::ffi::debug_print("[FAT32] Error: Missing 55 AA Boot Signature.\n\0");
+        crate::ffi::debug_print("Error: Missing 55 AA Boot Signature.\n\0");
     }
     core::ptr::null_mut()
 }

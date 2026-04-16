@@ -3,7 +3,6 @@
 #include "libc/stdio.h"
 #include "drivers/serial/serial.h"
 
-// Maksimum 256 kesme vektörü. O(1) hızında Routing yapılır.
 static KInterrupt* irq_map[256] = {nullptr};
 static spinlock_t kir_lock = {0, 0, {0}};
 
@@ -19,7 +18,6 @@ KInterrupt::~KInterrupt() {
 namespace KIR {
     void init() {
         spinlock_init(&kir_lock);
-        serial_write("[ KIR  ] Kernel Interrupt Router Initialized (Top-Half Isolation).\n");
     }
 
     void registerInterrupt(KInterrupt* irqObj) {
@@ -44,7 +42,6 @@ namespace KIR {
         if (irqObj) {
             irqObj->signal();
         } else {
-            // Unregistered IRQ triggered, ignored safely.
         }
         spinlock_release(&kir_lock, flags);
     }
@@ -66,6 +63,5 @@ extern "C" void kir_wait_interrupt(void* kint) {
     if (kint) {
         ((KInterrupt*)kint)->wait();
     } else {
-        // Safe fallback
     }
 }

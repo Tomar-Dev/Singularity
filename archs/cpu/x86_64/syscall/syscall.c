@@ -9,10 +9,10 @@
 #include "kernel/debug.h"
 #include "drivers/apic/apic.h" 
 #include "libc/string.h" 
+#include "archs/cpu/x86_64/core/cpuid.h"
 
 extern void syscall_entry(); 
 
-// FIX: Clang-Tidy Function Pointer Cast Fix. Use explicit type instead of void*.
 typedef void (*syscall_handler_t)(registers_t*);
 syscall_handler_t syscall_routines[256] = {NULL};
 
@@ -37,6 +37,10 @@ static void sys_write(registers_t* regs) {
     
     char safe_buf[256];
     size_t i = 0;
+    
+    // GÜVENLİK YAMASI: SMAP (Supervisor Mode Access Prevention) Bypass Zırhı
+    if (cpu_info.has_smap) stac();
+    
     while (i < 255) {
         if ((((uint64_t)str + i) & 0xFFF) == 0) {
             if (!is_valid_user_ptr(str + i, 1)) break;
@@ -45,6 +49,9 @@ static void sys_write(registers_t* regs) {
         if (c == '\0') break;
         safe_buf[i++] = c;
     }
+    
+    if (cpu_info.has_smap) clac();
+    
     safe_buf[i] = '\0';
     console_write(safe_buf);
 }
@@ -77,9 +84,4 @@ void init_syscalls() {
     wrmsr(0xC0000081, star);
     wrmsr(0xC0000082, (uint64_t)syscall_entry);
     wrmsr(0xC0000084, 0x200 | 0x100 | 0x400); 
-
-    static volatile int log_done = 0;
-    if (__atomic_test_and_set(&log_done, __ATOMIC_SEQ_CST) == 0) {
-        serial_write("[CPU] Fast Syscall (MSR) Mechanism Verified on all cores.\n");
-    }
 }

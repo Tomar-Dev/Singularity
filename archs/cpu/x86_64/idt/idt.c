@@ -35,7 +35,6 @@ void idt_install() {
     idt_set_entry(1, (uint64_t)isr1, 0x08, 0x8E);
     idt_set_entry(2, (uint64_t)isr2, 0x08, 0x8E);
     
-    // FIX: Breakpoint ve Overflow için Trap Gate ve DPL 3 (0xEF) kullanılmalı. User-Mode erişimi izni!
     idt_set_entry(3, (uint64_t)isr3, 0x08, 0xEF);
     idt_set_entry(4, (uint64_t)isr4, 0x08, 0xEF);
     
@@ -80,5 +79,4 @@ void idt_install() {
     idt_set_entry(255, (uint64_t)irq255, 0x08, 0x8E);
 
     idt_load();
-    printf("[IDT] Interrupt Descriptor Table Loaded (Safe Mode).\n");
 }

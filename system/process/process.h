@@ -106,7 +106,8 @@ void task_sleep(uint64_t ticks);
 
 void wait_queue_init(wait_queue_t* q);
 void wait_queue_push(wait_queue_t* q, process_t* task);
-process_t* wait_queue_pop_safe(wait_queue_t* q, int* waiter_counter);
+// FIX: Counter pointer'ı yerine atlanan zombi sayısını döndüren yapıya geçildi
+process_t* wait_queue_pop_safe(wait_queue_t* q, uint32_t* skipped_count);
 
 void sched_enqueue(uint8_t cpu_id, process_t* task, kernel_prio_t prio, int16_t affinity);
 void sched_remove(uint8_t cpu_id, process_t* task);

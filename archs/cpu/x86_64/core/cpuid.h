@@ -62,6 +62,9 @@ typedef struct {
     
     bool has_cet_ss;
     bool has_cet_ibt;
+    
+    bool has_smep; // GÜVENLİK YAMASI
+    bool has_smap; // GÜVENLİK YAMASI
 
     bool is_hypervisor;
 

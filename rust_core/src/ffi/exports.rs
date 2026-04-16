@@ -59,8 +59,6 @@ pub fn system_print(msg: &str) {
         let mut head = ffi_log_ring_head.load(Ordering::Acquire);
         let tail = ffi_log_ring_tail.load(Ordering::Acquire);
         
-        // OPTİMİZASYON YAMASI: DIV (%) komutu kaldırıldı! Karşılaştırma döngüsü (Branching)
-        // modern işlemcilerde MOD hesaplamasından 10 kat daha hızlıdır.
         for &b in msg.as_bytes() {
             let mut next = head + 1;
             if next == 16384 {

@@ -105,7 +105,6 @@ int AHCIDriver::earlyInit() {
 int AHCIDriver::finalize() {
     if (!initialized_early) return 0;
 
-    // FIX: Disklere Spin-up icin ufak bir avans
     tsc_delay_ms(10);
 
     uint32_t pi = abar->pi;
@@ -119,7 +118,6 @@ int AHCIDriver::finalize() {
         uint8_t ipm = (ssts >> 8) & 0x0F;
         uint8_t det = ssts & 0x0F;
 
-        // FIX: Cihaz tespiti yoksa aninda iptal. Sonsuz SIG beklemesi yok!
         if (det != HBA_PORT_DET_PRESENT || ipm != HBA_PORT_IPM_ACTIVE) {
             continue;
         }
@@ -141,7 +139,7 @@ int AHCIDriver::finalize() {
             DeviceManager::registerDevice(subDev);
 
             char msg[64];
-            sprintf(msg, "Port %d attached as %s (%s)", i, newName, newPort->is_atapi ? "ATAPI" : "SATA");
+            sprintf(msg, "Port %d attached as %s", i, newName);
             print_status("[ AHCI ]", msg, "INFO");
 
             if (!newPort->is_atapi) gpt_scan_partitions(subDev);

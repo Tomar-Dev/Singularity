@@ -151,24 +151,9 @@ static void console_newline() {
             cursor_y++;
         } else {
             if (auto_flush_enabled && backbuffer) {
-                uint32_t row_bytes = fb_info.pitch * GLYPH_H;
-                uint32_t total_bytes = fb_info.pitch * fb_info.height;
-                
-                // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-                memmove(backbuffer, (uint8_t*)backbuffer + row_bytes, total_bytes - row_bytes);
-                
-                uint32_t* last_line = (uint32_t*)((uint8_t*)backbuffer + total_bytes - row_bytes);
-                uint32_t bg_color = vga_palette[current_bg_idx & 0x0F];
-                
-                if (cpu_info.has_avx) {
-                    fill_rect_avx(last_line, bg_color, row_bytes / 4);
-                } else {
-                    for (uint32_t i = 0; i < row_bytes / 4; i++) {
-                        last_line[i] = bg_color;
-                    }
-                }
-                
-                framebuffer_mark_dirty_rect(0, 0, fb_info.width, fb_info.height);
+                // OPTİMİZASYON YAMASI: O(1) Console Scrolling
+                // 3MB'lık ağır memmove işlemi silindi. Ekran sadece history buffer'dan yeniden çizilir.
+                console_redraw();
                 console_dirty = true;
             }
         }

@@ -40,10 +40,10 @@ def create_rootfs(pci_db_path):
         print("[WARNING] PCI Database (pci.db) not found. Skipping embedding.")
 
     with open(os.path.join(root_dir, "hello.txt"), "w") as f:
-        f.write("Hello from MeowOS InitRD! The ONS (Object Namespace) is working properly.\n")
+        f.write("Hello from Singularity InitRD! The ONS (Object Namespace) is working properly.\n")
 
     with open(os.path.join(root_dir, "system", "version.txt"), "w") as f:
-        f.write("MeowOS Kernel v6.9 (Native KOM Edition)\n")
+        f.write("Singularity Kernel v6.9 (Native KOM Edition)\n")
 
     with open(os.path.join(root_dir, "system", "readme.txt"), "w") as f:
         f.write("This is a system directory.\nDo not delete critical files.\n")
@@ -53,7 +53,7 @@ def create_rootfs(pci_db_path):
         f.write("silent_run \"Auto-Mounting Volumes\" automount\n") 
 
     with open(os.path.join(root_dir, "home", "config.cfg"), "w") as f:
-        f.write("user=meow\ntheme=dark\nkeyboard=us\n")
+        f.write("user=admin\ntheme=dark\nkeyboard=us\n")
 
     with tarfile.open(output_tar, "w") as tar:
         tar.add(root_dir, arcname=".") 

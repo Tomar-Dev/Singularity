@@ -6,7 +6,7 @@
 FFIStats ffi_stat_pmm_alloc = {0, 0};
 FFIStats ffi_stat_pmm_free = {0, 0};
 
-namespace MeowFFI {
+namespace SingularityFFI {
 
     void print_ffi_stats() {
         printf("\n========== RUST FFI BRIDGE METRICS ==========\n");

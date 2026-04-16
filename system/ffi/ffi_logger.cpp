@@ -13,23 +13,21 @@ extern "C" {
 }
 
 extern "C" void ffi_logger_flush_sync() {
-    uint32_t head = __atomic_load_n(&ffi_log_ring_head, __ATOMIC_ACQUIRE);
     uint32_t tail = __atomic_load_n(&ffi_log_ring_tail, __ATOMIC_ACQUIRE);
-    if (head != tail) {
-        while (tail != head) {
-            char c = ffi_log_ring_buf[tail];
-            if (c == '\n') serial_putc('\r');
-            serial_putc(c);
-            
-            // FIX: Rust debug logları ARTIK KULLANICI EKRANINA (VGA) BASILMAYACAK!
-            // Sadece dmesg/Serial portundan geliştiriciler tarafından izlenecek.
-            // console_putchar(c); <-- SİLİNDİ!
-
-            ffi_log_ring_buf[tail] = 0;
-            tail = (tail + 1) % FFI_RING_SIZE;
-        }
-        __atomic_store_n(&ffi_log_ring_tail, tail, __ATOMIC_RELEASE);
+    
+    while (true) {
+        // FIX: Snapshot Kaybı Önlendi. Head döngü içinde dinamik olarak okunur.
+        uint32_t head = __atomic_load_n(&ffi_log_ring_head, __ATOMIC_ACQUIRE);
+        if (tail == head) break;
+        
+        char c = ffi_log_ring_buf[tail];
+        if (c == '\n') serial_putc('\r');
+        serial_putc(c);
+        
+        ffi_log_ring_buf[tail] = 0;
+        tail = (tail + 1) % FFI_RING_SIZE;
     }
+    __atomic_store_n(&ffi_log_ring_tail, tail, __ATOMIC_RELEASE);
 }
 
 void ffi_logger_task() {

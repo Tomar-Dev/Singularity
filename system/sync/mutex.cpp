@@ -35,40 +35,41 @@ void mutex_destroy(mutex_t m) {
 }
 
 void mutex_lock(mutex_t m) {
-    if (!m) {
-        return;
-    } else {
-        while (1) {
-            uint64_t flags = spinlock_acquire(&m->lock);
+    if (!m) return;
+    
+    while (1) {
+        // FIX: Lost Wakeup Koruma Zırhı
+        uint64_t rflags;
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
+        
+        uint64_t flags = spinlock_acquire(&m->lock);
 
-            if (m->locked == 0) {
-                m->locked = 1;
-                spinlock_release(&m->lock, flags);
-                return; 
-            } else {
-                process_t* proc = (process_t*)get_current_thread_fast();
-                proc->state = PROCESS_BLOCKED;
-                wait_queue_push(&m->wait_q, proc);
-                spinlock_release(&m->lock, flags);
-                schedule(); 
-            }
+        if (m->locked == 0) {
+            m->locked = 1;
+            spinlock_release(&m->lock, flags);
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            return; 
+        } else {
+            process_t* proc = (process_t*)get_current_thread_fast();
+            proc->state = PROCESS_BLOCKED;
+            wait_queue_push(&m->wait_q, proc);
+            spinlock_release(&m->lock, flags);
+            schedule(); 
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
         }
     }
 }
 
 void mutex_unlock(mutex_t m) {
-    if (!m) {
-        return;
-    } else {
-        uint64_t flags = spinlock_acquire(&m->lock);
-        m->locked = 0;
-        process_t* next = wait_queue_pop_safe(&m->wait_q, nullptr);
-        spinlock_release(&m->lock, flags);
+    if (!m) return;
+    
+    uint64_t flags = spinlock_acquire(&m->lock);
+    m->locked = 0;
+    process_t* next = wait_queue_pop_safe(&m->wait_q, nullptr);
+    spinlock_release(&m->lock, flags);
 
-        if (next) {
-            sched_wake_task(next);
-        } else {
-        }
+    if (next) {
+        sched_wake_task(next);
     }
 }
 
@@ -91,39 +92,40 @@ void sem_destroy(semaphore_t s) {
 }
 
 void sem_wait(semaphore_t s) {
-    if (!s) {
-        return;
-    } else {
-        while (1) {
-            uint64_t flags = spinlock_acquire(&s->lock);
+    if (!s) return;
+    
+    while (1) {
+        // FIX: Lost Wakeup Koruma Zırhı
+        uint64_t rflags;
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
+        
+        uint64_t flags = spinlock_acquire(&s->lock);
 
-            if (s->count > 0) {
-                s->count--; 
-                spinlock_release(&s->lock, flags);
-                return;
-            } else {
-                process_t* proc = (process_t*)get_current_thread_fast();
-                proc->state = PROCESS_BLOCKED;
-                wait_queue_push(&s->wait_q, proc);
-                spinlock_release(&s->lock, flags);
-                schedule();
-            }
+        if (s->count > 0) {
+            s->count--; 
+            spinlock_release(&s->lock, flags);
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            return;
+        } else {
+            process_t* proc = (process_t*)get_current_thread_fast();
+            proc->state = PROCESS_BLOCKED;
+            wait_queue_push(&s->wait_q, proc);
+            spinlock_release(&s->lock, flags);
+            schedule();
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
         }
     }
 }
 
 void sem_signal(semaphore_t s) {
-    if (!s) {
-        return;
-    } else {
-        uint64_t flags = spinlock_acquire(&s->lock);
-        s->count++; 
-        process_t* next = wait_queue_pop_safe(&s->wait_q, nullptr);
-        spinlock_release(&s->lock, flags);
+    if (!s) return;
+    
+    uint64_t flags = spinlock_acquire(&s->lock);
+    s->count++; 
+    process_t* next = wait_queue_pop_safe(&s->wait_q, nullptr);
+    spinlock_release(&s->lock, flags);
 
-        if (next) {
-            sched_wake_task(next);
-        } else {
-        }
+    if (next) {
+        sched_wake_task(next);
     }
 }

@@ -46,6 +46,9 @@ void wait_queue_init(wait_queue_t* q) {
 }
 
 void wait_queue_push(wait_queue_t* q, process_t* task) {
+    // MİMARİ NOT: q->lock bir "Leaf Lock" (Yaprak Kilit)'tir. 
+    // Daha üst seviye kilitler (rwlock->lock veya mutex->lock) tutulurken 
+    // alınması güvenlidir ve AB-BA Deadlock yaratmaz.
     uint64_t flags = spinlock_acquire(&q->lock);
     task->wait_next = NULL;
     if (!q->head) {
@@ -58,8 +61,10 @@ void wait_queue_push(wait_queue_t* q, process_t* task) {
     spinlock_release(&q->lock, flags);
 }
 
-process_t* wait_queue_pop_safe(wait_queue_t* q, int* waiter_counter) {
+// FIX: Race Condition önlendi. Sayacı dışarıdan değiştirmek yerine atlanan görev sayısını döner.
+process_t* wait_queue_pop_safe(wait_queue_t* q, uint32_t* skipped_count) {
     uint64_t flags = spinlock_acquire(&q->lock);
+    uint32_t skipped = 0;
     
     while (q->head) {
         process_t* task = q->head;
@@ -72,16 +77,17 @@ process_t* wait_queue_pop_safe(wait_queue_t* q, int* waiter_counter) {
         task->wait_next = NULL;
 
         if (task->state == PROCESS_ZOMBIE || task->state == PROCESS_DEAD) {
-            if (waiter_counter) (*waiter_counter)--;
+            skipped++;
             continue;
         } else {
-            if (waiter_counter) (*waiter_counter)--;
             spinlock_release(&q->lock, flags);
+            if (skipped_count) *skipped_count = skipped;
             return task;
         }
     }
     
     spinlock_release(&q->lock, flags);
+    if (skipped_count) *skipped_count = skipped;
     return NULL;
 }
 

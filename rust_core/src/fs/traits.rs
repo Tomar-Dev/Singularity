@@ -75,7 +75,7 @@ impl FsNode for FsBackend {
         }
     }
 
-    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, u32> {
+    fn read(&self, offset: u64, buf: &mut[u8]) -> Result<usize, u32> {
         match self {
             FsBackend::Ext4(node) => node.read(offset, buf),
             FsBackend::Fat32(node) => node.read(offset, buf),
@@ -279,6 +279,5 @@ pub unsafe extern "C" fn rust_fs_release(node_ptr: *mut c_void) {
             let _ = Box::from_raw(node_ptr as *mut FsBackend);
         }
     } else {
-        // Nothing to do for null pointers
     }
 }

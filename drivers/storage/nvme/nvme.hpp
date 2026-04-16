@@ -31,6 +31,8 @@ private:
     uint32_t db_stride; 
     uint32_t namespace_id; 
     
+    bool initialized_early; // OPTİMİZASYON YAMASI
+
     void writeDoorbell(uint16_t index, uint16_t val);
     void waitReady();
     void submitAdminCmd(nvme_sq_entry_t* cmd);
@@ -39,14 +41,17 @@ private:
     void submitIOCmd(nvme_sq_entry_t* cmd);
     bool waitForIOCompletion(uint16_t cid);
     
-    // DMA Memory Pinning Yardımcıları
     void unpinBuffer(void* buffer, uint32_t size);
     uint64_t setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size, void** out_prp_page_virt);
     void freePRPChain(void* prp_head_virt, uint32_t total_size);
 
 public:
     NVMeDriver(PCIeDevice* pci);
+    
     int init() override;
+    int earlyInit(); // OPTİMİZASYON YAMASI
+    int finalize();  // OPTİMİZASYON YAMASI
+    
     int shutdown() override;
     void emergencyStop() override;
     
@@ -66,7 +71,8 @@ public:
 extern "C" {
 #endif
 
-int init_nvme(void);
+void init_nvme_early(void);
+int  init_nvme_late(void);
 
 #ifdef __cplusplus
 }

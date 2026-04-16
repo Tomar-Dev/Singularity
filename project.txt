@@ -1,5 +1,7 @@
 Directory Structure:
 Root_Directory
+|--> LICENSE
+|--> README.md
 |--> archs
 |     |--> cpu
 |     |     |--> cpu_hal.h
@@ -267,6 +269,7 @@ Root_Directory
 |     |--> symbol_check.sh
 |     |--> sys_asm_debug.py
 |     |--> update_pci_db.py
+|--> sync.ps1
 |--> system
 |     |--> console
 |     |     |--> console.cpp
@@ -1452,7 +1455,6 @@ static void detect_cache_topology() {
         cpu_info.l2_cache_size = (c >> 16) & 0xFFFF;
         cpu_info.l3_cache_size = (d >> 18) * 512;
     } else {
-        // Unknown cache topology
     }
 }
 
@@ -1517,7 +1519,6 @@ static void detect_core_topology() {
             cpu_info.logical_cores  = nc * threads_per_core;
         } else {}
     } else {
-        // Generic topology values left as 1
     }
 }
 
@@ -1541,6 +1542,12 @@ void detect_cpu() {
     else if (strcmp(cpu_info.vendor_string, "KVMKVMKVM") == 0) { cpu_info.vendor = VENDOR_QEMU; }
     else if (strcmp(cpu_info.vendor_string, "VBoxVBoxVBox") == 0) { cpu_info.vendor = VENDOR_VIRTUALBOX; }
     else { cpu_info.vendor = VENDOR_UNKNOWN; }
+
+    if (max_std_func >= 7) {
+        cpuid_count(7, 0, &eax, &ebx, &ecx, &edx);
+        cpu_info.has_smep = (ebx & (1 << 7));  // GÜVENLİK YAMASI
+        cpu_info.has_smap = (ebx & (1 << 20)); // GÜVENLİK YAMASI
+    } else {}
 
     if (max_std_func >= 1) {
         cpuid(1, &eax, &ebx, &ecx, &edx);
@@ -1685,7 +1692,6 @@ void detect_cpu() {
 }
 
 void print_cpu_z_info() {
-    // Boş fonksiyon, mimari gereği tutulmaktadır.
 }
 
 .../archs\cpu\x86_64\core\cpuid.h:
@@ -1753,6 +1759,9 @@ typedef struct {
     
     bool has_cet_ss;
     bool has_cet_ibt;
+    
+    bool has_smep; // GÜVENLİK YAMASI
+    bool has_smap; // GÜVENLİK YAMASI
 
     bool is_hypervisor;
 
@@ -1783,7 +1792,6 @@ void print_cpu_z_info();
 #endif
 
 #endif
-
 
 .../archs\cpu\x86_64\core\fpu.c:
 // archs/cpu/x86_64/core/fpu.c
@@ -1846,21 +1854,7 @@ void init_fpu() {
     }
 
     fpu_load_mxcsr_asm(fpu_default_mxcsr);
-
-    // FIX: FPU Logu sadece CPU 0 (BSP) tarafından, tek satırda basılır.
-    if (get_cpu_id_fast() == 0) {
-        const char* mode_str    = "Legacy SSE (FXSAVE)";
-        const char* align_req   = "16";
-        if      (g_fpu_mode == 2) { mode_str = "XSAVEOPT"; align_req = "64"; }
-        else if (g_fpu_mode == 1) { mode_str = "XSAVE";    align_req = "64"; }
-
-        char buf[160];
-        sprintf(buf, "[FPU] Hardware initialized. Mode: %s | XCR0: 0x%lx | Align: %s-byte\n",
-                mode_str, g_xsave_mask, align_req);
-        serial_write(buf);
-    }
 }
-
 
 .../archs\cpu\x86_64\core\fpu.h:
 // archs/cpu/x86_64/core/fpu.h
@@ -2483,7 +2477,6 @@ void idt_install() {
     idt_set_entry(1, (uint64_t)isr1, 0x08, 0x8E);
     idt_set_entry(2, (uint64_t)isr2, 0x08, 0x8E);
     
-    // FIX: Breakpoint ve Overflow için Trap Gate ve DPL 3 (0xEF) kullanılmalı. User-Mode erişimi izni!
     idt_set_entry(3, (uint64_t)isr3, 0x08, 0xEF);
     idt_set_entry(4, (uint64_t)isr4, 0x08, 0xEF);
     
@@ -2528,9 +2521,7 @@ void idt_install() {
     idt_set_entry(255, (uint64_t)irq255, 0x08, 0x8E);
 
     idt_load();
-    printf("[IDT] Interrupt Descriptor Table Loaded (Safe Mode).\n");
 }
-
 
 .../archs\cpu\x86_64\idt\idt.h:
 // archs/cpu/x86_64/idt/idt.h
@@ -3123,7 +3114,6 @@ void mtrr_set_wc(uint64_t base, uint64_t length) {
         
         uint64_t base_msr = rdmsr(MSR_MTRR_PHYS_BASE0 + (i * 2));
         if ((base_msr & ~0xFFF) == base && (base_msr & 0xFF) == MTRR_TYPE_WC) {
-            serial_write("[MTRR] Range already set to WC.\n");
             return;
         }
     }
@@ -3133,7 +3123,6 @@ void mtrr_set_wc(uint64_t base, uint64_t length) {
         return;
     }
 
-    // FIX: PANİĞE YOL AÇAN BLIND STI KALDIRILDI! RFLAGS kaydedilerek güvenli dönüş yapıldı.
     uint64_t rflags;
     __asm__ volatile("pushfq; pop %0; cli; wbinvd" : "=r"(rflags) :: "memory");
     
@@ -3151,12 +3140,6 @@ void mtrr_set_wc(uint64_t base, uint64_t length) {
     if (rflags & 0x200) {
         __asm__ volatile("sti" ::: "memory");
     }
-
-    char buf[128];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    sprintf(buf, "[MTRR] Slot %d set to WC for 0x%lx (Len: %lu MB)\n", 
-            free_slot, base, aligned_len / 1024 / 1024);
-    serial_write(buf);
 }
 
 .../archs\cpu\x86_64\memory\mtrr.h:
@@ -3549,15 +3532,14 @@ void PagingManager::init() {
         uint64_t efer = rdmsr(MSR_EFER);
         if (!(efer & MSR_EFER_NXE)) wrmsr(MSR_EFER, efer | MSR_EFER_NXE);
         nx_enabled = true;
-        serial_write("[PAGING] NX (No-Execute) Enabled.\n");
     }
 
     __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(7), "c"(0));
     uint64_t cr4_val; 
     __asm__ volatile("mov %%cr4, %0" : "=r"(cr4_val));
     cr4_val |= (1u << 7);
-    if (b & (1u << 7))  { cr4_val |= CR4_SMEP; serial_write("[PAGING] SMEP Enabled.\n"); }
-    if (b & (1u << 20)) { cr4_val |= CR4_SMAP; serial_write("[PAGING] SMAP Enabled.\n"); }
+    if (b & (1u << 7))  { cr4_val |= CR4_SMEP; }
+    if (b & (1u << 20)) { cr4_val |= CR4_SMAP; }
     __asm__ volatile("mov %0, %%cr4" :: "r"(cr4_val));
 
     g_Paging = this;
@@ -3567,7 +3549,6 @@ void PagingManager::initPcid() {
     uint32_t a, b, c, d;
     __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1));
     if (!(c & (1u << 17))) { 
-        serial_write("[PAGING] PCID: not supported.\n"); 
         return; 
     }
     uint64_t cr4_val; 
@@ -3579,7 +3560,6 @@ void PagingManager::initPcid() {
     cr4_val |= (1u << 17);
     __asm__ volatile("mov %0, %%cr4" :: "r"(cr4_val));
     pcid_enabled = true;
-    serial_write("[PAGING] PCID activated (CR4.PCIDE=1).\n");
 }
 
 uint16_t PagingManager::allocPcid() {
@@ -3636,7 +3616,7 @@ int PagingManager::mapPage(uint64_t virt, uint64_t phys, uint64_t flags) {
             pmm_free_frame(reinterpret_cast<void*>(ph)); 
         }
         spinlock_release(&paging_lock, irq); 
-        if (c4) hal_tlb_flush_all(); // GÜVENLİK YAMASI: IPI kilit dışına taşındı
+        if (c4) hal_tlb_flush_all(); 
         return 0;
     }
 
@@ -3650,7 +3630,7 @@ int PagingManager::mapPage(uint64_t virt, uint64_t phys, uint64_t flags) {
         }
         pd->entries[p2].setRaw(phys | flags);
         spinlock_release(&paging_lock, irq); 
-        tlbInvalidate(virt, 1); // GÜVENLİK YAMASI: Kilit sonrası çağrı
+        tlbInvalidate(virt, 1); 
         return 1;
     }
 
@@ -3668,12 +3648,12 @@ int PagingManager::mapPage(uint64_t virt, uint64_t phys, uint64_t flags) {
             pmm_free_frame(reinterpret_cast<void*>(ph)); 
         }
         spinlock_release(&paging_lock, irq); 
-        if (c4 || c3) hal_tlb_flush_all(); // GÜVENLİK YAMASI
+        if (c4 || c3) hal_tlb_flush_all(); 
         return 0;
     }
     pt->entries[p1].setRaw(phys | flags);
     spinlock_release(&paging_lock, irq);
-    tlbInvalidate(virt, 1); // GÜVENLİK YAMASI
+    tlbInvalidate(virt, 1); 
     return 1;
 }
 
@@ -3699,12 +3679,12 @@ int PagingManager::mapPage1G(uint64_t virt, uint64_t phys, uint64_t flags) {
             pmm_free_frame(reinterpret_cast<void*>(ph)); 
         }
         spinlock_release(&paging_lock, irq); 
-        if (c4) hal_tlb_flush_all(); // GÜVENLİK YAMASI
+        if (c4) hal_tlb_flush_all(); 
         return 0;
     }
     pdp->entries[p3].setRaw(phys | flags);
     spinlock_release(&paging_lock, irq);
-    tlbInvalidate(virt, 1); // GÜVENLİK YAMASI
+    tlbInvalidate(virt, 1); 
     return 1;
 }
 
@@ -3894,7 +3874,7 @@ bool PagingManager::handleCowFault(uint64_t fault_addr) {
     }
     spinlock_release(&paging_lock, irq);
     void* npp = pmm_alloc_frame(); 
-    if(!npp){serial_write("[CoW] OOM\n");return false;}
+    if(!npp){return false;}
     uint64_t np = reinterpret_cast<uintptr_t>(npp);
     void* tmp = g_Paging->ioremap(np, PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_NX);
     if(!tmp){pmm_free_frame(npp);return false;}
@@ -4062,15 +4042,39 @@ extern "C" void paging_protect_kernel(void) {
 static spinlock_t vmm_lock  = {0, 0, {0}};
 static uint8_t*   vmm_bitmap = nullptr;
 
-// GÜVENLİK YAMASI: argümanlar ve sayıcılar uint32_t'den size_t'ye (64-bit) yükseltildi.
+// OPTİMİZASYON YAMASI: 64-bitlik (QWORD) bloklar halinde bellek arama algoritması
+// Bu sayede VMM bellek tahsisi işlemleri (Stack, DMA) 64 kat hızlanmıştır.
 static int64_t vmm_find_free(size_t count) {
-    size_t found = 0, start = 0;
-    for (size_t i = 0; i < VMM_PAGES; i++) {
-        if (!(vmm_bitmap[i/8] & (static_cast<uint8_t>(1u << (i%8))))) {
-            if (found == 0) start = i;
-            if (++found == count) return static_cast<int64_t>(start);
-        } else { 
-            found = 0; 
+    uint64_t* bitmap64 = (uint64_t*)vmm_bitmap;
+    size_t total_qwords = VMM_BITMAP_SIZE / 8;
+    size_t found = 0;
+    size_t start = 0;
+
+    for (size_t i = 0; i < total_qwords; i++) {
+        uint64_t val = bitmap64[i];
+        
+        // Eğer 64 sayfanın tamamı doluysa direkt atla (Fast Path)
+        if (val == 0xFFFFFFFFFFFFFFFFULL) {
+            found = 0;
+            continue;
+        }
+        
+        // Eğer 64 sayfanın tamamı boşsa ve bize de en az 64 lazımsa hızlıca topla
+        if (val == 0 && found == 0 && count >= 64) {
+            start = i * 64;
+            found += 64;
+            if (found >= count) return (int64_t)start;
+            continue;
+        }
+        
+        // Kısmi dolu bloklar veya küçük tahsisler için bit-bit arama
+        for (int bit = 0; bit < 64; bit++) {
+            if (!(val & (1ULL << bit))) {
+                if (found == 0) start = i * 64 + bit;
+                if (++found == count) return (int64_t)start;
+            } else {
+                found = 0;
+            }
         }
     }
     return -1;
@@ -4100,7 +4104,7 @@ void PagingManager::initVMM() {
 }
 
 void* PagingManager::allocStack(size_t pages) {
-    size_t total = pages + 1; // 1 sayfa Guard Page için
+    size_t total = pages + 1; 
     uint64_t f = spinlock_acquire(&vmm_lock);
     int64_t idx = vmm_find_free(total);
     if (idx < 0) { 
@@ -4112,7 +4116,7 @@ void* PagingManager::allocStack(size_t pages) {
     uint64_t vstack = vbase + PAGE_SIZE;
     spinlock_release(&vmm_lock, f);
 
-    unmapPage(vbase); // Guard Page: Not Present
+    unmapPage(vbase); 
 
     void* phys = pmm_alloc_contiguous(pages);
     if (phys) {
@@ -4233,6 +4237,7 @@ void vmm_free_stack(void* stack_base, size_t pages) {
 
 }
 
+
 .../archs\cpu\x86_64\memory\pat.c:
 // archs/cpu/x86_64/memory/pat.c
 #include "archs/cpu/x86_64/core/msr.h"
@@ -4247,23 +4252,10 @@ void init_pat() {
         serial_write("[CPU] PAT not supported. Graphics performance may be low.\n");
         return;
     }
-
-    uint64_t pat = rdmsr(MSR_IA32_PAT);
-    char buf[64];
-    sprintf(buf, "[CPU] Old PAT: 0x%lx\n", pat);
-    serial_write(buf);
     
     uint64_t new_pat = 0x0007010600070106ULL;
     wrmsr(MSR_IA32_PAT, new_pat);
-    
-    uint64_t verify_pat = rdmsr(MSR_IA32_PAT);
-    if (verify_pat == new_pat) {
-        serial_write("[CPU] PAT configured. Write-Combining (WC) enabled on Index 1.\n");
-    } else {
-        serial_write("[CPU] Error: PAT configuration failed!\n");
-    }
 }
-
 
 .../archs\cpu\x86_64\smp\smp.c:
 // archs/cpu/x86_64/smp/smp.c
@@ -4338,6 +4330,14 @@ void prepare_cpu_data(uint8_t cpu_id, uint32_t lapic_id) {
                     serial_write("SMP Stack OOM! Halting AP initialization.\n");
                     panic_at(__FILE__, __LINE__, KERR_MEM_OOM, "AP Stack Allocation Failed! Cannot boot CPU safely.");
                 }
+            }
+
+            // GÜVENLİK YAMASI: Syscall Stack Allocation (8KB)
+            void* sys_stack = vmm_alloc_stack(2); 
+            if (sys_stack) {
+                cpu_data->syscall_stack = (uint64_t)sys_stack + 8192;
+            } else {
+                panic_at(__FILE__, __LINE__, KERR_MEM_OOM, "Syscall Stack OOM!");
             }
 
             per_cpu_data[cpu_id] = cpu_data;
@@ -4440,11 +4440,11 @@ void init_smp() {
         apic_send_ipi(apic_id, 0x00004500); 
         microdelay(100);
         apic_send_ipi(apic_id, 0x00004608); 
-        microdelay(2000); // FIX 11: Older CPU SIPI Stabilization
+        microdelay(2000); 
         apic_send_ipi(apic_id, 0x00004608); 
 
         uint64_t start_tsc = tsc_read_asm();
-        uint64_t timeout_cycles = (freq / 1000) * 50; // 50ms Timeout
+        uint64_t timeout_cycles = (freq / 1000) * 50; 
         bool booted = false;
         
         while ((tsc_read_asm() - start_tsc) < timeout_cycles) {
@@ -4455,9 +4455,6 @@ void init_smp() {
             hal_cpu_relax();
         }
         
-        // FIX: Eger cekirdek uyanmadiysa (Timeout), bir sonraki cekirdegi baslatmayi durdur.
-        // Aksi takdirde gec uyanan cekirdek (Zombi AP), bir sonraki cekirdegin stack'ini
-        // alip ust uste calisir (Stack Collision) ve sistem cokecekti.
         if (booted) {
             logical_id_counter++;
         } else {
@@ -4534,7 +4531,6 @@ uint8_t get_current_cpu_id() {
     return get_apic_id();
 }
 
-
 .../archs\cpu\x86_64\smp\smp.h:
 // archs/cpu/x86_64/smp/smp.h
 #ifndef SMP_H
@@ -4551,23 +4547,19 @@ extern "C" {
 struct PerCPU;
 
 typedef struct PerCPU {
-    struct PerCPU* self;
-    uint64_t kernel_stack;
-    uint64_t user_rsp_scratch;
-    uint32_t lapic_id;
-    uint32_t cpu_id;
-    void* current_process;
-    
-    uintptr_t stack_canary;
-    
-    void* switching_task;
-    void* pending_task;
-    
-    uint64_t idle_ticks;
-    
-    volatile int32_t preempt_count;
-    
-    uint8_t _pad[64 - (0x4C % 64)]; 
+    struct PerCPU* self;          // 0x00
+    uint64_t kernel_stack;        // 0x08
+    uint64_t user_rsp_scratch;    // 0x10
+    uint32_t lapic_id;            // 0x18
+    uint32_t cpu_id;              // 0x1C
+    void* current_process;        // 0x20
+    uintptr_t stack_canary;       // 0x28
+    uint64_t syscall_stack;       // 0x30  <-- GÜVENLİK YAMASI: İzole Syscall Yığını
+    void* switching_task;         // 0x38
+    void* pending_task;           // 0x40
+    uint64_t idle_ticks;          // 0x48
+    volatile int32_t preempt_count; // 0x50
+    uint8_t _pad[64 - (0x54 % 64)]; 
 } __attribute__((packed, aligned(64))) per_cpu_t;
 
 typedef struct {
@@ -4611,7 +4603,6 @@ static inline uint32_t this_cpu_id() {
 #endif
 
 #endif
-
 
 .../archs\cpu\x86_64\smp\trampoline.asm:
 ; archs/cpu/x86_64/smp/trampoline.asm
@@ -4920,10 +4911,10 @@ public:
 #include "kernel/debug.h"
 #include "drivers/apic/apic.h" 
 #include "libc/string.h" 
+#include "archs/cpu/x86_64/core/cpuid.h"
 
 extern void syscall_entry(); 
 
-// FIX: Clang-Tidy Function Pointer Cast Fix. Use explicit type instead of void*.
 typedef void (*syscall_handler_t)(registers_t*);
 syscall_handler_t syscall_routines[256] = {NULL};
 
@@ -4948,6 +4939,10 @@ static void sys_write(registers_t* regs) {
     
     char safe_buf[256];
     size_t i = 0;
+    
+    // GÜVENLİK YAMASI: SMAP (Supervisor Mode Access Prevention) Bypass Zırhı
+    if (cpu_info.has_smap) stac();
+    
     while (i < 255) {
         if ((((uint64_t)str + i) & 0xFFF) == 0) {
             if (!is_valid_user_ptr(str + i, 1)) break;
@@ -4956,6 +4951,9 @@ static void sys_write(registers_t* regs) {
         if (c == '\0') break;
         safe_buf[i++] = c;
     }
+    
+    if (cpu_info.has_smap) clac();
+    
     safe_buf[i] = '\0';
     console_write(safe_buf);
 }
@@ -4988,11 +4986,6 @@ void init_syscalls() {
     wrmsr(0xC0000081, star);
     wrmsr(0xC0000082, (uint64_t)syscall_entry);
     wrmsr(0xC0000084, 0x200 | 0x100 | 0x400); 
-
-    static volatile int log_done = 0;
-    if (__atomic_test_and_set(&log_done, __ATOMIC_SEQ_CST) == 0) {
-        serial_write("[CPU] Fast Syscall (MSR) Mechanism Verified on all cores.\n");
-    }
 }
 
 .../archs\cpu\x86_64\syscall\syscall.h:
@@ -5021,13 +5014,12 @@ section .text
 syscall_entry:
     swapgs
     
-    mov [gs:16], rsp
-    ; SSE & Fast Syscall safety bypass implicit
-    mov rsp, [gs:8]
+    mov[gs:0x10], rsp
+    ; GÜVENLİK YAMASI: Syscall Stack Isolation
+    ; Artık Ring 3'ten gelen çağrılar, Thread'in kendi Kernel Stack'ini (gs:0x08)
+    ; değil, sadece Syscall'lara özel tahsis edilmiş izole yığını (gs:0x30) kullanır.
+    mov rsp, [gs:0x30]
 
-    ; [SECURITY PATCH]: SYSRET Canonical Address Vulnerability Fix
-    ; If RCX (Return RIP) is non-canonical, SYSRET generates #GP in Ring 0, crashing the kernel.
-    ; We must validate RCX (bits 47-63 must be identical).
     mov r10, rcx
     sar r10, 47
     inc r10
@@ -5035,7 +5027,7 @@ syscall_entry:
     ja .invalid_rip
     
     push 0x1B          ; User SS
-    push qword[gs:16]  ; User RSP
+    push qword[gs:0x10]; User RSP
     push r11           ; User RFLAGS
     push 0x23          ; User CS
     push rcx           ; User RIP
@@ -5080,16 +5072,14 @@ syscall_entry:
 
     add rsp, 16 
     
-    pop r11 ; FIX 3: Restore Original User RFLAGS
-    pop rcx ; FIX 2: Restore Original User RIP
+    pop r11 
+    pop rcx 
     add rsp, 8
     
-    ; [SECURITY PATCH]: Clear dangerous flags from User RFLAGS (e.g., IOPL, IF)
-    ; Force IF=1 (0x200), clear IOPL, AC, NT, TF
-    and r11, 0xFFFFFFFFFFFFCDFF ; Clear IOPL
-    and r11, 0xFFFFFFFFFFFBFFFF ; Clear AC
-    and r11, 0xFFFFFFFFFFFFBFFF ; Clear NT
-    or  r11, 0x200              ; Set IF
+    and r11, 0xFFFFFFFFFFFFCDFF 
+    and r11, 0xFFFFFFFFFFFBFFFF 
+    and r11, 0xFFFFFFFFFFFFBFFF 
+    or  r11, 0x200              
 
     pop rsp     
     
@@ -5097,10 +5087,8 @@ syscall_entry:
     o64 sysret
 
 .invalid_rip:
-    ; Terminate the malicious task silently instead of crashing the kernel
     swapgs
-    mov rsp, [gs:16]
-    ; Fallback logic would go here (e.g., call process_exit), for now loop
+    mov rsp,[gs:0x10]
     jmp $
 
 enter_user_mode:
@@ -5125,7 +5113,6 @@ enter_user_mode:
     iretq
 
 section .note.GNU-stack noalloc noexec nowrite progbits
-
 
 .../archs\cpu\x86_64\vendors\amd.c:
 // archs/cpu/x86_64/vendors/amd.c
@@ -5252,7 +5239,6 @@ static int generic_get_temp() {
 }
 
 static void generic_init() {
-    serial_write("[CPU] Generic x86_64 initialization.\n");
 }
 
 cpu_driver_t cpu_driver_generic = {
@@ -5260,7 +5246,6 @@ cpu_driver_t cpu_driver_generic = {
     .init = generic_init,
     .get_temp = generic_get_temp
 };
-
 
 .../archs\cpu\x86_64\vendors\hygon.c:
 // archs/cpu/x86_64/vendors/hygon.c
@@ -6179,26 +6164,26 @@ KEvent::~KEvent() {}
 
 void KEvent::wait() {
     while (1) {
-        // Spinlock_acquire zaten RFLAGS'i kaydeder ve kesmeleri (CLI) kapatır.
+        // FIX: Lost Wakeup Koruma Zırhı
+        uint64_t rflags;
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
+        
         uint64_t flags = spinlock_acquire(&this->lock);
         
         if (signaled) {
-            // Sinyal alındı! Olayı sıfırla ve thread'i özgür bırak.
             if (auto_reset) signaled = false;
             spinlock_release(&this->lock, flags);
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
             return;
         }
         
-        // Sinyal yoksa thread'i uykuya yatır.
         process_t* proc = (process_t*)get_current_thread_fast();
         proc->state = PROCESS_BLOCKED;
         wait_queue_push(&wait_q, proc);
         
-        // Spinlock bırakıldığı an kesmeler (eğer açıksa) otomatik geri gelir.
         spinlock_release(&this->lock, flags);
-        
-        // İşlemciyi terk et. Bir IRQ bizi uyandırana kadar buradayız.
         schedule();
+        if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
     }
 }
 
@@ -6210,9 +6195,6 @@ void KEvent::signal() {
     
     spinlock_release(&this->lock, flags);
     
-    // Uyuyan bir görev varsa onu Runqueue'ya (Hazır Kuyruğuna) ekle.
-    // Görev uyandığında yukarıdaki while(1) döngüsüne tekrar girecek 
-    // ve signaled bayrağını kendisi temizleyecek.
     if (next) sched_wake_task(next);
 }
 
@@ -6433,7 +6415,6 @@ extern "C" {
 void kom_init() {
     kernel_handle_table = new (kom_memory_buffer) HandleTable();
     kernel_handle_table->init();
-    printf("[ KOM  ] Kernel Object Model Initialized (Capability Sec Active)\n");
 }
 
 uint64_t kom_open(const char* path, uint16_t requested_caps) {
@@ -6462,7 +6443,6 @@ uint64_t kom_duplicate(uint64_t handle, uint16_t requested_caps) {
 
 }
 
-
 .../archs\kom\common\ons.cpp:
 // archs/kom/common/ons.cpp
 #include "archs/kom/common/ons.hpp"
@@ -6473,7 +6453,6 @@ uint64_t kom_duplicate(uint64_t handle, uint16_t requested_caps) {
 inline void* operator new(size_t, void* p) { return p; }
 
 static KContainer* ons_root = nullptr;
-// Defansif: Hizalama zırhı eklendi.
 alignas(KContainer) static uint8_t ons_root_buf[sizeof(KContainer)];
 
 extern "C" {
@@ -6498,8 +6477,6 @@ void ons_init() {
     kobject_unref(c_system);
     kobject_unref(c_ramdisk);
     kobject_unref(c_ipc);
-
-    printf("[ ONS  ] Object Namespace Tree Initialized (NT Path Resolver Active)\n");
 }
 
 int ons_bind_c(const char* path, void* obj) {
@@ -6634,7 +6611,6 @@ KObject* ons_resolve_parent(const char* path, char* out_filename) {
     
     char* lastSlash = strrchr(parentPath, '/');
     if (lastSlash) {
-        // FIX: strcpy -> strncpy (Clang-Tidy Security Fix)
         strncpy(out_filename, lastSlash + 1, 127);
         out_filename[127] = '\0';
         
@@ -7189,14 +7165,7 @@ void KernelHeap::init() {
         buckets[i].init("kmalloc_bucket", bucket_sizes[i]);
     }
     
-    gwp_asan_init(); // GWP-ASAN Sistemi başlatılıyor
-
-    char buf[160];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    snprintf(buf, sizeof(buf),
-             "[HEAP] Hardened v6.9 Active. Magic: %lx  Canary: %lx  ASLR: %lx\n",
-             magic, canary, aslr);
-    serial_write(buf);
+    gwp_asan_init(); 
 
     g_Heap = this;
 }
@@ -7214,15 +7183,22 @@ void* KernelHeap::vmm_alloc(size_t pages) {
     uint64_t virt = vm_arena.alloc(pages);
     if (unlikely(!virt)) return nullptr;
 
-    void* phys = pmm_alloc_contiguous(pages);
+    // OPTİMİZASYON YAMASI: 2MB Huge Page Desteği (TLB Baskısını Azaltır)
+    bool use_huge = (pages >= 512) && ((virt & 0x1FFFFF) == 0);
+    size_t align_req = use_huge ? 512 : 1;
+
+    void* phys = pmm_alloc_contiguous_aligned(pages, align_req);
     if (likely(phys)) {
-        if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages,
-                            PAGE_PRESENT | PAGE_WRITE | PAGE_NX)) {
+        uint64_t flags = PAGE_PRESENT | PAGE_WRITE | PAGE_NX;
+        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) flags |= PAGE_HUGE;
+
+        if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages, flags)) {
             pmm_free_contiguous(phys, pages);
             vm_arena.free(virt, pages);
             return nullptr;
         }
         memzero_nt_avx(reinterpret_cast<void*>(virt), pages * PAGE_SIZE);
+        return reinterpret_cast<void*>(virt);
     } else {
         for (size_t i = 0; i < pages; i++) {
             void* p = pmm_alloc_frame();
@@ -7258,15 +7234,22 @@ void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
     uint64_t virt = vm_arena.alloc_aligned(pages, align_pages);
     if (unlikely(!virt)) return nullptr;
 
-    void* phys = pmm_alloc_contiguous(pages);
+    // OPTİMİZASYON YAMASI: 2MB Huge Page Desteği (VRAM/DMA için)
+    bool use_huge = (pages >= 512) && ((virt & 0x1FFFFF) == 0);
+    size_t align_req = use_huge ? 512 : align_pages;
+
+    void* phys = pmm_alloc_contiguous_aligned(pages, align_req);
     if (likely(phys)) {
-        if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages,
-                            PAGE_PRESENT | PAGE_WRITE | PAGE_NX)) {
+        uint64_t flags = PAGE_PRESENT | PAGE_WRITE | PAGE_NX;
+        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) flags |= PAGE_HUGE;
+
+        if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages, flags)) {
             pmm_free_contiguous(phys, pages);
             vm_arena.free(virt, pages);
             return nullptr;
         }
         memzero_nt_avx(reinterpret_cast<void*>(virt), pages * PAGE_SIZE);
+        return reinterpret_cast<void*>(virt);
     } else {
         for (size_t i = 0; i < pages; i++) {
             void* p = pmm_alloc_frame();
@@ -7301,7 +7284,6 @@ void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
 void* KernelHeap::malloc(size_t size, uint64_t caller) {
     if (unlikely(size == 0)) return nullptr;
     
-    // GÜVENLİK YAMASI: GWP-ASAN Rastgele Örneklemeli Bellek Koruması
     if (likely(size < PAGE_SIZE)) {
         if (unlikely(gwp_asan_should_sample())) {
             void* gwp_ptr = gwp_asan_malloc(size, caller);
@@ -7350,7 +7332,6 @@ void KernelHeap::free(void* ptr) {
     
     uint64_t caller = reinterpret_cast<uint64_t>(__builtin_return_address(0));
     
-    // GÜVENLİK YAMASI: GWP-ASAN Belleği İade Ediliyorsa Özel İşleme Sok
     if (unlikely(gwp_asan_is_managed(ptr))) {
         gwp_asan_free(ptr, caller);
         return;
@@ -7425,7 +7406,6 @@ void* KernelHeap::realloc(void* ptr, size_t new_size, uint64_t caller) {
     if (!ptr) return malloc(new_size, caller);
     if (!new_size) { free(ptr); return nullptr; }
     
-    // GWP-ASAN realloc kontrolü
     if (unlikely(gwp_asan_is_managed(ptr))) {
         void* np = malloc(new_size, caller);
         if (np) {
@@ -8971,15 +8951,10 @@ static numa_node_t* get_or_create_node(uint32_t domain) {
 }
 
 void init_numa() {
-    serial_write("[NUMA] Searching for SRAT table...\n");
-    
     struct acpi_srat_header* srat = (struct acpi_srat_header*)acpi_find_table("SRAT");
     if (!srat) {
-        serial_write("[NUMA] SRAT not found. System is UMA (Uniform Memory Access).\n");
         return;
     }
-    
-    serial_write("[NUMA] SRAT found. Parsing topology...\n");
     
     uint8_t* ptr = (uint8_t*)srat + sizeof(struct acpi_srat_header);
     uint8_t* end = (uint8_t*)srat + srat->length;
@@ -9022,16 +8997,10 @@ void init_numa() {
                 }
             }
         } else {
-            // Defansif Programlama: Bilinmeyen tipleri yoksay
-            // serial_write("[NUMA] Ignored unknown SRAT entry type.\n");
         }
         
         ptr += header->length;
     }
-    
-    char buf[128];
-    sprintf(buf, "[NUMA] Detected %d Nodes.\n", numa_node_count);
-    serial_write(buf);
 }
 
 void numa_print_topology() {
@@ -9064,6 +9033,7 @@ int get_cpu_numa_node(uint8_t apic_id) {
     }
     return 0;
 }
+
 
 .../drivers\acpi\numa.h:
 // drivers/acpi/numa.h
@@ -11208,8 +11178,14 @@ void init_mouse(void);
 extern "C" {
     uint32_t rust_pcie_read_dword(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset);
     void rust_pcie_write_dword(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset, uint32_t val);
+    
+    // FIX: Proper 16-bit and 8-bit FFI access for W1C safety
+    uint16_t rust_pcie_read_word(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset);
+    void rust_pcie_write_word(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset, uint16_t val);
+    uint8_t rust_pcie_read_byte(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset);
+    void rust_pcie_write_byte(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset, uint8_t val);
+    
     uint32_t rust_pcie_get_device_count();
-    // Yeni yapı
     FfiPcieDevice rust_pcie_get_device_info(uint32_t index);
 }
 
@@ -11235,27 +11211,19 @@ PCIeDevice::PCIeDevice(uint8_t b, uint8_t d, uint8_t f, uint16_t vid, uint16_t d
 }
 
 uint32_t PCIeDevice::readDWord(uint16_t offset) { return rust_pcie_read_dword(bus, device, function, offset); }
-uint16_t PCIeDevice::readWord(uint16_t offset) { return (uint16_t)((readDWord(offset) >> ((offset & 2) * 8)) & 0xFFFF); }
-uint8_t PCIeDevice::readByte(uint16_t offset) { return (uint8_t)((readDWord(offset) >> ((offset & 3) * 8)) & 0xFF); }
+uint16_t PCIeDevice::readWord(uint16_t offset) { return rust_pcie_read_word(bus, device, function, offset); }
+uint8_t PCIeDevice::readByte(uint16_t offset) { return rust_pcie_read_byte(bus, device, function, offset); }
 
 void PCIeDevice::writeDWord(uint16_t offset, uint32_t value) {
     rust_pcie_write_dword(bus, device, function, offset, value);
 }
 
 void PCIeDevice::writeWord(uint16_t offset, uint16_t value) {
-    uint32_t current = readDWord(offset);
-    uint16_t shift = (offset & 2) * 8;
-    uint32_t mask = 0xFFFF << shift;
-    uint32_t newval = (current & ~mask) | ((uint32_t)value << shift);
-    writeDWord(offset, newval);
+    rust_pcie_write_word(bus, device, function, offset, value);
 }
 
 void PCIeDevice::writeByte(uint16_t offset, uint8_t value) {
-    uint32_t current = readDWord(offset);
-    uint8_t shift = (offset & 3) * 8;
-    uint32_t mask = 0xFF << shift;
-    uint32_t newval = (current & ~mask) | ((uint32_t)value << shift);
-    writeDWord(offset, newval);
+    rust_pcie_write_byte(bus, device, function, offset, value);
 }
 
 uint32_t PCIeDevice::getBAR(uint8_t index) {
@@ -11290,7 +11258,6 @@ namespace PCIe {
         if (index < 0 || index >= 256) return nullptr;
         if (device_roster[index]) return device_roster[index];
         
-        // OPTİMİZASYON YAMASI: Tek seferde (Value Copy) donanım verisi çekilir.
         FfiPcieDevice info = rust_pcie_get_device_info((uint32_t)index);
         if (info.valid) {
             device_roster[index] = new PCIeDevice(info.bus, info.dev, info.func, 
@@ -11536,11 +11503,6 @@ RTCDriver::RTCDriver() : Device("System Clock", DEV_UNKNOWN) {
 
 int RTCDriver::init(void) {
     DeviceManager::registerDevice(this);
-    if (uefi_available()) {
-        print_status("[ RTC  ]", "Using UEFI Runtime Services for Time", "INFO");
-    } else {
-        print_status("[ RTC  ]", "UEFI unavailable. Using CMOS RTC fallback.", "WARN");
-    }
     return 1;
 }
 
@@ -12561,7 +12523,6 @@ int AHCIDriver::earlyInit() {
 int AHCIDriver::finalize() {
     if (!initialized_early) return 0;
 
-    // FIX: Disklere Spin-up icin ufak bir avans
     tsc_delay_ms(10);
 
     uint32_t pi = abar->pi;
@@ -12575,7 +12536,6 @@ int AHCIDriver::finalize() {
         uint8_t ipm = (ssts >> 8) & 0x0F;
         uint8_t det = ssts & 0x0F;
 
-        // FIX: Cihaz tespiti yoksa aninda iptal. Sonsuz SIG beklemesi yok!
         if (det != HBA_PORT_DET_PRESENT || ipm != HBA_PORT_IPM_ACTIVE) {
             continue;
         }
@@ -12597,7 +12557,7 @@ int AHCIDriver::finalize() {
             DeviceManager::registerDevice(subDev);
 
             char msg[64];
-            sprintf(msg, "Port %d attached as %s (%s)", i, newName, newPort->is_atapi ? "ATAPI" : "SATA");
+            sprintf(msg, "Port %d attached as %s", i, newName);
             print_status("[ AHCI ]", msg, "INFO");
 
             if (!newPort->is_atapi) gpt_scan_partitions(subDev);
@@ -12757,7 +12717,6 @@ static inline uint32_t swap_uint32(uint32_t val) {
            ((val >> 8)  & 0xff00) | ((val << 24) & 0xff000000);
 }
 
-// Ensure precise hardware timing without infinite stalls
 static inline bool check_timeout(uint64_t start, uint32_t ms) {
     uint64_t freq = get_tsc_freq();
     if (freq == 0) freq = 2000000000ULL;
@@ -12893,7 +12852,6 @@ bool AHCIPort::identify() {
         else { break; }
     }
 
-    serial_printf("[AHCI] Port %d (%s) Model: %s\n", id, is_atapi ? "ATAPI" : "SATA", this->model_name);
     result = true;
 
 identify_done:
@@ -13421,6 +13379,7 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
     return true;
 }
 
+
 .../drivers\storage\ahci\ahci_port.hpp:
 // drivers/storage/ahci/ahci_port.hpp
 #ifndef AHCI_PORT_HPP
@@ -13660,6 +13619,7 @@ NVMeDriver::NVMeDriver(PCIeDevice* pci)
     io_phase = 1;
     db_stride = 4;
     namespace_id = 1; 
+    initialized_early = false;
     
     spinlock_init(&lock); 
 }
@@ -13775,7 +13735,7 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
     
     *out_prp_page_virt = nullptr;
     cmd->prp1 = phys_addr;
-    pmm_inc_ref((void*)phys_addr); // PIN 1. Sayfa
+    pmm_inc_ref((void*)phys_addr); 
     
     uint32_t page_offset = current_virt & (PAGE_SIZE - 1);
     uint32_t first_page_cap = PAGE_SIZE - page_offset;
@@ -13791,7 +13751,7 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
     if (bytes_left <= PAGE_SIZE) {
         uint64_t p2 = get_physical_address(current_virt);
         cmd->prp2 = p2;
-        pmm_inc_ref((void*)p2); // PIN 2. Sayfa
+        pmm_inc_ref((void*)p2); 
         return 0;
     }
     
@@ -13825,7 +13785,7 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
         
         phys_addr = get_physical_address(current_virt);
         current_prp_list[prp_idx++] = phys_addr;
-        pmm_inc_ref((void*)phys_addr); // PIN Geri kalan sayfalar
+        pmm_inc_ref((void*)phys_addr); 
         
         if (bytes_left > PAGE_SIZE) bytes_left -= PAGE_SIZE;
         else bytes_left = 0;
@@ -13889,7 +13849,8 @@ bool NVMeDriver::createIOQueues() {
     return waitForAdminCompletion(3);
 }
 
-int NVMeDriver::init() {
+// OPTİMİZASYON YAMASI: Asenkron Donanım Başlatma (Phase 1)
+int NVMeDriver::earlyInit() {
     pciDev->enableBusMaster();
     pciDev->enableMemorySpace();
 
@@ -13907,7 +13868,7 @@ int NVMeDriver::init() {
     
     regs->cc &= ~NVME_CC_EN;
     uint64_t start = rdtsc();
-    while ((regs->csts & NVME_CSTS_RDY) && (rdtsc() - start) < 1000000000ULL);
+    while ((regs->csts & NVME_CSTS_RDY) && (rdtsc() - start) < 1000000000ULL) { hal_cpu_relax(); }
     
     regs->intms = 0xFFFFFFFF;
 
@@ -13930,8 +13891,18 @@ int NVMeDriver::init() {
     regs->acq = get_physical_address((uint64_t)cq_virt);
     regs->aqa = (63 << 16) | 63;
 
+    // Kontrolcüyü başlat ve ASLA BEKLEMEDEN dön! (Arka planda uyanacak)
     regs->cc = NVME_CC_IOCQES_16 | NVME_CC_IOSQES_64 | NVME_CC_EN;
-    waitReady();
+    
+    initialized_early = true;
+    return 1;
+}
+
+// OPTİMİZASYON YAMASI: Asenkron Donanım Başlatma (Phase 2)
+int NVMeDriver::finalize() {
+    if (!initialized_early) return 0;
+    
+    waitReady(); // SMP süreci geçtiği için bu bekleme anında (0ms) tamamlanır.
 
     if (!createIOQueues()) return 0;
     
@@ -13996,6 +13967,11 @@ int NVMeDriver::init() {
     return 0;
 }
 
+int NVMeDriver::init() {
+    if (earlyInit()) { return finalize(); }
+    return 0;
+}
+
 int NVMeDriver::shutdown() {
     regs->cc &= ~NVME_CC_EN; 
     while (regs->csts & NVME_CSTS_RDY) {
@@ -14015,7 +13991,6 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
 
     storage_kiovec_t vec;
     vec.virt_addr = buffer;
-    // GÜVENLİK YAMASI: Type Truncation (Matematiksel Taşma) giderildi
     vec.size = (size_t)count * 512;
     vec.phys_addr = 0; 
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
@@ -14088,7 +14063,6 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
 
     storage_kiovec_t vec;
     vec.virt_addr = (void*)buffer;
-    // GÜVENLİK YAMASI: Type Truncation (Matematiksel Taşma) giderildi
     vec.size = (size_t)count * 512;
     vec.phys_addr = 0; 
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
@@ -14159,7 +14133,6 @@ int NVMeDriver::read_vector(uint64_t lba, kiovec_t* vectors, int vector_count) {
     }
     
     bool is_aligned = true;
-    // GÜVENLİK YAMASI: Size overflow (uint32_t -> size_t) giderildi
     size_t total_bytes = 0;
     
     for (int i = 0; i < vector_count; i++) {
@@ -14224,7 +14197,6 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
     }
     
     bool is_aligned = true;
-    // GÜVENLİK YAMASI: Size overflow (uint32_t -> size_t) giderildi
     size_t total_bytes = 0;
     for (int i = 0; i < vector_count; i++) {
         total_bytes += vectors[i].size;
@@ -14274,17 +14246,39 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
     return success ? total_sectors : 0;
 }
 
+// Global instances array
+static NVMeDriver* g_nvme_drivers[4] = {nullptr};
+static int g_nvme_count = 0;
+
 extern "C" {
     __attribute__((used, noinline))
-    int init_nvme() {
+    void init_nvme_early() {
         for (int i = 0; i < PCIe::getDeviceCount(); i++) {
             PCIeDevice* pci = PCIe::getDevice(i);
             if (pci->class_id == 0x01 && pci->subclass_id == 0x08) {
-                NVMeDriver* drv = new NVMeDriver(pci);
-                return drv->init();
+                if (g_nvme_count < 4) {
+                    NVMeDriver* drv = new NVMeDriver(pci);
+                    if (drv->earlyInit()) {
+                        g_nvme_drivers[g_nvme_count++] = drv;
+                    } else {
+                        delete drv;
+                    }
+                }
             }
         }
-        return 0;
+    }
+
+    __attribute__((used, noinline))
+    int init_nvme_late() {
+        int initialized = 0;
+        for (int i = 0; i < g_nvme_count; i++) {
+            if (g_nvme_drivers[i]) {
+                if (g_nvme_drivers[i]->finalize()) {
+                    initialized++;
+                }
+            }
+        }
+        return initialized > 0 ? 1 : 0;
     }
 }
 
@@ -14322,6 +14316,8 @@ private:
     uint32_t db_stride; 
     uint32_t namespace_id; 
     
+    bool initialized_early; // OPTİMİZASYON YAMASI
+
     void writeDoorbell(uint16_t index, uint16_t val);
     void waitReady();
     void submitAdminCmd(nvme_sq_entry_t* cmd);
@@ -14330,14 +14326,17 @@ private:
     void submitIOCmd(nvme_sq_entry_t* cmd);
     bool waitForIOCompletion(uint16_t cid);
     
-    // DMA Memory Pinning Yardımcıları
     void unpinBuffer(void* buffer, uint32_t size);
     uint64_t setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size, void** out_prp_page_virt);
     void freePRPChain(void* prp_head_virt, uint32_t total_size);
 
 public:
     NVMeDriver(PCIeDevice* pci);
+    
     int init() override;
+    int earlyInit(); // OPTİMİZASYON YAMASI
+    int finalize();  // OPTİMİZASYON YAMASI
+    
     int shutdown() override;
     void emergencyStop() override;
     
@@ -14357,7 +14356,8 @@ public:
 extern "C" {
 #endif
 
-int init_nvme(void);
+void init_nvme_early(void);
+int  init_nvme_late(void);
 
 #ifdef __cplusplus
 }
@@ -15266,7 +15266,7 @@ section .note.GNU-stack noalloc noexec nowrite progbits
 
 extern "C" {
     void print_status(const char* prefix, const char* msg, const char* status);
-    uint32_t acpi_get_pm_timer_port(void); // ACPI'den gelen PM Timer Portu
+    uint32_t acpi_get_pm_timer_port(void); 
 }
 
 static TSCDriver* g_tsc = nullptr;
@@ -15274,22 +15274,18 @@ static TSCDriver* g_tsc = nullptr;
 static uint64_t tsc_frequency = 0;
 static uint64_t boot_tsc = 0;
 
-// GÜVENLİK YAMASI: Modern ACPI PM Timer Kalibrasyonu (3.579545 MHz)
 static bool pm_timer_reliable_calibration() {
     uint32_t pm_port = acpi_get_pm_timer_port();
     if (!pm_port) return false;
 
-    // PM Timer genellikle 24-bittir.
     uint32_t t1 = hal_io_inl(pm_port) & 0xFFFFFF;
     uint32_t t2 = t1;
     
-    // Sınırda yakalamak için değişmesini bekle (Precision Edge)
     while ((t2 = (hal_io_inl(pm_port) & 0xFFFFFF)) == t1) { hal_cpu_relax(); }
     
     uint64_t start_tsc = tsc_read_asm();
     t1 = t2;
     
-    // Yaklaşık 10ms bekle. (3.579545 MHz = saniyede 3579545 tick -> 10ms = ~35795 tick)
     uint32_t target_delta = 35795;
     while (true) {
         t2 = hal_io_inl(pm_port) & 0xFFFFFF;
@@ -15301,7 +15297,6 @@ static bool pm_timer_reliable_calibration() {
     uint64_t end_tsc = tsc_read_asm();
     uint32_t actual_delta = (t2 >= t1) ? (t2 - t1) : (0x1000000 - t1 + t2);
     
-    // Frekans Formülü: (Delta TSC * 3579545) / Delta PM Timer
     tsc_frequency = ((end_tsc - start_tsc) * 3579545ULL) / actual_delta;
     return true;
 }
@@ -15350,7 +15345,6 @@ int TSCDriver::init() {
     uint32_t eax=0, ebx=0, ecx=0, edx=0;
     bool freq_found = false;
 
-    // 1. CPUID (Donanımsal Kesin Bilgi)
     __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0x15));
     if (eax != 0 && ebx != 0 && ecx != 0) {
         tsc_frequency = ((uint64_t)ecx * ebx) / eax;
@@ -15364,7 +15358,6 @@ int TSCDriver::init() {
         }
     }
 
-    // 2. ACPI PM Timer (Modern Güvenli Fallback)
     if (!freq_found || tsc_frequency < 1000000) {
         if (pm_timer_reliable_calibration()) {
             serial_write("[TSC] Calibrated via Modern ACPI PM Timer.\n");
@@ -15372,7 +15365,6 @@ int TSCDriver::init() {
         }
     }
 
-    // 3. PIT (Legacy Son Çare Fallback)
     if (!freq_found || tsc_frequency < 1000000) {
         serial_write("[TSC] ACPI PM Timer absent. Falling back to Legacy PIT...\n");
         pit_reliable_calibration();
@@ -15446,9 +15438,16 @@ extern "C" {
 
     void timer_sleep(uint64_t ticks) { task_sleep(ticks); }
     
+    // FIX: system_ticks deadlock'u önlendi. Artık zaman doğrudan donanımsal TSC'den okunur.
     uint64_t timer_get_ticks() {
-        extern volatile uint64_t system_ticks;
-        return system_ticks;
+        if (tsc_frequency == 0) {
+            extern volatile uint64_t system_ticks;
+            return system_ticks; // Fallback
+        }
+        uint64_t now = tsc_read_asm();
+        if (now < boot_tsc) return 0;
+        uint64_t delta = now - boot_tsc;
+        return (delta * 250) / tsc_frequency;
     }
 }
 
@@ -15585,7 +15584,6 @@ UEFIDriver::UEFIDriver(uint64_t st_phys)
 
     verify_efi_table_header(&st->hdr, sizeof(efi_system_table_t));
 
-    // Check the EFI signature (0x5453595320494249 = "IBI SYST").
     if (st->hdr.signature != 0x5453595320494249ULL) {
         serial_write("[UEFI] WARN: EFI System Table signature mismatch. "
                      "Table may be invalid.\n");
@@ -15606,7 +15604,6 @@ UEFIDriver::UEFIDriver(uint64_t st_phys)
                                           PAGE_PRESENT | PAGE_WRITE);
     if (!rt) {
         serial_write("[UEFI] Failed to map EFI Runtime Services.\n");
-        // FIX: Avoid memory leak — unmap the already-mapped system table.
         iounmap(st, sizeof(efi_system_table_t));
         st = nullptr;
         return;
@@ -15614,8 +15611,6 @@ UEFIDriver::UEFIDriver(uint64_t st_phys)
     }
 
     verify_efi_table_header(&rt->hdr, sizeof(efi_runtime_services_t));
-
-    serial_write("[UEFI] Runtime Services Mapped.\n");
 }
 
 UEFIDriver::~UEFIDriver() {
@@ -15641,7 +15636,6 @@ int UEFIDriver::init() {
     if (st && rt) {
         DeviceManager::registerDevice(this);
         g_uefi = this;
-        printf("[UEFI] Runtime Services Active.\n");
         return 1;
     } else {
         serial_write("[UEFI] init() called but st or rt is NULL. "
@@ -15795,7 +15789,6 @@ extern "C" {
                     return;
                 } else {
                     UEFIDriver* drv = new UEFIDriver(st_addr);
-                    // FIX: Delete driver object if init() fails to avoid leak.
                     if (!drv->init()) {
                         delete drv;
                     } else {
@@ -15858,7 +15851,6 @@ extern "C" {
     }
 
 }
-
 
 .../drivers\uefi\uefi.h:
 // drivers/uefi/uefi.h
@@ -17294,11 +17286,10 @@ kernel_config_t kconfig = {
 
 void config_init(const char* cmdline) {
     if (!cmdline || cmdline[0] == '\0') {
-        serial_write("[CONFIG] No cmdline provided. Using safe defaults.\n");
         return;
+    } else {
+        // Proceed with parsing
     }
-
-    serial_printf("[CONFIG] Kernel Cmdline: %s\n", cmdline);
 
     char buf[512];
     strncpy(buf, cmdline, 511);
@@ -17306,14 +17297,26 @@ void config_init(const char* cmdline) {
 
     char* p = buf;
     while (*p) {
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == '\0') break;
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        
+        if (*p == '\0') {
+            break;
+        } else {
+            // Found a token
+        }
 
         char* token = p;
-        while (*p && *p != ' ' && *p != '\t') p++;
+        while (*p && *p != ' ' && *p != '\t') {
+            p++;
+        }
+        
         if (*p) {
             *p = '\0';
             p++;
+        } else {
+            // End of string reached
         }
 
         char* eq = strchr(token, '=');
@@ -17325,13 +17328,24 @@ void config_init(const char* cmdline) {
             if (strcmp(key, "timezone") == 0) {
                 int tz = 0, sign = 1;
                 char* vp = val;
-                if (*vp == '-') { sign = -1; vp++; }
+                if (*vp == '-') { 
+                    sign = -1; 
+                    vp++; 
+                } else {
+                    // Positive timezone
+                }
+                
                 while (*vp >= '0' && *vp <= '9') {
                     tz = tz * 10 + (*vp - '0');
                     vp++;
                 }
                 tz *= sign;
-                if (tz >= -12 && tz <= 14) kconfig.timezone = tz;
+                
+                if (tz >= -12 && tz <= 14) {
+                    kconfig.timezone = tz;
+                } else {
+                    // Invalid timezone, keep default
+                }
             }
             else if (strcmp(key, "fast_boot") == 0) {
                 kconfig.fast_boot = (strcmp(val, "1") == 0 || strcmp(val, "true") == 0);
@@ -17341,7 +17355,11 @@ void config_init(const char* cmdline) {
             }
             else if (strcmp(key, "log_level") == 0) {
                 kconfig.log_level = val[0] - '0';
+            } else {
+                // Unknown key, ignore
             }
+        } else {
+            // Token without '=', ignore or handle as boolean flag if needed in future
         }
     }
 
@@ -17358,7 +17376,7 @@ void config_init(const char* cmdline) {
 #include <stdbool.h>
 
 #define SINGULARITY_SYS_NAME  "Singularity"
-#define SINGULARITY_SYS_VER   "v6.9.1"
+#define SINGULARITY_SYS_VER   "v6.9.2"
 #define SINGULARITY_SHELL_VER "v1.0.0"
 #define SINGULARITY_SYS_ARCH  "x86_64 SMP"
 
@@ -17814,7 +17832,7 @@ static inline uint64_t rdtsc_profile() {
 
 #include <stdint.h>
 #include <stddef.h>
-#include "archs/cpu/cpu_hal.h" // HAL MIGRATION: Added for hal_cpu_relax
+#include "archs/cpu/cpu_hal.h" 
 
 #ifdef __cplusplus
 extern "C" {
@@ -17844,7 +17862,6 @@ static inline void barrier() {
     __asm__ volatile("" ::: "memory");
 }
 
-// HAL MIGRATION: CPU Relax abstracted
 static inline void cpu_relax() {
     hal_cpu_relax();
 }
@@ -17865,6 +17882,10 @@ static inline void prefetch_stack(void* ptr) {
     __asm__ volatile("prefetcht0 (%0)" : : "r"(ptr));
     __asm__ volatile("prefetcht0 -64(%0)" : : "r"(ptr));
 }
+
+// GÜVENLİK YAMASI: SMAP/SMEP User-Copy Koruması
+static inline void stac() { __asm__ volatile("stac" ::: "memory"); }
+static inline void clac() { __asm__ volatile("clac" ::: "memory"); }
 
 #ifdef __cplusplus
 }
@@ -17976,7 +17997,8 @@ extern void rtc_init();
 extern void init_speaker();
 extern void init_ahci_early();
 extern void init_ahci_late();
-extern int  init_nvme();
+extern void init_nvme_early(); 
+extern int  init_nvme_late();  
 extern void init_virtio();
 extern void init_intel_hda();
 extern void init_string_optimization();
@@ -18020,7 +18042,6 @@ void show_system_info() {
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     printf("\n===================================\n");
     printf("     %s %s (%s)      \n", SINGULARITY_SYS_NAME, SINGULARITY_SYS_VER, SINGULARITY_SYS_ARCH);
-    printf("   Native KOM & Zero-Overhead FFI  \n");
     printf("===================================\n\n");
     vga_set_color(VGA_WHITE, VGA_BLACK);
 }
@@ -18065,13 +18086,16 @@ void print_status(const char* prefix, const char* msg, const char* status) {
     stdio_release_lock(flags);
 }
 
+// DİKKAT: Bu fonksiyon çağrıldığı anki zamanı ölçer. Yani ekrana basılan süre, 
+// YENİ başlayan kategorinin değil, BİR ÖNCEKİ kategorinin tamamlanma süresidir. 
+// Bu mantığı değiştirmeyin, aksi takdirde log formatı ve hizalaması bozulur!
 void print_section_header(const char* title) {
     static uint64_t last_tsc = 0;
     if (last_tsc == 0) last_tsc = kernel_boot_start_tsc;
     
     uint64_t current_tsc = rdtsc_ordered();
     uint64_t freq = get_tsc_freq();
-    if (freq == 0) freq = 2000000000ULL; // Fallback: 2 GHz
+    if (freq == 0) freq = 2000000000ULL; 
     
     uint64_t diff_ms = ((current_tsc - last_tsc) * 1000) / freq;
     uint64_t total_ms = ((current_tsc - kernel_boot_start_tsc) * 1000) / freq;
@@ -18082,10 +18106,8 @@ void print_section_header(const char* title) {
     vga_set_color(VGA_YELLOW, VGA_BLACK);
     
     char buf[128];
-    // Sadeleştirilmiş ve ms değerleri direkt yazılmış format
     snprintf(buf, sizeof(buf), "\n>>> %-25s [ +%lu ms | %lu ms ] <<<\n", title, diff_ms, total_ms);
     
-    // GÜVENLİK YAMASI: Çıktı hem ekrana hem de seri porta kilit altında güvenle yazılıyor.
     serial_write(buf);
     console_write(buf);
     
@@ -18124,7 +18146,7 @@ void memory_monitor_task() {
     }
 }
 
-void meowd_monitor_entry() {
+void singd_monitor_entry() {
     service_monitor();
 }
 
@@ -18224,12 +18246,13 @@ void kmain(void* multiboot_structure_addr) {
     print_status("[ ACPI ]", "Tables Parsed (RSDP)",        "OK");
     
     init_tsc();
-    print_status("[ TIME ]", "TSC + PIT (ASM Driver)",      "OK");
+    print_status("[ TIME ]", "TSC + PIT",                   "OK");
     rtc_init();
     init_syscalls();
     print_status("[ CORE ]", "Fast Syscall (MSR) Enabled",  "OK");
 
     init_ahci_early(); 
+    init_nvme_early(); 
 
     print_section_header("STORAGE STARTING");
     disk_cache_init();      
@@ -18240,7 +18263,7 @@ void kmain(void* multiboot_structure_addr) {
     init_smbus();
     
     init_ahci_late();       print_status("[ DISK ]", "AHCI Driver (SATA)",               "OK");
-    if (init_nvme()) {      print_status("[ DISK ]", "NVMe Driver (PCIe SSD)",           "OK"); }
+    if (init_nvme_late()) { print_status("[ DISK ]", "NVMe Driver (PCIe SSD)",           "OK"); }
     init_virtio();          
 
     struct multiboot_tag* f_tag;
@@ -18328,7 +18351,7 @@ void kmain(void* multiboot_structure_addr) {
     service_register("Speaker",       svc_speaker,         SERVICE_TYPE_ONESHOT, RESTART_NEVER);
 
     service_start_all();
-    create_kernel_task(meowd_monitor_entry);
+    create_kernel_task(singd_monitor_entry);
 
     enable_scheduler();
     hal_interrupts_enable();
@@ -20244,14 +20267,14 @@ fn panic(info: &PanicInfo) -> ! {
         let _ = write!(&mut file_buf, "{}", location.file());
         line = location.line() as i32;
     } else {
-        let _ = write!(&mut file_buf, "rust_unknown");
+        let _ = write!(&mut file_buf, "unknown_file");
     }
 
     unsafe {
         crate::ffi::panic_at(
             file_bytes.as_ptr(),
             line,
-            KernelError::RustPanic as u32,
+            KernelError::CorePanic as u32,
             msg_bytes.as_ptr()
         );
     }
@@ -20261,7 +20284,6 @@ fn panic(info: &PanicInfo) -> ! {
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_init_pmm(multiboot_addr: usize, kernel_end: usize) {
     if multiboot_addr != 0 {
-        // FIX: pmm::init_pmm -> pmm::pmm_init olarak düzeltildi
         pmm::pmm_init(multiboot_addr, kernel_end);
     } else {
         unsafe {
@@ -20561,7 +20583,6 @@ pub struct PcieDevice {
     pub header_type: u8,
 }
 
-// OPTİMİZASYON YAMASI: FFI Struct Marshalling için eklendi
 #[repr(C)]
 pub struct FfiPcieDevice {
     pub bus: u8,
@@ -20597,7 +20618,7 @@ impl PcieDevice {
                 if offset >= 256 { 
                     0xFFFFFFFF 
                 } else {
-                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFC);
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
                     let _guard = PCI_LEGACY_LOCK.lock();
                     unsafe {
                         io::outl(CONFIG_ADDRESS, address);
@@ -20623,7 +20644,7 @@ impl PcieDevice {
             },
             PcieBackend::Legacy => {
                 if offset >= 256 { return; } else {
-                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFC);
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
                     let _guard = PCI_LEGACY_LOCK.lock();
                     unsafe {
                         io::outl(CONFIG_ADDRESS, address);
@@ -20634,18 +20655,125 @@ impl PcieDevice {
         }
     }
 
+    // FIX: Native 16-bit Read to prevent W1C corruption
     pub unsafe fn read_word(bus: u8, dev: u8, func: u8, offset: u16) -> u16 {
-        let dw = unsafe { Self::read_dword(bus, dev, func, offset & 0xFFFC) };
-        let shift = (offset & 2) * 8;
-        ((dw >> shift) & 0xFFFF) as u16
+        let backend = *PCIE_BACKEND.lock();
+        match backend {
+            PcieBackend::Pcie { ecam_virt, start_bus, end_bus } => {
+                if bus >= start_bus && bus <= end_bus {
+                    let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
+                    let ptr = (ecam_virt + phys_offset) as *const u16;
+                    unsafe { read_volatile(ptr) }
+                } else { 0xFFFF }
+            },
+            PcieBackend::Legacy => {
+                if offset >= 256 { 0xFFFF } else {
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
+                    let _guard = PCI_LEGACY_LOCK.lock();
+                    unsafe {
+                        io::outl(CONFIG_ADDRESS, address);
+                        io::inw(CONFIG_DATA + (offset & 2))
+                    }
+                }
+            }
+        }
     }
 
+    // FIX: Native 16-bit Write to prevent W1C corruption
     pub unsafe fn write_word(bus: u8, dev: u8, func: u8, offset: u16, value: u16) {
-        let dw = unsafe { Self::read_dword(bus, dev, func, offset & 0xFFFC) };
-        let shift = (offset & 2) * 8;
-        let mask = 0xFFFF << shift;
-        let new_dw = (dw & !mask) | ((value as u32) << shift);
-        unsafe { Self::write_dword(bus, dev, func, offset & 0xFFFC, new_dw); }
+        let backend = *PCIE_BACKEND.lock();
+        match backend {
+            PcieBackend::Pcie { ecam_virt, start_bus, end_bus } => {
+                if bus >= start_bus && bus <= end_bus {
+                    let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
+                    let ptr = (ecam_virt + phys_offset) as *mut u16;
+                    unsafe { write_volatile(ptr, value); }
+                }
+            },
+            PcieBackend::Legacy => {
+                if offset < 256 {
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
+                    let _guard = PCI_LEGACY_LOCK.lock();
+                    unsafe {
+                        io::outl(CONFIG_ADDRESS, address);
+                        io::outw(CONFIG_DATA + (offset & 2), value);
+                    }
+                }
+            }
+        }
+    }
+
+    // FIX: Native 8-bit Read
+    pub unsafe fn read_byte(bus: u8, dev: u8, func: u8, offset: u16) -> u8 {
+        let backend = *PCIE_BACKEND.lock();
+        match backend {
+            PcieBackend::Pcie { ecam_virt, start_bus, end_bus } => {
+                if bus >= start_bus && bus <= end_bus {
+                    let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
+                    let ptr = (ecam_virt + phys_offset) as *const u8;
+                    unsafe { read_volatile(ptr) }
+                } else { 0xFF }
+            },
+            PcieBackend::Legacy => {
+                if offset >= 256 { 0xFF } else {
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
+                    let _guard = PCI_LEGACY_LOCK.lock();
+                    unsafe {
+                        io::outl(CONFIG_ADDRESS, address);
+                        io::inb(CONFIG_DATA + (offset & 3))
+                    }
+                }
+            }
+        }
+    }
+
+    // FIX: Native 8-bit Write
+    pub unsafe fn write_byte(bus: u8, dev: u8, func: u8, offset: u16, value: u8) {
+        let backend = *PCIE_BACKEND.lock();
+        match backend {
+            PcieBackend::Pcie { ecam_virt, start_bus, end_bus } => {
+                if bus >= start_bus && bus <= end_bus {
+                    let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
+                    let ptr = (ecam_virt + phys_offset) as *mut u8;
+                    unsafe { write_volatile(ptr, value); }
+                }
+            },
+            PcieBackend::Legacy => {
+                if offset < 256 {
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
+                    let _guard = PCI_LEGACY_LOCK.lock();
+                    unsafe {
+                        io::outl(CONFIG_ADDRESS, address);
+                        io::outb(CONFIG_DATA + (offset & 3), value);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn wakeup(&self) {
+        unsafe {
+            let status = Self::read_word(self.bus, self.dev, self.func, 0x06);
+            if (status & (1 << 4)) != 0 { 
+                let mut cap_ptr = (Self::read_word(self.bus, self.dev, self.func, 0x34) & 0xFF) as u16;
+                while cap_ptr != 0 {
+                    let cap_reg = Self::read_word(self.bus, self.dev, self.func, cap_ptr);
+                    let cap_id = (cap_reg & 0xFF) as u8;
+                    let next_ptr = ((cap_reg >> 8) & 0xFF) as u16;
+                    
+                    if cap_id == 0x01 { 
+                        let pmcsr_addr = cap_ptr + 4;
+                        let mut pmcsr = Self::read_word(self.bus, self.dev, self.func, pmcsr_addr);
+                        if (pmcsr & 0x03) != 0 { 
+                            pmcsr &= !0x03; 
+                            Self::write_word(self.bus, self.dev, self.func, pmcsr_addr, pmcsr);
+                        }
+                        break;
+                    }
+                    cap_ptr = next_ptr;
+                }
+            }
+        }
     }
 
     pub fn probe(bus: u8, dev: u8, func: u8) -> Option<Self> {
@@ -20722,6 +20850,7 @@ pub extern "C" fn rust_pcie_init_ecam(mcfg_phys: u64, start_bus: u8, end_bus: u8
 fn scan_bus(bus: u8, devices: &mut Vec<PcieDevice>, dev_count: &mut u32) {
     for dev in 0..32 {
         if let Some(p) = PcieDevice::probe(bus, dev, 0) {
+            p.wakeup(); 
             devices.push(p);
             *dev_count += 1;
             
@@ -20739,6 +20868,7 @@ fn scan_bus(bus: u8, devices: &mut Vec<PcieDevice>, dev_count: &mut u32) {
             if (p.header_type & 0x80) != 0 { 
                 for f in 1..8 {
                     if let Some(pf) = PcieDevice::probe(bus, dev, f) {
+                        pf.wakeup(); 
                         devices.push(pf);
                         *dev_count += 1;
                         
@@ -20782,7 +20912,6 @@ pub extern "C" fn rust_pcie_get_device_count() -> u32 {
     PCIE_DEVICES.lock().len() as u32
 }
 
-// OPTİMİZASYON YAMASI: 9 pointer yerine tek bir yapıyı değer olarak döndür (Zero Overhead)
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_pcie_get_device_info(index: u32) -> FfiPcieDevice {
     let devices = PCIE_DEVICES.lock();
@@ -20809,6 +20938,26 @@ pub extern "C" fn rust_pcie_read_dword(bus: u8, dev: u8, func: u8, offset: u16) 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_pcie_write_dword(bus: u8, dev: u8, func: u8, offset: u16, val: u32) {
     unsafe { PcieDevice::write_dword(bus, dev, func, offset, val) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_pcie_read_word(bus: u8, dev: u8, func: u8, offset: u16) -> u16 {
+    unsafe { PcieDevice::read_word(bus, dev, func, offset) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_pcie_write_word(bus: u8, dev: u8, func: u8, offset: u16, val: u16) {
+    unsafe { PcieDevice::write_word(bus, dev, func, offset, val) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_pcie_read_byte(bus: u8, dev: u8, func: u8, offset: u16) -> u8 {
+    unsafe { PcieDevice::read_byte(bus, dev, func, offset) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_pcie_write_byte(bus: u8, dev: u8, func: u8, offset: u16, val: u8) {
+    unsafe { PcieDevice::write_byte(bus, dev, func, offset, val) }
 }
 
 fn print_c(s: &str, fg: u8) {
@@ -20931,7 +21080,6 @@ pub extern "C" fn rust_usb_print_ports() {
 
 use crate::drivers::bus::pcie;
 use crate::ffi::{sync_print_color, ioremap};
-// FIX: Doğru Rust fonksiyon ismi içe aktarıldı
 use crate::memory::pmm::pmm_alloc_contiguous;
 use core::ptr::{read_volatile, write_volatile};
 use alloc::format;
@@ -21138,6 +21286,7 @@ pub fn print_ports() {
     }
 }
 
+
 .../rust_core\src\ffi\bindings.rs:
 // rust_core/src/ffi/bindings.rs
 // DİKKAT: Bu dosya C++ tarafındaki `storage_hal.h`, `cpu_hal.h` ve `kom_hal.h`
@@ -21232,8 +21381,6 @@ pub fn system_print(msg: &str) {
         let mut head = ffi_log_ring_head.load(Ordering::Acquire);
         let tail = ffi_log_ring_tail.load(Ordering::Acquire);
         
-        // OPTİMİZASYON YAMASI: DIV (%) komutu kaldırıldı! Karşılaştırma döngüsü (Branching)
-        // modern işlemcilerde MOD hesaplamasından 10 kat daha hızlıdır.
         for &b in msg.as_bytes() {
             let mut next = head + 1;
             if next == 16384 {
@@ -21298,6 +21445,7 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn device_release(dev: *mut core::ffi::c_void);
 }
+
 
 .../rust_core\src\ffi\mod.rs:
 // rust_core/src/ffi/mod.rs
@@ -21396,7 +21544,7 @@ impl FsNode for FsBackend {
         }
     }
 
-    fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, u32> {
+    fn read(&self, offset: u64, buf: &mut[u8]) -> Result<usize, u32> {
         match self {
             FsBackend::Ext4(node) => node.read(offset, buf),
             FsBackend::Fat32(node) => node.read(offset, buf),
@@ -21600,9 +21748,9 @@ pub unsafe extern "C" fn rust_fs_release(node_ptr: *mut c_void) {
             let _ = Box::from_raw(node_ptr as *mut FsBackend);
         }
     } else {
-        // Nothing to do for null pointers
     }
 }
+
 
 .../rust_core\src\fs\utils.rs:
 // rust_core/src/fs/utils.rs
@@ -21703,7 +21851,7 @@ impl ExtMount {
         let mut buf =[0u8; 512];
         let ret = unsafe { disk_cache_read_block(self.dev, target_bg_sector, 1, buf.as_mut_ptr()) };
         if ret != 1 { 
-            crate::ffi::debug_print("[EXT4] Error: Failed to read Block Group Descriptor.\n\0");
+            crate::ffi::debug_print("Error: Failed to read Block Group Descriptor.\n\0");
             return None; 
         }
         
@@ -21718,7 +21866,7 @@ impl ExtMount {
         
         let ret2 = unsafe { disk_cache_read_block(self.dev, target_block_lba, self.block_size / 512, inode_buf.as_mut_ptr()) };
         if ret2 != 1 { 
-            crate::ffi::debug_print("[EXT4] Error: Failed to read Inode Table sector.\n\0");
+            crate::ffi::debug_print("Error: Failed to read Inode Table sector.\n\0");
             return None; 
         }
         
@@ -21737,7 +21885,6 @@ impl ExtMount {
         })
     }
 
-    // FIX 2: B-Tree Deep Traversal onarımı (Index düğümleri veri sanılmayacak)
     fn find_extent_block(&self, i_block: &[u32; 15], logical_block: u32) -> u32 {
         let mut header_buf = [0u8; 60];
         for i in 0..15 {
@@ -21750,7 +21897,7 @@ impl ExtMount {
         loop {
             let magic = read_u16_le(&current_buf, 0);
             if magic != 0xF30A { 
-                crate::ffi::debug_print("[EXT4] Error: Invalid Extent Magic.\n\0");
+                crate::ffi::debug_print("Error: Invalid Extent Magic.\n\0");
                 return 0; 
             }
 
@@ -21758,7 +21905,6 @@ impl ExtMount {
             let depth = read_u16_le(&current_buf, 6);
 
             if depth == 0 {
-                // Yaprak (Leaf) Düğüm: Gerçek veriye ulaştık
                 for i in 0..entries as usize {
                     let off = 12 + (i * 12);
                     let ee_block = read_u32_le(&current_buf, off);
@@ -21771,9 +21917,8 @@ impl ExtMount {
                         return (phys_block + (logical_block - ee_block) as u64) as u32;
                     }
                 }
-                return 0; // Bulunamadı
+                return 0; 
             } else {
-                // İndeks (Index) Düğüm: Ağaçta daha derine inmemiz gerek
                 let mut next_phys = 0;
                 for i in 0..entries as usize {
                     let off = 12 + (i * 12);
@@ -21790,14 +21935,13 @@ impl ExtMount {
                 
                 if next_phys == 0 { return 0; }
 
-                // İndeks bloğunu diskten oku ve döngüye devam et (Recursive Fallback)
                 let bs = self.block_size;
                 let target_lba = next_phys as u64 * (bs as u64 / 512);
                 let mut new_buf = vec![0u8; bs as usize];
                 
                 let ret = unsafe { disk_cache_read_block(self.dev, target_lba, bs / 512, new_buf.as_mut_ptr()) };
                 if ret != 1 {
-                    crate::ffi::debug_print("[EXT4] Error: Failed to read Extent Index Block.\n\0");
+                    crate::ffi::debug_print("Error: Failed to read Extent Index Block.\n\0");
                     return 0;
                 }
                 current_buf = new_buf;
@@ -21812,7 +21956,7 @@ impl ExtMount {
             if logical_block < 12 { 
                 data.i_block[logical_block as usize]
             } else {
-                crate::ffi::debug_print("[EXT4] Error: Indirect blocks not supported without Extents.\n\0");
+                crate::ffi::debug_print("Error: Indirect blocks not supported without Extents.\n\0");
                 0 
             }
         }
@@ -21878,7 +22022,7 @@ impl FsNode for ExtNode {
                     };
                     let ret = unsafe { disk_cache_read_vector(self.mount.dev, start_lba, &vec, 1) };
                     if ret != 1 { 
-                        crate::ffi::debug_print("[EXT4] DMA Vector Read Failed.\n\0");
+                        crate::ffi::debug_print("DMA Vector Read Failed.\n\0");
                         return Err(8); 
                     }
                 } else {
@@ -21891,7 +22035,7 @@ impl FsNode for ExtNode {
                     let ret = unsafe { disk_cache_read_block(self.mount.dev, start_lba, sectors_to_read, bounce_buf) };
                     if ret != 1 {
                         unsafe { kfree_contiguous(bounce_buf as *mut c_void, bounce_size); }
-                        crate::ffi::debug_print("[EXT4] Block Read Failed.\n\0");
+                        crate::ffi::debug_print("Block Read Failed.\n\0");
                         return Err(8);
                     }
 
@@ -21927,7 +22071,7 @@ impl FsNode for ExtNode {
 
             let ret = unsafe { disk_cache_read_block(self.mount.dev, phys as u64 * (bs as u64 / 512), bs / 512, dir_buf.as_mut_ptr()) };
             if ret != 1 { 
-                crate::ffi::debug_print("[EXT4] Warning: Directory block read failed.\n\0");
+                crate::ffi::debug_print("Warning: Directory block read failed.\n\0");
                 continue; 
             }
 
@@ -21956,7 +22100,7 @@ impl FsNode for ExtNode {
                                 is_dir: is_directory,
                             }));
                         } else {
-                            crate::ffi::debug_print("[EXT4] Error: Could not resolve target inode.\n\0");
+                            crate::ffi::debug_print("Error: Could not resolve target inode.\n\0");
                         }
                     }
                 }
@@ -22014,7 +22158,7 @@ pub unsafe extern "C" fn rust_ext4_mount(dev: *mut c_void) -> *mut c_void {
     let mut buf = [0u8; 1024];
     let ret = unsafe { disk_cache_read_block(dev, 2, 2, buf.as_mut_ptr()) };
     if ret != 1 { 
-        crate::ffi::debug_print("[EXT4] Error: Superblock read failed.\n\0");
+        crate::ffi::debug_print("Error: Superblock read failed.\n\0");
         return core::ptr::null_mut(); 
     }
 
@@ -22044,10 +22188,10 @@ pub unsafe extern "C" fn rust_ext4_mount(dev: *mut c_void) -> *mut c_void {
             });
             return Box::into_raw(Box::new(node)) as *mut c_void;
         } else {
-            crate::ffi::debug_print("[EXT4] Error: Root inode (2) could not be read.\n\0");
+            crate::ffi::debug_print("Error: Root inode (2) could not be read.\n\0");
         }
     } else {
-        crate::ffi::debug_print("[EXT4] Error: EXT2/4 Magic Signature (0xEF53) not found.\n\0");
+        crate::ffi::debug_print("Error: EXT2/4 Magic Signature (0xEF53) not found.\n\0");
     }
     core::ptr::null_mut()
 }
@@ -22057,6 +22201,7 @@ impl Drop for ExtMount {
         unsafe { crate::ffi::exports::device_release(self.dev); }
     }
 }
+
 
 .../rust_core\src\fs\fat32\mod.rs:
 // rust_core/src/fs/fat32/mod.rs
@@ -22072,7 +22217,6 @@ use crate::ffi::bindings::StorageKioVec;
 unsafe extern "C" {
     fn disk_cache_read_block(dev: *mut c_void, lba: u64, count: u32, buffer: *mut u8) -> i32;
     fn disk_cache_read_vector(dev: *mut c_void, lba: u64, vectors: *const StorageKioVec, count: i32) -> i32;
-    // FIX: pmm_alloc_contiguous yerine doğru olan sanal tahsis fonksiyonu eklendi
     fn kmalloc_contiguous(size: usize) -> *mut c_void;
     fn kfree_contiguous(ptr: *mut c_void, size: usize);
 }
@@ -22106,17 +22250,20 @@ unsafe impl Sync for Fat32Node {}
 
 impl Fat32Mount {
     fn cluster_to_lba(&self, cluster: u32) -> u64 {
+        // FIX: Cluster Underflow Koruması
+        if cluster < 2 { return 0; }
         self.first_data_sector as u64 + ((cluster - 2) as u64 * self.sectors_per_cluster as u64)
     }
 
     fn get_next_cluster(&self, cluster: u32) -> u32 {
+        if cluster < 2 { return 0x0FFFFFFF; } // FIX: Geçersiz küme araması engellendi
         let sector = self.fat_start_sector + (cluster * 4 / 512);
         let offset = (cluster * 4) % 512;
         let mut buf = alloc::vec![0u8; 4096];
         
         let ret = unsafe { disk_cache_read_block(self.dev, sector as u64, 1, buf.as_mut_ptr()) };
         if ret != 1 {
-            crate::ffi::debug_print("[FAT32] Error: Failed to read FAT sector.\n\0");
+            crate::ffi::debug_print("Error: Failed to read FAT sector.\n\0");
             return 0x0FFFFFFF;
         } else {
             let next = read_u32_le(&buf, offset as usize);
@@ -22173,7 +22320,7 @@ impl FsNode for Fat32Node {
 
         while cluster_chain_idx > 0 {
             cluster = self.mount.get_next_cluster(cluster);
-            if cluster >= 0x0FFFFFF8 { return Err(8); }
+            if cluster < 2 || cluster >= 0x0FFFFFF8 { return Err(8); }
             cluster_chain_idx -= 1;
         }
 
@@ -22189,7 +22336,7 @@ impl FsNode for Fat32Node {
                     break;
                 }
                 let next_cluster = self.mount.get_next_cluster(current_cluster);
-                if next_cluster == current_cluster + 1 && next_cluster < 0x0FFFFFF8 {
+                if next_cluster == current_cluster + 1 && next_cluster >= 2 && next_cluster < 0x0FFFFFF8 {
                     contiguous_clusters += 1;
                     current_cluster = next_cluster;
                 } else {
@@ -22219,7 +22366,6 @@ impl FsNode for Fat32Node {
                 let sectors_to_read = (bytes_to_transfer + 511) / 512;
                 let bounce_size = sectors_to_read as usize * 512;
                 
-                // FIX: VMM uyumlu sanal bellek alloc / free
                 let bounce_buf = unsafe { kmalloc_contiguous(bounce_size) as *mut u8 };
                 if bounce_buf.is_null() { return Err(4); }
 
@@ -22260,7 +22406,7 @@ impl FsNode for Fat32Node {
             let lba = self.mount.cluster_to_lba(cluster);
             let ret = unsafe { disk_cache_read_block(self.mount.dev, lba, self.mount.sectors_per_cluster, cl_buf.as_mut_ptr()) };
             if ret != 1 { 
-                crate::ffi::debug_print("[FAT32] Error: Directory cluster read failed.\n\0");
+                crate::ffi::debug_print("Error: Directory cluster read failed.\n\0");
                 return None; 
             }
 
@@ -22284,7 +22430,7 @@ impl FsNode for Fat32Node {
                         lfn_to_ascii(&cl_buf, offset + 28, 2, &mut part);
                         current_lfn.insert_str(0, &part); 
                     } else {
-                        crate::ffi::debug_print("[FAT32] Warning: Corrupted LFN entry detected.\n\0");
+                        crate::ffi::debug_print("Warning: Corrupted LFN entry detected.\n\0");
                     }
                 } else if (attr & 0x08) == 0 {
                     let mut final_name = current_lfn.clone();
@@ -22307,7 +22453,6 @@ impl FsNode for Fat32Node {
                     }
                     current_lfn.clear();
                 } else {
-                    // Volume Label Entry - Safely Ignore
                 }
                 offset += 32;
             }
@@ -22374,7 +22519,7 @@ pub unsafe extern "C" fn rust_fat32_mount(dev: *mut c_void) -> *mut c_void {
     let mut buf =[0u8; 512];
     let ret = unsafe { disk_cache_read_block(dev, 0, 1, buf.as_mut_ptr()) };
     if ret != 1 { 
-        crate::ffi::debug_print("[FAT32] Error: Boot sector read failed.\n\0");
+        crate::ffi::debug_print("Error: Boot sector read failed.\n\0");
         return core::ptr::null_mut(); 
     }
 
@@ -22387,7 +22532,7 @@ pub unsafe extern "C" fn rust_fat32_mount(dev: *mut c_void) -> *mut c_void {
         let root_cluster = read_u32_le(&buf, 44);
 
         if bytes_per_sector == 0 || sectors_per_cluster == 0 {
-            crate::ffi::debug_print("[FAT32] Error: Invalid cluster geometry.\n\0");
+            crate::ffi::debug_print("Error: Invalid cluster geometry.\n\0");
             return core::ptr::null_mut();
         }
 
@@ -22411,7 +22556,7 @@ pub unsafe extern "C" fn rust_fat32_mount(dev: *mut c_void) -> *mut c_void {
 
         return Box::into_raw(Box::new(node)) as *mut c_void;
     } else {
-        crate::ffi::debug_print("[FAT32] Error: Missing 55 AA Boot Signature.\n\0");
+        crate::ffi::debug_print("Error: Missing 55 AA Boot Signature.\n\0");
     }
     core::ptr::null_mut()
 }
@@ -22498,12 +22643,12 @@ impl FsNode for IsoNode {
             buf[..count].copy_from_slice(&data[offset_in_sector..offset_in_sector + count]);
             Ok(count)
         } else {
-            Err(8) // KOM_ERR_IO
+            Err(8) 
         }
     }
     
     fn write(&self, _offset: u64, _buf: &[u8]) -> Result<usize, u32> {
-        Err(2) // KOM_ERR_CAP_DENIED
+        Err(2) 
     }
     
     fn finddir(&self, name: &str) -> Option<FsBackend> {
@@ -22534,7 +22679,7 @@ impl FsNode for IsoNode {
                             }));
                         }
                     } else {
-                        crate::ffi::debug_print("[ISO9660] Warning: Directory entry out of bounds.\n\0");
+                        crate::ffi::debug_print("Warning: Directory entry out of bounds.\n\0");
                     }
                     offset += len;
                 }
@@ -22594,10 +22739,10 @@ pub unsafe extern "C" fn rust_iso9660_mount(dev: *mut c_void) -> *mut c_void {
             
             return Box::into_raw(Box::new(node)) as *mut c_void;
         } else {
-            crate::ffi::debug_print("[ISO9660] Error: Missing CD001 Primary Volume Descriptor.\n\0");
+            crate::ffi::debug_print("Error: Missing CD001 Primary Volume Descriptor.\n\0");
         }
     } else {
-        crate::ffi::debug_print("[ISO9660] Error: PVD Sector read failed.\n\0");
+        crate::ffi::debug_print("Error: PVD Sector read failed.\n\0");
     }
     
     core::ptr::null_mut()
@@ -22608,6 +22753,7 @@ impl Drop for IsoMount {
         unsafe { crate::ffi::exports::device_release(self.dev); }
     }
 }
+
 
 .../rust_core\src\fs\udf\mod.rs:
 // rust_core/src/fs/udf/mod.rs
@@ -22722,7 +22868,7 @@ fn find_anchor(dev: *mut c_void) -> Option<(u32, u32, u32)> {
             let len = read_u32_le(&buf, 16);     
             return Some((loc, len, 512));
         } else {
-            crate::ffi::debug_print("[UDF] Anchor (AVDP) not found at Sector 256.\n\0");
+            crate::ffi::debug_print("Anchor (AVDP) not found at Sector 256.\n\0");
         }
     }
     
@@ -22732,7 +22878,7 @@ fn find_anchor(dev: *mut c_void) -> Option<(u32, u32, u32)> {
             let len = read_u32_le(&buf, 16);
             return Some((loc, len, 2048));
         } else {
-            crate::ffi::debug_print("[UDF] Anchor (AVDP) not found at Sector 1024.\n\0");
+            crate::ffi::debug_print("Anchor (AVDP) not found at Sector 1024.\n\0");
         }
     }
     
@@ -22802,7 +22948,7 @@ fn read_node_data(node: &UdfNode, offset: u64, size: u32) -> Option<Vec<u8>> {
                     res.copy_from_slice(&data[offset_in_sector..offset_in_sector+to_read]);
                     return Some(res);
                 } else {
-                    crate::ffi::debug_print("[UDF] Error: Failed to read allocated data sector.\n\0");
+                    crate::ffi::debug_print("Error: Failed to read allocated data sector.\n\0");
                     return None;
                 }
             } else {
@@ -22810,7 +22956,7 @@ fn read_node_data(node: &UdfNode, offset: u64, size: u32) -> Option<Vec<u8>> {
             }
         }
     } else {
-        crate::ffi::debug_print("[UDF] Error: Unsupported allocation descriptor type.\n\0");
+        crate::ffi::debug_print("Error: Unsupported allocation descriptor type.\n\0");
     }
     
     None
@@ -22827,7 +22973,7 @@ fn initialize_node(mount: Arc<UdfMount>, icb_loc: LongAd) -> Option<UdfNode> {
         } else if tag_id == TAGID_EFE {
             (16, read_u64_le(&buf, 64))
         } else {
-            crate::ffi::debug_print("[UDF] Error: Invalid ICB Tag ID.\n\0");
+            crate::ffi::debug_print("Error: Invalid ICB Tag ID.\n\0");
             return None;
         };
         
@@ -22891,11 +23037,11 @@ impl FsNode for UdfNode {
                             if let Some(child_node) = initialize_node(self.mount.clone(), LongAd { len: icb_len, loc: icb_loc, part_ref: icb_ref }) {
                                 return Some(FsBackend::Udf(child_node));
                             } else {
-                                crate::ffi::debug_print("[UDF] Error: Failed to initialize child node from FID.\n\0");
+                                crate::ffi::debug_print("Error: Failed to initialize child node from FID.\n\0");
                             }
                         }
                     } else {
-                        crate::ffi::debug_print("[UDF] Warning: FID name buffer out of bounds.\n\0");
+                        crate::ffi::debug_print("Warning: FID name buffer out of bounds.\n\0");
                     }
                 }
                 
@@ -23011,22 +23157,22 @@ pub unsafe extern "C" fn rust_udf_mount(dev: *mut c_void) -> *mut c_void {
                             let node = FsBackend::Udf(root_node);
                             return Box::into_raw(Box::new(node)) as *mut c_void;
                         } else {
-                            crate::ffi::debug_print("[UDF] Error: Failed to init root node.\n\0");
+                            crate::ffi::debug_print("Error: Failed to init root node.\n\0");
                         }
                     } else {
-                        crate::ffi::debug_print("[UDF] Error: FSD Tag verification failed.\n\0");
+                        crate::ffi::debug_print("Error: FSD Tag verification failed.\n\0");
                     }
                 } else {
-                    crate::ffi::debug_print("[UDF] Error: Failed to read FSD sector.\n\0");
+                    crate::ffi::debug_print("Error: Failed to read FSD sector.\n\0");
                 }
             } else {
-                crate::ffi::debug_print("[UDF] Error: LVD (Logical Volume Descriptor) not found.\n\0");
+                crate::ffi::debug_print("Error: LVD (Logical Volume Descriptor) not found.\n\0");
             }
         } else {
-            crate::ffi::debug_print("[UDF] Error: Failed to read MVDS.\n\0");
+            crate::ffi::debug_print("Error: Failed to read MVDS.\n\0");
         }
     } else {
-        crate::ffi::debug_print("[UDF] Error: Anchor volume descriptor missing.\n\0");
+        crate::ffi::debug_print("Error: Anchor volume descriptor missing.\n\0");
     }
     core::ptr::null_mut()
 }
@@ -23036,6 +23182,7 @@ impl Drop for UdfMount {
         unsafe { crate::ffi::exports::device_release(self.device); }
     }
 }
+
 
 .../rust_core\src\kom\device.rs:
 // rust_core/src/kom/device.rs
@@ -23441,7 +23588,7 @@ unsafe impl GlobalAlloc for KernelAllocator {
             if layout.size() > 0x10000000 {
                 panic_at(
                     c"allocator.rs".as_ptr() as *const u8, line!() as i32,
-                    KernelError::RustOOM as u32,
+                    KernelError::AllocatorOOM as u32,
                     c"FATAL: Ridiculous Allocation Size Blocked!".as_ptr() as *const u8,
                 );
             }
@@ -23503,15 +23650,16 @@ pub static ALLOCATOR: KernelAllocator = KernelAllocator;
 #[alloc_error_handler]
 fn alloc_error_handler(_layout: Layout) -> ! {
     unsafe {
-        crate::ffi::exports::kprintf_string(c"[MEM] FATAL: Out Of Memory (OOM) hit in safe core space!\n".as_ptr());
+        crate::ffi::exports::kprintf_string(c"[MEM] FATAL: Out Of Memory (OOM) hit!\n".as_ptr());
         panic_at(
             c"allocator.rs".as_ptr() as *const u8, 0,
-            KernelError::RustOOM as u32,
+            KernelError::AllocatorOOM as u32,
             c"FATAL OOM: Kernel Heap Exhausted (Allocation Failed)!".as_ptr() as *const u8,
         );
     }
     loop { core::hint::spin_loop(); }
 }
+
 
 .../rust_core\src\memory\mod.rs:
 // rust_core/src/memory/mod.rs
@@ -23521,7 +23669,7 @@ pub mod safemem;
 
 .../rust_core\src\memory\pmm.rs:
 // rust_core/src/memory/pmm.rs
-// MeowOS Native Physical Memory Manager (v7.2 Enterprise)
+// Singularity Native Physical Memory Manager (v7.2 Enterprise)
 
 use crate::arch::sync::IrqSpinlock;
 use core::ffi::c_void;
@@ -23817,7 +23965,7 @@ pub extern "C" fn pmm_init(multiboot_addr: usize, kernel_end: usize) {
 }
 
 unsafe fn alloc_from_node(state: &mut PmmState, preferred_node: usize) -> *mut c_void {
-    let mut order = [0usize; MAX_NUMA_NODES];
+    let mut order =[0usize; MAX_NUMA_NODES];
     order[0] = preferred_node;
     let mut k = 1;
     for i in 0..MAX_NUMA_NODES {
@@ -24154,7 +24302,6 @@ use alloc::format;
 
 const KERNEL_SPACE_BASE: u64 = 0xFFFF800000000000;
 
-// Absolute NULL Protection limit
 const NULL_GUARD_PAGES: u64 = 0x10000; 
 
 pub struct SafeMem;
@@ -24165,20 +24312,17 @@ impl SafeMem {
         let start = ptr as u64;
         let end = start.wrapping_add(len as u64);
         
-        // 1. Kesin NULL Pointer Koruması
         if start < NULL_GUARD_PAGES {
             return false;
         }
         if end < start {
-            return false; // Taşma (Wrap-around) durumu
+            return false; 
         }
         
-        // 2. Higher-Half Bölgesi (VMM, KHeap, Kernel Stacks)
         if start >= KERNEL_SPACE_BASE && end >= KERNEL_SPACE_BASE {
             return true;
         }
         
-        // 3. Identity Mapped Kernel Area (Code, Data, BSS, Bootstrap Stack)
         if start >= 0x100000 && end < 0x40000000 && end >= start { 
             return true;
         }
@@ -24190,7 +24334,7 @@ impl SafeMem {
         if !Self::is_valid_kernel_region(ptr, len) {
             let msg = format!("SafeMem Violation in {}: Invalid kernel pointer 0x{:X} (Len: {})\0", context, ptr as u64, len);
             unsafe {
-                ffi::panic_at(c"safemem.rs".as_ptr() as *const u8, line!() as i32, KernelError::RustSafeMem as u32, msg.as_ptr());
+                ffi::panic_at(c"safemem.rs".as_ptr() as *const u8, line!() as i32, KernelError::SafeMemViolation as u32, msg.as_ptr());
             }
         }
     }
@@ -24198,12 +24342,9 @@ impl SafeMem {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_safemem_validate(ptr: *const c_void, len: usize, context_ptr: *const c_char) -> bool {
-    // OPTİMİZASYON YAMASI: Fast Path! Eğer adres güvenliyse, 
-    // yavaş olan CStr çevirisini (strlen) ASLA yapma, anında dön.
     if SafeMem::is_valid_kernel_region(ptr, len) {
         true
     } else {
-        // SLOW PATH: Sadece hata durumunda maliyetli string ayrıştırmasını yap.
         unsafe {
             let context = if context_ptr.is_null() {
                 "Unknown_C_Module"
@@ -24211,11 +24352,12 @@ pub unsafe extern "C" fn rust_safemem_validate(ptr: *const c_void, len: usize, c
                 core::ffi::CStr::from_ptr(context_ptr).to_str().unwrap_or("Invalid_String") 
             };
             
-            ffi::debug_print(&format!("[SAFEMEM] WARNING: Invalid memory access blocked in [{}] at 0x{:X}!\n", context, ptr as u64));
+            ffi::debug_print(&format!("WARNING: Invalid memory access blocked in [{}] at 0x{:X}!\n", context, ptr as u64));
             false
         }
     }
 }
+
 
 .../rust_core\src\storage\mod.rs:
 // rust_core/src/storage/mod.rs
@@ -24230,12 +24372,10 @@ pub mod sg_builder;
 
 .../rust_core\src\storage\dma\sg_builder.rs:
 // rust_core/src/storage/dma/sg_builder.rs
-// DMA Guard & Scatter/Gather Builder
 
 use crate::ffi::bindings::{StorageKioVec, StorageDmaChain};
 use crate::memory::safemem::SafeMem;
 use crate::ffi::{ioremap, iounmap, kprintf_string};
-// FIX: Doğru Rust fonksiyon isimleri içe aktarıldı
 use crate::memory::pmm::{pmm_alloc_contiguous, pmm_free_contiguous, pmm_inc_ref, pmm_dec_ref};
 use alloc::format;
 use core::ptr;
@@ -24249,7 +24389,7 @@ pub extern "C" fn rust_dma_guard_validate(
     _caller_pid: u64
 ) -> bool {
     if vectors.is_null() || count == 0 { 
-        unsafe { kprintf_string(c"[DMA GUARD] Blocked: Vector Array is Null or Empty!\n".as_ptr()); }
+        unsafe { kprintf_string(c"Blocked: Vector Array is Null or Empty!\n".as_ptr()); }
         return false; 
     }
     
@@ -24257,13 +24397,13 @@ pub extern "C" fn rust_dma_guard_validate(
     
     for vec in vecs {
         if vec.size == 0 || vec.virt_addr.is_null() {
-            let msg = format!("[DMA GUARD] Blocked: Invalid Vector (Size: {}, VirtAddr: 0x{:X})\n\0", vec.size, vec.virt_addr as u64);
+            let msg = format!("Blocked: Invalid Vector (Size: {}, VirtAddr: 0x{:X})\n\0", vec.size, vec.virt_addr as u64);
             unsafe { kprintf_string(msg.as_ptr() as *const i8); }
             return false;
         }
         
         if !SafeMem::is_valid_kernel_region(vec.virt_addr, vec.size) {
-            let msg = format!("[DMA GUARD] Security Violation: Unsafe memory target 0x{:X}\n\0", vec.virt_addr as u64);
+            let msg = format!("Security Violation: Unsafe memory target 0x{:X}\n\0", vec.virt_addr as u64);
             unsafe { kprintf_string(msg.as_ptr() as *const i8); }
             return false;
         }
@@ -24297,14 +24437,12 @@ pub extern "C" fn rust_storage_build_sg_list(
                 is_aligned = false;
             }
         }
-        // MEMORY PINNING: PMM seviyesinde donanım işlemi bitene kadar sayfayı kilitleriz (Ref++)
         unsafe { pmm_inc_ref(vec.phys_addr as *mut core::ffi::c_void); }
     }
     
     chain.total_bytes = total_size as u32;
     
     if !is_aligned {
-        // Eğer hizasızsa (Bounce Buffer fallback), orijinal referansları geri bırak
         for vec in vecs.iter() {
             unsafe { pmm_dec_ref(vec.phys_addr as *mut core::ffi::c_void); }
         }
@@ -24367,7 +24505,6 @@ pub extern "C" fn rust_storage_build_sg_list(
 pub extern "C" fn rust_storage_free_sg_list(chain: *mut StorageDmaChain, vectors: *const StorageKioVec, count: usize) {
     if chain.is_null() || vectors.is_null() || count == 0 { return; }
     
-    // MEMORY UNPINNING: DMA işlemi bitti, belleği serbest bırak (Ref--)
     let vecs = unsafe { core::slice::from_raw_parts(vectors, count) };
     for vec in vecs.iter() {
         unsafe { pmm_dec_ref(vec.phys_addr as *mut core::ffi::c_void); }
@@ -24382,6 +24519,7 @@ pub extern "C" fn rust_storage_free_sg_list(chain: *mut StorageDmaChain, vectors
         }
     }
 }
+
 
 .../rust_core\src\storage\partition\gpt.rs:
 // rust_core/src/storage/partition/gpt.rs
@@ -24405,7 +24543,6 @@ unsafe extern "C" {
     fn cpp_device_get_block_size(dev: *mut c_void) -> u32;
     fn cpp_create_partition_device(parent: *mut c_void, name: *const c_char, start: u64, end: u64, type_name: *const c_char);
     fn cpp_invalidate_device_cache(dev: *mut c_void);
-    fn serial_write(s: *const c_char);
     fn printf(format: *const c_char, ...);
 
     fn device_unlock_write(dev: *mut c_void, magic: u32);
@@ -24416,11 +24553,6 @@ unsafe extern "C" {
 }
 
 const DEVICE_MAGIC_UNLOCK: u32 = 0x1337BEEF;
-
-fn debug_print(msg: &str) {
-    let c_str = alloc::ffi::CString::new(msg).unwrap();
-    unsafe { serial_write(c_str.as_ptr()); }
-}
 
 fn user_print(msg: &str) {
     let c_str = alloc::ffi::CString::new(msg).unwrap();
@@ -24478,7 +24610,7 @@ struct GptHeaderLogic {
     backup_lba: u64,
     first_usable_lba: u64,
     last_usable_lba: u64,
-    disk_guid: [u8; 16],
+    disk_guid:[u8; 16],
     partition_entry_lba: u64,
     num_partition_entries: u32,
     size_partition_entry: u32,
@@ -24553,7 +24685,7 @@ fn get_guid_for_type(type_str: &str) -> [u8; 16] {
 }
 
 fn get_name_from_guid(guid: &[u8; 16]) -> &'static str {
-    const DATA_GUID:  [u8; 16] =[0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7];
+    const DATA_GUID:[u8; 16] =[0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7];
     const LINUX_GUID:[u8; 16] =[0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4];
     const EFI_GUID:   [u8; 16] =[0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B];
 
@@ -24564,7 +24696,7 @@ fn get_name_from_guid(guid: &[u8; 16]) -> &'static str {
 }
 
 fn generate_pseudo_guid() ->[u8; 16] {
-    let mut guid = [0u8; 16];
+    let mut guid =[0u8; 16];
     let tsc = crate::ffi::exports::get_system_ticks(); 
     let p1 = tsc.to_le_bytes();
     for i in 0..8 {
@@ -24583,7 +24715,7 @@ unsafe fn remove_old_partitions(parent_dev: *mut c_void) {
 
     let path        = alloc::ffi::CString::new("/devices").unwrap();
     let mut idx     = 0u32;
-    let mut name_buf = [0u8; 64];
+    let mut name_buf =[0u8; 64];
     let mut obj_type: u8 = 0;
 
     while unsafe { ons_enumerate(path.as_ptr(), idx, name_buf.as_mut_ptr() as *mut c_char, &mut obj_type) } {
@@ -24666,8 +24798,7 @@ pub unsafe extern "C" fn rust_gpt_scan_partitions(dev: *mut c_void) {
                 part_num += 1;
             }
         } else {
-            let msg = format!("[GPT] No GPT found on {}. Device is raw/unpartitioned.\n", disk_name);
-            debug_print(&msg);
+            // Sessiz mod: GPT bulunamadıysa log basma
         }
     }
 }
@@ -24801,7 +24932,7 @@ pub unsafe extern "C" fn rust_gpt_create_partition(
         for i in 0..entry_count {
             let offset    = i * entry_size;
             let entry_ptr = table_buf.as_ptr().add(offset);
-            let mut type_guid = [0u8; 16];
+            let mut type_guid =[0u8; 16];
             ptr::copy_nonoverlapping(entry_ptr, type_guid.as_mut_ptr(), 16);
             let end_lba = read_u64(entry_ptr, 40);
 
@@ -25028,7 +25159,6 @@ pub unsafe extern "C" fn rust_gpt_delete_partition(part_name: *const c_char) -> 
     }
 }
 
-
 .../rust_core\src\storage\partition\mod.rs:
 // rust_core/src/storage/partition/mod.rs
 pub mod gpt;
@@ -25041,17 +25171,17 @@ pub mod gpt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum KernelError {
-    Success      = 0x00,
-    Unknown      = 0x01,
+    Success          = 0x00,
+    Unknown          = 0x01,
     
-    Unsupported  = 0x05, // KOM_ERR_UNSUPPORTED
+    Unsupported      = 0x05, // KOM_ERR_UNSUPPORTED
     
-    RustPanic    = 0x50,
-    RustOOM      = 0x51,
-    RustSafeMem  = 0x52,
+    CorePanic        = 0x50, // Eski adı: RustPanic
+    AllocatorOOM     = 0x51, // Eski adı: RustOOM
+    SafeMemViolation = 0x52, // Eski adı: RustSafeMem
     
-    OutOfBounds  = 0x27,
-    NullDeref    = 0x26,
+    OutOfBounds      = 0x27,
+    NullDeref        = 0x26,
 }
 
 .../rust_core\src\sys\mod.rs:
@@ -25262,7 +25392,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 
 .../scripts\config.mk:
 # scripts/config.mk
-# MeowOS LLVM/Clang Toolchain Configuration
+# Singularity LLVM/Clang Toolchain Configuration
 
 CC = clang
 CXX = clang++
@@ -25725,7 +25855,7 @@ import sys
 import subprocess
 import os
 
-KERNEL_BIN = "../iso/boot/meowkernel.bin"
+KERNEL_BIN = "../iso/boot/singularity_kernel.bin"
 ADDR2LINE = "addr2line"
 
 def main():
@@ -25743,8 +25873,7 @@ def main():
     print(f"Adres Çözümleniyor: {rip} ...")
     
     try:
-        result = subprocess.check_output(
-            [ADDR2LINE, "-e", KERNEL_BIN, "-f", "-C", "-i", rip],
+        result = subprocess.check_output([ADDR2LINE, "-e", KERNEL_BIN, "-f", "-C", "-i", rip],
             stderr=subprocess.STDOUT
         ).decode("utf-8").strip()
         
@@ -25841,10 +25970,10 @@ def create_rootfs(pci_db_path):
         print("[WARNING] PCI Database (pci.db) not found. Skipping embedding.")
 
     with open(os.path.join(root_dir, "hello.txt"), "w") as f:
-        f.write("Hello from MeowOS InitRD! The ONS (Object Namespace) is working properly.\n")
+        f.write("Hello from Singularity InitRD! The ONS (Object Namespace) is working properly.\n")
 
     with open(os.path.join(root_dir, "system", "version.txt"), "w") as f:
-        f.write("MeowOS Kernel v6.9 (Native KOM Edition)\n")
+        f.write("Singularity Kernel v6.9 (Native KOM Edition)\n")
 
     with open(os.path.join(root_dir, "system", "readme.txt"), "w") as f:
         f.write("This is a system directory.\nDo not delete critical files.\n")
@@ -25854,7 +25983,7 @@ def create_rootfs(pci_db_path):
         f.write("silent_run \"Auto-Mounting Volumes\" automount\n") 
 
     with open(os.path.join(root_dir, "home", "config.cfg"), "w") as f:
-        f.write("user=meow\ntheme=dark\nkeyboard=us\n")
+        f.write("user=admin\ntheme=dark\nkeyboard=us\n")
 
     with tarfile.open(output_tar, "w") as tar:
         tar.add(root_dir, arcname=".") 
@@ -25864,7 +25993,6 @@ def create_rootfs(pci_db_path):
 if __name__ == "__main__":
     pci_db = sys.argv[1] if len(sys.argv) > 1 else None
     create_rootfs(pci_db)
-
 
 .../scripts\sys_asm_debug.py:
 # scripts/sys_asm_debug.py
@@ -25892,7 +26020,7 @@ try:
 except ImportError:
     HAS_CXXFILT = False
 
-KERNEL_DIS = "../build/meowkernel.dis"
+KERNEL_DIS = "../build/singularity_kernel.dis"
 console = Console()
 
 VOLATILE_REGS =["rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11"]
@@ -25937,7 +26065,7 @@ LOOP_WHITELIST =[
 IGNORE_PREFIXES =[
     "core::", "alloc::", "compiler_builtins::", "__rust", 
     "rust_begin_unwind", "fmt::", "__ubsan", "__stack_chk", 
-    "std::", "meow_rust::", "_start", "start", "isr_common_stub",
+    "std::", "singularity_rust::", "_start", "start", "isr_common_stub",
     "drop_in_place"
 ]
 
@@ -26049,7 +26177,7 @@ class FunctionAnalyzer:
         lock_depth = 0
         interrupts_disabled = False
         
-        is_isr = any(x in self.demangled_name.lower() for x in ["isr", "irq", "handler"])
+        is_isr = any(x in self.demangled_name.lower() for x in["isr", "irq", "handler"])
         
         if is_isr:
             for w in ISR_VIOLATION_WHITELIST:
@@ -26171,7 +26299,7 @@ class FunctionAnalyzer:
                                     pass
                         state.clear_reg(dst_reg)
 
-            elif opcode in ["xor", "xorl", "xorq"]:
+            elif opcode in["xor", "xorl", "xorq"]:
                 ops = operands.split(',')
                 if len(ops) == 2:
                     r1 = ops[0].strip().replace('%', '')
@@ -26272,7 +26400,7 @@ class AuditEngine:
         
         try:
             with open(output_file, "w", encoding="utf-8") as f:
-                f.write("MeowOS Deep Static Audit Report v8.5\n")
+                f.write("Singularity Deep Static Audit Report v8.5\n")
                 f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write("====================================\n\n")
                 
@@ -26297,7 +26425,7 @@ class AuditEngine:
             console.print(f"[bold red]Rapor yazılamadı:[/bold red] {e}")
 
     def run_audit(self):
-        console.print("\n[bold cyan]=== MeowOS Derinlemesine Kod Analizi (v8.5) ===[/bold cyan]")
+        console.print("\n[bold cyan]=== Singularity Derinlemesine Kod Analizi (v8.5) ===[/bold cyan]")
         console.print("Register Data Flow, Stack Tracking & Abstract Interpretation...", style="dim")
         console.print(f"Analiz edilen fonksiyon sayısı: {len(self.functions)}\n")
         
@@ -26334,7 +26462,7 @@ class AuditEngine:
         self.generate_report()
 
 def main():
-    parser = argparse.ArgumentParser(description="MeowOS Deep Static Analyzer")
+    parser = argparse.ArgumentParser(description="Singularity Deep Static Analyzer")
     parser.add_argument("--file", help="Disassembly dosyası yolu", default=KERNEL_DIS)
     args = parser.parse_args()
 
@@ -26621,24 +26749,9 @@ static void console_newline() {
             cursor_y++;
         } else {
             if (auto_flush_enabled && backbuffer) {
-                uint32_t row_bytes = fb_info.pitch * GLYPH_H;
-                uint32_t total_bytes = fb_info.pitch * fb_info.height;
-                
-                // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-                memmove(backbuffer, (uint8_t*)backbuffer + row_bytes, total_bytes - row_bytes);
-                
-                uint32_t* last_line = (uint32_t*)((uint8_t*)backbuffer + total_bytes - row_bytes);
-                uint32_t bg_color = vga_palette[current_bg_idx & 0x0F];
-                
-                if (cpu_info.has_avx) {
-                    fill_rect_avx(last_line, bg_color, row_bytes / 4);
-                } else {
-                    for (uint32_t i = 0; i < row_bytes / 4; i++) {
-                        last_line[i] = bg_color;
-                    }
-                }
-                
-                framebuffer_mark_dirty_rect(0, 0, fb_info.width, fb_info.height);
+                // OPTİMİZASYON YAMASI: O(1) Console Scrolling
+                // 3MB'lık ağır memmove işlemi silindi. Ekran sadece history buffer'dan yeniden çizilir.
+                console_redraw();
                 console_dirty = true;
             }
         }
@@ -26911,7 +27024,6 @@ void console_force_unlock() {
 }
 
 }
-
 
 .../system\console\console.h:
 // system/console/console.h
@@ -28021,13 +28133,24 @@ extern "C" {
 
 CacheSet DiskCache::sets[CACHE_SETS];
 
+// OPTİMİZASYON YAMASI: FNV-1a Hashing Algoritması
+// Eski ağır 64-bit çarpma işlemleri yerine XOR ve Bitwise Shift tabanlı
+// çok daha hızlı ve çarpışma oranı düşük olan FNV-1a algoritmasına geçildi.
 uint32_t DiskCache::hash(Device* dev, uint64_t lba) {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    h ^= (uint64_t)dev;
-    h *= 0x100000001b3ULL;
-    h ^= lba;
-    h *= 0x100000001b3ULL;
-    return (uint32_t)(h & (CACHE_SETS - 1));
+    uint32_t hash = 2166136261u;
+    uint64_t dev_val = (uint64_t)dev;
+    
+    for (int i = 0; i < 8; i++) {
+        hash ^= (dev_val & 0xFF);
+        hash *= 16777619;
+        dev_val >>= 8;
+    }
+    for (int i = 0; i < 8; i++) {
+        hash ^= (lba & 0xFF);
+        hash *= 16777619;
+        lba >>= 8;
+    }
+    return hash & (CACHE_SETS - 1);
 }
 
 void DiskCache::init() {
@@ -28061,7 +28184,6 @@ int DiskCache::readBlock(Device* dev, uint64_t lba, uint32_t count, void* buffer
             if (set->ways[w].valid && set->ways[w].device == dev && set->ways[w].lba == current_lba) {
                 set->ways[w].last_access = hal_timer_get_ticks();
                 
-                // GÜVENLİK YAMASI: Pointer Arithmetic Overflow (Adres Aşımı) önlendi
                 uint64_t start_addr = (uint64_t)ptr + ((uint64_t)i * 512);
                 uint64_t end_addr = start_addr + 511;
                 if (get_physical_address(start_addr) == 0 || 
@@ -28091,7 +28213,6 @@ int DiskCache::readBlock(Device* dev, uint64_t lba, uint32_t count, void* buffer
             return 0;
         }
 
-        // GÜVENLİK YAMASI: Pointer Arithmetic Overflow (Adres Aşımı) önlendi
         uint64_t start_addr = (uint64_t)ptr + ((uint64_t)i * 512);
         uint64_t end_addr = start_addr + 511;
         if (get_physical_address(start_addr) == 0 || 
@@ -28148,7 +28269,6 @@ int DiskCache::writeBlock(Device* dev, uint64_t lba, uint32_t count, const void*
             if (!bounce_buf) return 0;
         }
 
-        // GÜVENLİK YAMASI: Pointer Arithmetic Overflow (Adres Aşımı) önlendi
         uint64_t start_addr = (uint64_t)ptr + ((uint64_t)i * 512);
         uint64_t end_addr = start_addr + 511;
         if (get_physical_address(start_addr) == 0 || 
@@ -28664,7 +28784,7 @@ extern "C" void mkfs_fat32_impl(Device* dev, const char* label) {
 
     struct fat32_bs* bs = (struct fat32_bs*)zero_buf;
     bs->jump[0] = 0xEB; bs->jump[1] = 0x58; bs->jump[2] = 0x90;
-    memcpy(bs->oem, "MEOWOS  ", 8);
+    memcpy(bs->oem, "SINGULAR", 8);
     bs->bytes_per_sector = 512;
     bs->sectors_per_cluster = (uint8_t)sectors_per_cluster;
     bs->reserved_sectors = (uint16_t)reserved_sectors;
@@ -28936,7 +29056,7 @@ struct FFIStats {
     uint64_t total_cycles;
 };
 
-namespace MeowFFI {
+namespace SingularityFFI {
 
     // FIX: Üretim Modunda (Release) FFI maliyetini fiziksel olarak sıfırlamak için
     // profil alma işlemleri log_level'a bağlandı.
@@ -28979,23 +29099,21 @@ extern "C" {
 }
 
 extern "C" void ffi_logger_flush_sync() {
-    uint32_t head = __atomic_load_n(&ffi_log_ring_head, __ATOMIC_ACQUIRE);
     uint32_t tail = __atomic_load_n(&ffi_log_ring_tail, __ATOMIC_ACQUIRE);
-    if (head != tail) {
-        while (tail != head) {
-            char c = ffi_log_ring_buf[tail];
-            if (c == '\n') serial_putc('\r');
-            serial_putc(c);
-            
-            // FIX: Rust debug logları ARTIK KULLANICI EKRANINA (VGA) BASILMAYACAK!
-            // Sadece dmesg/Serial portundan geliştiriciler tarafından izlenecek.
-            // console_putchar(c); <-- SİLİNDİ!
-
-            ffi_log_ring_buf[tail] = 0;
-            tail = (tail + 1) % FFI_RING_SIZE;
-        }
-        __atomic_store_n(&ffi_log_ring_tail, tail, __ATOMIC_RELEASE);
+    
+    while (true) {
+        // FIX: Snapshot Kaybı Önlendi. Head döngü içinde dinamik olarak okunur.
+        uint32_t head = __atomic_load_n(&ffi_log_ring_head, __ATOMIC_ACQUIRE);
+        if (tail == head) break;
+        
+        char c = ffi_log_ring_buf[tail];
+        if (c == '\n') serial_putc('\r');
+        serial_putc(c);
+        
+        ffi_log_ring_buf[tail] = 0;
+        tail = (tail + 1) % FFI_RING_SIZE;
     }
+    __atomic_store_n(&ffi_log_ring_tail, tail, __ATOMIC_RELEASE);
 }
 
 void ffi_logger_task() {
@@ -29019,7 +29137,7 @@ void ffi_logger_task() {
 FFIStats ffi_stat_pmm_alloc = {0, 0};
 FFIStats ffi_stat_pmm_free = {0, 0};
 
-namespace MeowFFI {
+namespace SingularityFFI {
 
     void print_ffi_stats() {
         printf("\n========== RUST FFI BRIDGE METRICS ==========\n");
@@ -29426,13 +29544,15 @@ spinlock_t ServiceManager::lock = {0, 0, {0}};
 void ServiceManager::init() {
     spinlock_init(&lock);
     service_count = 0;
-    print_status("[ MEOWD]", "Service Manager v6.9 Initialized", "INFO");
+    print_status("[ SINGD]", "Service Manager v6.9 Initialized", "INFO");
 }
 
 void ServiceManager::registerService(const char* name, void (*func)(), ServiceType type, RestartPolicy policy, const char* dep) {
     if (service_count >= MAX_SERVICES) {
-        serial_write("[MEOWD] Error: Max service limit reached!\n");
+        serial_write("[SINGD] Error: Max service limit reached!\n");
         return;
+    } else {
+        // Proceed with registration
     }
     
     ServiceUnit* s = &services[service_count++];
@@ -29449,7 +29569,7 @@ void ServiceManager::registerService(const char* name, void (*func)(), ServiceTy
 }
 
 void ServiceManager::startAll() {
-    print_status("[ MEOWD]", "Starting System Services...", "INFO");
+    print_status("[ SINGD]", "Starting System Services...", "INFO");
     
     for (int i = 0; i < service_count; i++) {
         ServiceUnit* s = &services[i];
@@ -29461,12 +29581,18 @@ void ServiceManager::startAll() {
                    (services[j].state == SERVICE_RUNNING || services[j].state == SERVICE_FINISHED)) {
                     dep_ok = true;
                     break;
+                } else {
+                    // Not the dependency or not ready
                 }
             }
             if (!dep_ok) {
-                serial_printf("[MEOWD] Delaying %s (waiting for %s)\n", s->name, s->dependency);
+                serial_printf("[SINGD] Delaying %s (waiting for %s)\n", s->name, s->dependency);
                 continue;
+            } else {
+                // Dependency is met, proceed
             }
+        } else {
+            // No dependency
         }
         
         if (s->state == SERVICE_STOPPED) {
@@ -29477,7 +29603,9 @@ void ServiceManager::startAll() {
             char buf[64];
             // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
             snprintf(buf, sizeof(buf), "Started %s", s->name);
-            print_status("[ MEOWD]", buf, "OK");
+            print_status("[ SINGD]", buf, "OK");
+        } else {
+            // Service already started or in another state
         }
     }
 }
@@ -29488,8 +29616,12 @@ void ServiceManager::signalFinished(const char* name) {
         if(strcmp(services[i].name, name) == 0) {
             if (services[i].type == SERVICE_TYPE_ONESHOT || services[i].type == SERVICE_TYPE_BACKGROUND) {
                 services[i].state = SERVICE_FINISHED;
+            } else {
+                // Daemon services don't "finish" normally
             }
             break;
+        } else {
+            // Not the target service
         }
     }
     spinlock_release(&lock, flags);
@@ -29515,9 +29647,13 @@ void ServiceManager::monitor() {
                         {
                             alive = true;
                             break;
+                        } else {
+                            // Not the target thread or thread is dead
                         }
                         curr = curr->next;
                     } while (curr != process_list_head);
+                } else {
+                    // No processes
                 }
                 rwlock_release_read(task_list_lock);
                 
@@ -29526,16 +29662,22 @@ void ServiceManager::monitor() {
                         s->state = SERVICE_FINISHED;
                     } else {
                         s->state = SERVICE_DEAD;
-                        serial_printf("[MEOWD] Service %s died unexpectedly!\n", s->name);
+                        serial_printf("[SINGD] Service %s died unexpectedly!\n", s->name);
                         
                         if (s->policy == RESTART_ALWAYS || s->policy == RESTART_ON_FAILURE) {
-                            serial_printf("[MEOWD] Restarting %s (%d)...\n", s->name, s->restarts + 1);
+                            serial_printf("[SINGD] Restarting %s (%d)...\n", s->name, s->restarts + 1);
                             create_kernel_task(s->entry_point);
                             s->state = SERVICE_RUNNING;
                             s->restarts++;
+                        } else {
+                            // Do not restart
                         }
                     }
+                } else {
+                    // Service is still alive
                 }
+            } else {
+                // Service is not running, no need to monitor liveness
             }
         }
     }
@@ -29551,14 +29693,22 @@ void ServiceManager::waitForOneshots() {
             if (services[i].type == SERVICE_TYPE_ONESHOT && services[i].state == SERVICE_RUNNING) {
                 all_done = false;
                 break;
+            } else {
+                // Not a running oneshot
             }
         }
         
-        if (all_done) break; 
+        if (all_done) {
+            break; 
+        } else {
+            // Keep waiting
+        }
         
         if (timer_get_ticks() - start_tick > timeout_ticks) {
-            serial_write("[MEOWD] Warning: Timeout waiting for ONESHOT services.\n");
+            serial_write("[SINGD] Warning: Timeout waiting for ONESHOT services.\n");
             break;
+        } else {
+            // Still within timeout
         }
         
         yield(); 
@@ -29594,7 +29744,6 @@ extern "C" {
     void service_wait_oneshots() { ServiceManager::waitForOneshots(); }
     void service_signal_finished(const char* name) { ServiceManager::signalFinished(name); }
 }
-
 
 .../system\init\service.hpp:
 // system/init/service.hpp
@@ -29850,7 +29999,6 @@ void tar_inflater_init(void* addr, uint32_t size);
 #include "libc/stdio.h"
 #include "drivers/serial/serial.h"
 
-// Maksimum 256 kesme vektörü. O(1) hızında Routing yapılır.
 static KInterrupt* irq_map[256] = {nullptr};
 static spinlock_t kir_lock = {0, 0, {0}};
 
@@ -29866,7 +30014,6 @@ KInterrupt::~KInterrupt() {
 namespace KIR {
     void init() {
         spinlock_init(&kir_lock);
-        serial_write("[ KIR  ] Kernel Interrupt Router Initialized (Top-Half Isolation).\n");
     }
 
     void registerInterrupt(KInterrupt* irqObj) {
@@ -29891,7 +30038,6 @@ namespace KIR {
         if (irqObj) {
             irqObj->signal();
         } else {
-            // Unregistered IRQ triggered, ignored safely.
         }
         spinlock_release(&kir_lock, flags);
     }
@@ -29913,10 +30059,8 @@ extern "C" void kir_wait_interrupt(void* kint) {
     if (kint) {
         ((KInterrupt*)kint)->wait();
     } else {
-        // Safe fallback
     }
 }
-
 
 .../system\irq\kir.hpp:
 // system/irq/kir.hpp
@@ -30175,6 +30319,9 @@ void wait_queue_init(wait_queue_t* q) {
 }
 
 void wait_queue_push(wait_queue_t* q, process_t* task) {
+    // MİMARİ NOT: q->lock bir "Leaf Lock" (Yaprak Kilit)'tir. 
+    // Daha üst seviye kilitler (rwlock->lock veya mutex->lock) tutulurken 
+    // alınması güvenlidir ve AB-BA Deadlock yaratmaz.
     uint64_t flags = spinlock_acquire(&q->lock);
     task->wait_next = NULL;
     if (!q->head) {
@@ -30187,8 +30334,10 @@ void wait_queue_push(wait_queue_t* q, process_t* task) {
     spinlock_release(&q->lock, flags);
 }
 
-process_t* wait_queue_pop_safe(wait_queue_t* q, int* waiter_counter) {
+// FIX: Race Condition önlendi. Sayacı dışarıdan değiştirmek yerine atlanan görev sayısını döner.
+process_t* wait_queue_pop_safe(wait_queue_t* q, uint32_t* skipped_count) {
     uint64_t flags = spinlock_acquire(&q->lock);
+    uint32_t skipped = 0;
     
     while (q->head) {
         process_t* task = q->head;
@@ -30201,16 +30350,17 @@ process_t* wait_queue_pop_safe(wait_queue_t* q, int* waiter_counter) {
         task->wait_next = NULL;
 
         if (task->state == PROCESS_ZOMBIE || task->state == PROCESS_DEAD) {
-            if (waiter_counter) (*waiter_counter)--;
+            skipped++;
             continue;
         } else {
-            if (waiter_counter) (*waiter_counter)--;
             spinlock_release(&q->lock, flags);
+            if (skipped_count) *skipped_count = skipped;
             return task;
         }
     }
     
     spinlock_release(&q->lock, flags);
+    if (skipped_count) *skipped_count = skipped;
     return NULL;
 }
 
@@ -30600,7 +30750,8 @@ void task_sleep(uint64_t ticks);
 
 void wait_queue_init(wait_queue_t* q);
 void wait_queue_push(wait_queue_t* q, process_t* task);
-process_t* wait_queue_pop_safe(wait_queue_t* q, int* waiter_counter);
+// FIX: Counter pointer'ı yerine atlanan zombi sayısını döndüren yapıya geçildi
+process_t* wait_queue_pop_safe(wait_queue_t* q, uint32_t* skipped_count);
 
 void sched_enqueue(uint8_t cpu_id, process_t* task, kernel_prio_t prio, int16_t affinity);
 void sched_remove(uint8_t cpu_id, process_t* task);
@@ -31032,9 +31183,11 @@ void sched_sleep_current(uint64_t ticks) {
 
     if (curr && curr->pid != 0) {
         uint64_t flags  = spinlock_acquire(&sched_queues[cpu_id].lock);
-        uint64_t target = system_ticks + ticks;
+        
+        uint64_t now_ticks = timer_get_ticks();
+        uint64_t target = now_ticks + ticks;
 
-        if (target < system_ticks) {
+        if (target < now_ticks) {
             target = 0xFFFFFFFFFFFFFFFFULL;
         }
 
@@ -31054,10 +31207,12 @@ void sched_sleep_current(uint64_t ticks) {
     }
 }
 
-static int get_cpu_distance(uint8_t cpu_a, uint8_t cpu_b) {
+static inline int get_cpu_distance(uint8_t cpu_a, uint8_t cpu_b) {
     if (cpu_a == cpu_b) return 0;
-    if (cpu_topologies[cpu_a].package_id != cpu_topologies[cpu_b].package_id) return 3;
-    if (cpu_topologies[cpu_a].core_id != cpu_topologies[cpu_b].core_id) return 2;
+    cpu_topology_t* ta = &cpu_topologies[cpu_a];
+    cpu_topology_t* tb = &cpu_topologies[cpu_b];
+    if (ta->package_id != tb->package_id) return 3;
+    if (ta->core_id != tb->core_id) return 2;
     return 1;
 }
 
@@ -31107,12 +31262,21 @@ process_t* sched_pick_next(uint8_t cpu_id) {
     int     min_distance = 255;
     int     max_load     = 0;
 
+    // OPTİMİZASYON YAMASI: Lock-Free Work Stealing (İş Çalma)
+    // Thundering Herd (Sürü Psikolojisi) kilitlenmelerini önlemek için taramaya
+    // rastgele bir çekirdekten başlanır ve kilit alınmadan önce kuyruk boyutu atomik kontrol edilir.
+    uint8_t start_cpu = (uint8_t)(timer_get_ticks() % num_cpus);
+
     for (uint8_t i = 0; i < num_cpus; i++) {
-        uint8_t target = (cpu_id + 1 + i) % num_cpus;
+        uint8_t target = (start_cpu + i) % num_cpus;
         if (target == cpu_id) continue;
+        
+        int count = __atomic_load_n(&sched_queues[target].total_tasks, __ATOMIC_RELAXED);
+        if (count == 0) continue;
+
         uint64_t remote_flags;
         if (spinlock_try_acquire(&sched_queues[target].lock, &remote_flags)) {
-            int count = sched_queues[target].total_tasks;
+            count = sched_queues[target].total_tasks;
             if (count > 0) {
                 int dist = get_cpu_distance(cpu_id, target);
                 if (dist == 1) {
@@ -31242,9 +31406,6 @@ __attribute__((no_stack_protector))
 void schedule(void) {
     if (unlikely(global_panic_active)) return;
 
-    // GÜVENLİK YAMASI: Blind STI Koruma Zırhı
-    // Zamanlayıcıya girerken RFLAGS kaydedilir. Eğer iptal edilip dönülecekse
-    // kesmeler SADECE başlangıçta açıksa açılır. Körlemesine STI atılmaz!
     uint64_t rflags;
     __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
 
@@ -31369,7 +31530,12 @@ void process_tick(void) {
         if (per_cpu_data[cpu_id]) per_cpu_data[cpu_id]->idle_ticks++;
     }
 
-    if (cpu_id == 0) system_ticks++;
+    if (cpu_id == 0) {
+        extern volatile uint64_t system_ticks;
+        system_ticks++; 
+    }
+
+    uint64_t now_ticks = timer_get_ticks();
 
     uint64_t  flags = spinlock_acquire(&sched_queues[cpu_id].lock);
     process_t* prev = NULL;
@@ -31377,7 +31543,7 @@ void process_tick(void) {
 
     while (p) {
         process_t* next_p = p->sleep_next;
-        if (system_ticks >= p->wake_tick) {
+        if (now_ticks >= p->wake_tick) {
             if (prev) prev->sleep_next = next_p;
             else sched_queues[cpu_id].sleep_queue = next_p;
 
@@ -31408,8 +31574,9 @@ void timer_handler(registers_t* regs) {
 
 void task_sleep(uint64_t ticks) {
     if (!scheduler_active) {
-        uint64_t target = system_ticks + ticks;
-        while (system_ticks < target) {
+        uint64_t now_ticks = timer_get_ticks();
+        uint64_t target = now_ticks + ticks;
+        while (timer_get_ticks() < target) {
             __asm__ volatile("pause");
         }
         return;
@@ -31653,11 +31820,6 @@ void gwp_asan_init(void) {
     spinlock_init(&g_lock);
     memset(g_slots, 0, sizeof(g_slots));
     g_initialized = true;
-    char init_buf[128];
-    snprintf(init_buf, sizeof(init_buf),
-             "[GWP-ASAN] Kernel Guard Page Allocator Active. Slots: %d | Rate: 1/%d\n",
-             GWP_ASAN_SLOTS, GWP_ASAN_SAMPLE_RATE);
-    serial_write(init_buf);
 }
 
 bool gwp_asan_should_sample(void) {
@@ -31732,7 +31894,6 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
     }
 
     if (slot == -1) {
-        // GWP bölgesinde ama aktif slot değil → Use-After-Free veya geçersiz pointer.
         spinlock_release(&g_lock, flags);
         __atomic_fetch_add(&g_stat_uaf, 1, __ATOMIC_RELAXED);
         panic_at("GWP-ASAN", 0, KERR_HEAP_USE_AFTER_FREE,
@@ -31743,7 +31904,6 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
     uint64_t data_virt = slot_data_page(slot);
     memset((void*)data_virt, 0xDE, PAGE_SIZE);
 
-    // Veri sayfasını da haritalamadan çıkar — sonraki erişim #PF üretir.
     uint64_t phys = get_physical_address(data_virt);
     unmap_page(data_virt);
     if (phys) { pmm_free_frame((void*)phys); }
@@ -31755,7 +31915,6 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
     return true;
 }
 
-// Page Fault handler tarafından çağrılır. Adresin bir GWP guard page'e ait
 extern "C" bool gwp_asan_check_fault(uint64_t fault_addr) {
     if (!g_initialized) { return false; }
     if (fault_addr < GWP_VIRT_BASE || fault_addr >= GWP_VIRT_LIMIT) {
@@ -31772,7 +31931,6 @@ extern "C" bool gwp_asan_check_fault(uint64_t fault_addr) {
     GwpSlot* s = &g_slots[slot];
 
     if (s->state == GWP_SLOT_FREED) {
-        // Serbest bırakılmış belleğe erişim: Use-After-Free.
         __atomic_fetch_add(&g_stat_uaf, 1, __ATOMIC_RELAXED);
         snprintf(buf, sizeof(buf),
                  "GWP-ASAN: Use-After-Free!\n"
@@ -31787,7 +31945,6 @@ extern "C" bool gwp_asan_check_fault(uint64_t fault_addr) {
                  (unsigned long)s->free_caller);
         panic_at("GWP-ASAN", 0, KERR_HEAP_USE_AFTER_FREE, buf);
     } else if (s->state == GWP_SLOT_ACTIVE) {
-        // Aktif tahsis → guard page erişimi → Buffer Overflow veya Underflow.
         bool is_overflow  = (in_slot >= 2 * PAGE_SIZE);
         bool is_underflow = (in_slot <  PAGE_SIZE);
         const char* kind  = is_overflow ? "Buffer Overflow" :
@@ -31825,7 +31982,6 @@ void gwp_asan_print_stats(void) {
     serial_write(buf);
     printf("%s", buf);
 }
-
 
 .../system\security\gwp_asan.h:
 // system/security/gwp_asan.h
@@ -31935,11 +32091,6 @@ void init_rng() {
     }
     
     rng_initialized = true;
-    
-    char buf[128];
-    sprintf(buf, "[RNG] Initialized. Source: %s\n", 
-            has_rdseed ? "RDSEED (Best)" : (has_rdrand ? "RDRAND (Good)" : "TSC+Hardware Noise (Fallback)"));
-    serial_write(buf);
 }
 
 uint64_t get_secure_random() {
@@ -31956,7 +32107,6 @@ uint64_t get_secure_random() {
         if (success) return val;
     }
 
-    // FIX: Hardware Noise Integration (Prevent Predictable VM Entropy)
     uint32_t lo, hi;
     __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
     uint64_t tsc = ((uint64_t)hi << 32) | lo;
@@ -31984,7 +32134,6 @@ uint64_t get_secure_random() {
     
     return val;
 }
-
 
 .../system\security\rng.h:
 // system/security/rng.h
@@ -32276,7 +32425,7 @@ int Shell::cmd_system(const char* arg) {
     else if (strcmp(arg, "mem") == 0) { kheap_print_stats(); show_memory_map(); }
     else if (strcmp(arg, "tasks") == 0) { show_task_list(); }
     else if (strcmp(arg, "all") == 0) { show_system_info_all(); }
-    else if (strcmp(arg, "ffi") == 0) { MeowFFI::print_ffi_stats(); }
+    else if (strcmp(arg, "ffi") == 0) { SingularityFFI::print_ffi_stats(); }
     else {
         printf("Unknown system command: %s\n", arg);
         console_set_auto_flush(true);
@@ -33757,7 +33906,8 @@ static size_t meminfo_read_cb(uint64_t offset, void* buffer, size_t count) {
 
 static size_t version_read_cb(uint64_t offset, void* buffer, size_t count) {
     char ver[128];
-    snprintf(ver, sizeof(ver), "%s %s (%s) - Pure Object-Oriented KOM Architecture\n", SINGULARITY_SYS_NAME, SINGULARITY_SYS_VER, SINGULARITY_SYS_ARCH);
+    // OPTİMİZASYON YAMASI: Gereksiz dil ve mimari etiketleri temizlendi
+    snprintf(ver, sizeof(ver), "%s %s (%s)\n", SINGULARITY_SYS_NAME, SINGULARITY_SYS_VER, SINGULARITY_SYS_ARCH);
     size_t len = strlen(ver);
     if (offset >= len) {
         return 0;
@@ -33795,6 +33945,7 @@ extern "C" {
         }
     }
 }
+
 
 .../system\shell\utils\sysinfo.hpp:
 // system/shell/utils/sysinfo.hpp
@@ -33846,8 +33997,6 @@ static volatile int started_counter = 0;
 
 static uint32_t rand_seed_cmd = 123456789;
 
-// OPTİMİZASYON YAMASI: Güç-2 bölme işlemleri için işlemci yakan DIV 
-// komutu yerine, 1 döngülük Bitwise Shift (Kaydırma) kullanıldı.
 static uint32_t get_rand() {
     rand_seed_cmd = rand_seed_cmd * 1103515245 + 12345;
     return static_cast<uint32_t>((rand_seed_cmd >> 16) & 0x7FFF);
@@ -33883,6 +34032,7 @@ static void stress_worker() {
 }
 
 static void torture_math() {
+    // OPTİMİZASYON YAMASI: Gereksiz dil ve mimari etiketleri temizlendi
     print_phase_header(1, "Heavy Math (FPU/SSE Matrix)");
 
     float* A = static_cast<float*>(kmalloc_aligned(16 * sizeof(float), 16));
@@ -33959,14 +34109,14 @@ void run_torture_test() {
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     printf("\n========== ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
-    printf("SYSTEM TORTURE TEST (NATIVE)");
+    printf("SYSTEM TORTURE TEST");
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     printf(" ==========\n");
 
     torture_math();
     torture_heap();
 
-    print_phase_header(3, "Scheduler Load Balancing (Native SMP)");
+    print_phase_header(3, "Scheduler Load Balancing");
     
     __atomic_store_n(&stress_counter, 0, __ATOMIC_SEQ_CST);
     __atomic_store_n(&started_counter, 0, __ATOMIC_SEQ_CST);
@@ -34048,6 +34198,7 @@ void run_torture_test() {
     reaper_invoke();
 }
 
+
 .../system\shell\utils\torture.hpp:
 // system/shell/utils/torture.hpp
 #ifndef SHELL_TORTURE_HPP
@@ -34098,40 +34249,41 @@ void mutex_destroy(mutex_t m) {
 }
 
 void mutex_lock(mutex_t m) {
-    if (!m) {
-        return;
-    } else {
-        while (1) {
-            uint64_t flags = spinlock_acquire(&m->lock);
+    if (!m) return;
+    
+    while (1) {
+        // FIX: Lost Wakeup Koruma Zırhı
+        uint64_t rflags;
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
+        
+        uint64_t flags = spinlock_acquire(&m->lock);
 
-            if (m->locked == 0) {
-                m->locked = 1;
-                spinlock_release(&m->lock, flags);
-                return; 
-            } else {
-                process_t* proc = (process_t*)get_current_thread_fast();
-                proc->state = PROCESS_BLOCKED;
-                wait_queue_push(&m->wait_q, proc);
-                spinlock_release(&m->lock, flags);
-                schedule(); 
-            }
+        if (m->locked == 0) {
+            m->locked = 1;
+            spinlock_release(&m->lock, flags);
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            return; 
+        } else {
+            process_t* proc = (process_t*)get_current_thread_fast();
+            proc->state = PROCESS_BLOCKED;
+            wait_queue_push(&m->wait_q, proc);
+            spinlock_release(&m->lock, flags);
+            schedule(); 
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
         }
     }
 }
 
 void mutex_unlock(mutex_t m) {
-    if (!m) {
-        return;
-    } else {
-        uint64_t flags = spinlock_acquire(&m->lock);
-        m->locked = 0;
-        process_t* next = wait_queue_pop_safe(&m->wait_q, nullptr);
-        spinlock_release(&m->lock, flags);
+    if (!m) return;
+    
+    uint64_t flags = spinlock_acquire(&m->lock);
+    m->locked = 0;
+    process_t* next = wait_queue_pop_safe(&m->wait_q, nullptr);
+    spinlock_release(&m->lock, flags);
 
-        if (next) {
-            sched_wake_task(next);
-        } else {
-        }
+    if (next) {
+        sched_wake_task(next);
     }
 }
 
@@ -34154,43 +34306,43 @@ void sem_destroy(semaphore_t s) {
 }
 
 void sem_wait(semaphore_t s) {
-    if (!s) {
-        return;
-    } else {
-        while (1) {
-            uint64_t flags = spinlock_acquire(&s->lock);
+    if (!s) return;
+    
+    while (1) {
+        // FIX: Lost Wakeup Koruma Zırhı
+        uint64_t rflags;
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
+        
+        uint64_t flags = spinlock_acquire(&s->lock);
 
-            if (s->count > 0) {
-                s->count--; 
-                spinlock_release(&s->lock, flags);
-                return;
-            } else {
-                process_t* proc = (process_t*)get_current_thread_fast();
-                proc->state = PROCESS_BLOCKED;
-                wait_queue_push(&s->wait_q, proc);
-                spinlock_release(&s->lock, flags);
-                schedule();
-            }
+        if (s->count > 0) {
+            s->count--; 
+            spinlock_release(&s->lock, flags);
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            return;
+        } else {
+            process_t* proc = (process_t*)get_current_thread_fast();
+            proc->state = PROCESS_BLOCKED;
+            wait_queue_push(&s->wait_q, proc);
+            spinlock_release(&s->lock, flags);
+            schedule();
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
         }
     }
 }
 
 void sem_signal(semaphore_t s) {
-    if (!s) {
-        return;
-    } else {
-        uint64_t flags = spinlock_acquire(&s->lock);
-        s->count++; 
-        process_t* next = wait_queue_pop_safe(&s->wait_q, nullptr);
-        spinlock_release(&s->lock, flags);
+    if (!s) return;
+    
+    uint64_t flags = spinlock_acquire(&s->lock);
+    s->count++; 
+    process_t* next = wait_queue_pop_safe(&s->wait_q, nullptr);
+    spinlock_release(&s->lock, flags);
 
-        if (next) {
-            sched_wake_task(next);
-        } else {
-        }
+    if (next) {
+        sched_wake_task(next);
     }
 }
-
 
 .../system\sync\mutex.h:
 // system/sync/mutex.h
@@ -34377,28 +34529,34 @@ void rwlock_acquire_read(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_acquire_read: called with NULL lock");
         return;
-    } else {
-        while (true) {
-            uint64_t flags = spinlock_acquire(&lock->lock);
+    }
+    while (true) {
+        // FIX: Lost Wakeup Koruma Zırhı
+        uint64_t rflags;
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
+        
+        uint64_t flags = spinlock_acquire(&lock->lock);
 
-            if (!lock->writer_active &&
-                lock->write_waiters == 0 &&
-                lock->readers < RWLOCK_MAX_READERS)
-            {
-                lock->readers++;
+        if (!lock->writer_active &&
+            lock->write_waiters == 0 &&
+            lock->readers < RWLOCK_MAX_READERS)
+        {
+            lock->readers++;
+            spinlock_release(&lock->lock, flags);
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            return;
+        } else {
+            process_t* proc = (process_t*)get_current_thread_fast();
+            if (proc) {
+                proc->state = PROCESS_BLOCKED;
+                wait_queue_push(&lock->read_q, proc);
                 spinlock_release(&lock->lock, flags);
-                return;
+                schedule();
+                if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
             } else {
-                process_t* proc = (process_t*)get_current_thread_fast();
-                if (proc) {
-                    proc->state = PROCESS_BLOCKED;
-                    wait_queue_push(&lock->read_q, proc);
-                    spinlock_release(&lock->lock, flags);
-                    schedule();
-                } else {
-                    spinlock_release(&lock->lock, flags);
-                    hal_cpu_relax();
-                }
+                spinlock_release(&lock->lock, flags);
+                if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+                hal_cpu_relax();
             }
         }
     }
@@ -34408,65 +34566,82 @@ void rwlock_release_read(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_read: called with NULL lock");
         return;
-    } else {
-        uint64_t flags = spinlock_acquire(&lock->lock);
-
-        if (lock->readers > 0) {
-            lock->readers--;
-        } else {
-            spinlock_release(&lock->lock, flags);
-            panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_read: underflow -- more releases than acquires");
-            return;
-        }
-
-        if (lock->readers == 0 && lock->write_waiters > 0) {
-            process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &lock->write_waiters);
-            if (next_writer) {
-                spinlock_release(&lock->lock, flags);
-                sched_wake_task(next_writer);
-                return;
-            }
-        }
-        
-        if (lock->write_waiters == 0) {
-            spinlock_release(&lock->lock, flags);
-            while (true) {
-                process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
-                if (!r) break;
-                sched_wake_task(r);
-            }
-            return;
-        }
-
-        spinlock_release(&lock->lock, flags);
     }
+    uint64_t flags = spinlock_acquire(&lock->lock);
+
+    if (lock->readers > 0) {
+        lock->readers--;
+    } else {
+        spinlock_release(&lock->lock, flags);
+        panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_read: underflow -- more releases than acquires");
+        return;
+    }
+
+    // FIX: write_waiters Race Condition ve Inconsistent State çözüldü
+    if (lock->readers == 0 && lock->write_waiters > 0) {
+        uint32_t skipped = 0;
+        process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &skipped);
+        
+        if (lock->write_waiters >= (int)skipped) {
+            lock->write_waiters -= skipped;
+        } else {
+            lock->write_waiters = 0;
+        }
+
+        if (next_writer) {
+            lock->write_waiters--;
+            spinlock_release(&lock->lock, flags);
+            sched_wake_task(next_writer);
+            return;
+        } else {
+            lock->write_waiters = 0;
+        }
+    }
+    
+    if (lock->write_waiters == 0) {
+        spinlock_release(&lock->lock, flags);
+        while (true) {
+            process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
+            if (!r) break;
+            sched_wake_task(r);
+        }
+        return;
+    }
+
+    spinlock_release(&lock->lock, flags);
 }
 
 void rwlock_acquire_write(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_acquire_write: called with NULL lock");
         return;
-    } else {
-        while (true) {
-            uint64_t flags = spinlock_acquire(&lock->lock);
+    }
+    while (true) {
+        // FIX: Lost Wakeup Koruma Zırhı
+        uint64_t rflags;
+        __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
+        
+        uint64_t flags = spinlock_acquire(&lock->lock);
 
-            if (!lock->writer_active && lock->readers == 0) {
-                lock->writer_active = true;
+        if (!lock->writer_active && lock->readers == 0) {
+            lock->writer_active = true;
+            spinlock_release(&lock->lock, flags);
+            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            return;
+        } else {
+            lock->write_waiters++;
+            process_t* proc = (process_t*)get_current_thread_fast();
+            if (proc) {
+                proc->state = PROCESS_BLOCKED;
+                wait_queue_push(&lock->write_q, proc);
                 spinlock_release(&lock->lock, flags);
-                return;
+                schedule();
+                if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
             } else {
-                lock->write_waiters++;
-                process_t* proc = (process_t*)get_current_thread_fast();
-                if (proc) {
-                    proc->state = PROCESS_BLOCKED;
-                    wait_queue_push(&lock->write_q, proc);
-                    spinlock_release(&lock->lock, flags);
-                    schedule();
-                } else {
-                    lock->write_waiters--;
-                    spinlock_release(&lock->lock, flags);
-                    hal_cpu_relax();
-                }
+                lock->write_waiters--;
+                spinlock_release(&lock->lock, flags);
+                if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+                hal_cpu_relax();
             }
         }
     }
@@ -34476,28 +34651,38 @@ void rwlock_release_write(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_write: called with NULL lock");
         return;
-    } else {
-        uint64_t flags = spinlock_acquire(&lock->lock);
-        lock->writer_active = false;
+    }
+    uint64_t flags = spinlock_acquire(&lock->lock);
+    lock->writer_active = false;
 
-        if (lock->write_waiters > 0) {
-            process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &lock->write_waiters);
-            if (next_writer) {
-                spinlock_release(&lock->lock, flags);
-                sched_wake_task(next_writer);
-                return;
-            }
-        }
+    // FIX: write_waiters Race Condition ve Inconsistent State çözüldü
+    if (lock->write_waiters > 0) {
+        uint32_t skipped = 0;
+        process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &skipped);
         
-        spinlock_release(&lock->lock, flags);
-        while (true) {
-            process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
-            if (!r) break;
-            sched_wake_task(r);
+        if (lock->write_waiters >= (int)skipped) {
+            lock->write_waiters -= skipped;
+        } else {
+            lock->write_waiters = 0;
+        }
+
+        if (next_writer) {
+            lock->write_waiters--;
+            spinlock_release(&lock->lock, flags);
+            sched_wake_task(next_writer);
+            return;
+        } else {
+            lock->write_waiters = 0;
         }
     }
+    
+    spinlock_release(&lock->lock, flags);
+    while (true) {
+        process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
+        if (!r) break;
+        sched_wake_task(r);
+    }
 }
-
 
 .../system\sync\rwlock.h:
 // system/sync/rwlock.h

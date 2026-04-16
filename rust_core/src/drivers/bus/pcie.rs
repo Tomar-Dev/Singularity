@@ -34,7 +34,6 @@ pub struct PcieDevice {
     pub header_type: u8,
 }
 
-// OPTİMİZASYON YAMASI: FFI Struct Marshalling için eklendi
 #[repr(C)]
 pub struct FfiPcieDevice {
     pub bus: u8,
@@ -70,7 +69,7 @@ impl PcieDevice {
                 if offset >= 256 { 
                     0xFFFFFFFF 
                 } else {
-                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFC);
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
                     let _guard = PCI_LEGACY_LOCK.lock();
                     unsafe {
                         io::outl(CONFIG_ADDRESS, address);
@@ -96,7 +95,7 @@ impl PcieDevice {
             },
             PcieBackend::Legacy => {
                 if offset >= 256 { return; } else {
-                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFC);
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
                     let _guard = PCI_LEGACY_LOCK.lock();
                     unsafe {
                         io::outl(CONFIG_ADDRESS, address);
@@ -107,18 +106,125 @@ impl PcieDevice {
         }
     }
 
+    // FIX: Native 16-bit Read to prevent W1C corruption
     pub unsafe fn read_word(bus: u8, dev: u8, func: u8, offset: u16) -> u16 {
-        let dw = unsafe { Self::read_dword(bus, dev, func, offset & 0xFFFC) };
-        let shift = (offset & 2) * 8;
-        ((dw >> shift) & 0xFFFF) as u16
+        let backend = *PCIE_BACKEND.lock();
+        match backend {
+            PcieBackend::Pcie { ecam_virt, start_bus, end_bus } => {
+                if bus >= start_bus && bus <= end_bus {
+                    let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
+                    let ptr = (ecam_virt + phys_offset) as *const u16;
+                    unsafe { read_volatile(ptr) }
+                } else { 0xFFFF }
+            },
+            PcieBackend::Legacy => {
+                if offset >= 256 { 0xFFFF } else {
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
+                    let _guard = PCI_LEGACY_LOCK.lock();
+                    unsafe {
+                        io::outl(CONFIG_ADDRESS, address);
+                        io::inw(CONFIG_DATA + (offset & 2))
+                    }
+                }
+            }
+        }
     }
 
+    // FIX: Native 16-bit Write to prevent W1C corruption
     pub unsafe fn write_word(bus: u8, dev: u8, func: u8, offset: u16, value: u16) {
-        let dw = unsafe { Self::read_dword(bus, dev, func, offset & 0xFFFC) };
-        let shift = (offset & 2) * 8;
-        let mask = 0xFFFF << shift;
-        let new_dw = (dw & !mask) | ((value as u32) << shift);
-        unsafe { Self::write_dword(bus, dev, func, offset & 0xFFFC, new_dw); }
+        let backend = *PCIE_BACKEND.lock();
+        match backend {
+            PcieBackend::Pcie { ecam_virt, start_bus, end_bus } => {
+                if bus >= start_bus && bus <= end_bus {
+                    let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
+                    let ptr = (ecam_virt + phys_offset) as *mut u16;
+                    unsafe { write_volatile(ptr, value); }
+                }
+            },
+            PcieBackend::Legacy => {
+                if offset < 256 {
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
+                    let _guard = PCI_LEGACY_LOCK.lock();
+                    unsafe {
+                        io::outl(CONFIG_ADDRESS, address);
+                        io::outw(CONFIG_DATA + (offset & 2), value);
+                    }
+                }
+            }
+        }
+    }
+
+    // FIX: Native 8-bit Read
+    pub unsafe fn read_byte(bus: u8, dev: u8, func: u8, offset: u16) -> u8 {
+        let backend = *PCIE_BACKEND.lock();
+        match backend {
+            PcieBackend::Pcie { ecam_virt, start_bus, end_bus } => {
+                if bus >= start_bus && bus <= end_bus {
+                    let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
+                    let ptr = (ecam_virt + phys_offset) as *const u8;
+                    unsafe { read_volatile(ptr) }
+                } else { 0xFF }
+            },
+            PcieBackend::Legacy => {
+                if offset >= 256 { 0xFF } else {
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
+                    let _guard = PCI_LEGACY_LOCK.lock();
+                    unsafe {
+                        io::outl(CONFIG_ADDRESS, address);
+                        io::inb(CONFIG_DATA + (offset & 3))
+                    }
+                }
+            }
+        }
+    }
+
+    // FIX: Native 8-bit Write
+    pub unsafe fn write_byte(bus: u8, dev: u8, func: u8, offset: u16, value: u8) {
+        let backend = *PCIE_BACKEND.lock();
+        match backend {
+            PcieBackend::Pcie { ecam_virt, start_bus, end_bus } => {
+                if bus >= start_bus && bus <= end_bus {
+                    let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
+                    let ptr = (ecam_virt + phys_offset) as *mut u8;
+                    unsafe { write_volatile(ptr, value); }
+                }
+            },
+            PcieBackend::Legacy => {
+                if offset < 256 {
+                    let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
+                    let _guard = PCI_LEGACY_LOCK.lock();
+                    unsafe {
+                        io::outl(CONFIG_ADDRESS, address);
+                        io::outb(CONFIG_DATA + (offset & 3), value);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn wakeup(&self) {
+        unsafe {
+            let status = Self::read_word(self.bus, self.dev, self.func, 0x06);
+            if (status & (1 << 4)) != 0 { 
+                let mut cap_ptr = (Self::read_word(self.bus, self.dev, self.func, 0x34) & 0xFF) as u16;
+                while cap_ptr != 0 {
+                    let cap_reg = Self::read_word(self.bus, self.dev, self.func, cap_ptr);
+                    let cap_id = (cap_reg & 0xFF) as u8;
+                    let next_ptr = ((cap_reg >> 8) & 0xFF) as u16;
+                    
+                    if cap_id == 0x01 { 
+                        let pmcsr_addr = cap_ptr + 4;
+                        let mut pmcsr = Self::read_word(self.bus, self.dev, self.func, pmcsr_addr);
+                        if (pmcsr & 0x03) != 0 { 
+                            pmcsr &= !0x03; 
+                            Self::write_word(self.bus, self.dev, self.func, pmcsr_addr, pmcsr);
+                        }
+                        break;
+                    }
+                    cap_ptr = next_ptr;
+                }
+            }
+        }
     }
 
     pub fn probe(bus: u8, dev: u8, func: u8) -> Option<Self> {
@@ -195,6 +301,7 @@ pub extern "C" fn rust_pcie_init_ecam(mcfg_phys: u64, start_bus: u8, end_bus: u8
 fn scan_bus(bus: u8, devices: &mut Vec<PcieDevice>, dev_count: &mut u32) {
     for dev in 0..32 {
         if let Some(p) = PcieDevice::probe(bus, dev, 0) {
+            p.wakeup(); 
             devices.push(p);
             *dev_count += 1;
             
@@ -212,6 +319,7 @@ fn scan_bus(bus: u8, devices: &mut Vec<PcieDevice>, dev_count: &mut u32) {
             if (p.header_type & 0x80) != 0 { 
                 for f in 1..8 {
                     if let Some(pf) = PcieDevice::probe(bus, dev, f) {
+                        pf.wakeup(); 
                         devices.push(pf);
                         *dev_count += 1;
                         
@@ -255,7 +363,6 @@ pub extern "C" fn rust_pcie_get_device_count() -> u32 {
     PCIE_DEVICES.lock().len() as u32
 }
 
-// OPTİMİZASYON YAMASI: 9 pointer yerine tek bir yapıyı değer olarak döndür (Zero Overhead)
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_pcie_get_device_info(index: u32) -> FfiPcieDevice {
     let devices = PCIE_DEVICES.lock();
@@ -282,6 +389,26 @@ pub extern "C" fn rust_pcie_read_dword(bus: u8, dev: u8, func: u8, offset: u16) 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_pcie_write_dword(bus: u8, dev: u8, func: u8, offset: u16, val: u32) {
     unsafe { PcieDevice::write_dword(bus, dev, func, offset, val) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_pcie_read_word(bus: u8, dev: u8, func: u8, offset: u16) -> u16 {
+    unsafe { PcieDevice::read_word(bus, dev, func, offset) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_pcie_write_word(bus: u8, dev: u8, func: u8, offset: u16, val: u16) {
+    unsafe { PcieDevice::write_word(bus, dev, func, offset, val) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_pcie_read_byte(bus: u8, dev: u8, func: u8, offset: u16) -> u8 {
+    unsafe { PcieDevice::read_byte(bus, dev, func, offset) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_pcie_write_byte(bus: u8, dev: u8, func: u8, offset: u16, val: u8) {
+    unsafe { PcieDevice::write_byte(bus, dev, func, offset, val) }
 }
 
 fn print_c(s: &str, fg: u8) {

@@ -29,8 +29,6 @@ static volatile int started_counter = 0;
 
 static uint32_t rand_seed_cmd = 123456789;
 
-// OPTİMİZASYON YAMASI: Güç-2 bölme işlemleri için işlemci yakan DIV 
-// komutu yerine, 1 döngülük Bitwise Shift (Kaydırma) kullanıldı.
 static uint32_t get_rand() {
     rand_seed_cmd = rand_seed_cmd * 1103515245 + 12345;
     return static_cast<uint32_t>((rand_seed_cmd >> 16) & 0x7FFF);
@@ -66,6 +64,7 @@ static void stress_worker() {
 }
 
 static void torture_math() {
+    // OPTİMİZASYON YAMASI: Gereksiz dil ve mimari etiketleri temizlendi
     print_phase_header(1, "Heavy Math (FPU/SSE Matrix)");
 
     float* A = static_cast<float*>(kmalloc_aligned(16 * sizeof(float), 16));
@@ -142,14 +141,14 @@ void run_torture_test() {
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     printf("\n========== ");
     vga_set_color(VGA_WHITE, VGA_BLACK);
-    printf("SYSTEM TORTURE TEST (NATIVE)");
+    printf("SYSTEM TORTURE TEST");
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     printf(" ==========\n");
 
     torture_math();
     torture_heap();
 
-    print_phase_header(3, "Scheduler Load Balancing (Native SMP)");
+    print_phase_header(3, "Scheduler Load Balancing");
     
     __atomic_store_n(&stress_counter, 0, __ATOMIC_SEQ_CST);
     __atomic_store_n(&started_counter, 0, __ATOMIC_SEQ_CST);

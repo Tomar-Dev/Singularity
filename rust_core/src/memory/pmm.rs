@@ -1,5 +1,5 @@
 // rust_core/src/memory/pmm.rs
-// MeowOS Native Physical Memory Manager (v7.2 Enterprise)
+// Singularity Native Physical Memory Manager (v7.2 Enterprise)
 
 use crate::arch::sync::IrqSpinlock;
 use core::ffi::c_void;
@@ -295,7 +295,7 @@ pub extern "C" fn pmm_init(multiboot_addr: usize, kernel_end: usize) {
 }
 
 unsafe fn alloc_from_node(state: &mut PmmState, preferred_node: usize) -> *mut c_void {
-    let mut order = [0usize; MAX_NUMA_NODES];
+    let mut order =[0usize; MAX_NUMA_NODES];
     order[0] = preferred_node;
     let mut k = 1;
     for i in 0..MAX_NUMA_NODES {

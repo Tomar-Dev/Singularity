@@ -30,15 +30,10 @@ static numa_node_t* get_or_create_node(uint32_t domain) {
 }
 
 void init_numa() {
-    serial_write("[NUMA] Searching for SRAT table...\n");
-    
     struct acpi_srat_header* srat = (struct acpi_srat_header*)acpi_find_table("SRAT");
     if (!srat) {
-        serial_write("[NUMA] SRAT not found. System is UMA (Uniform Memory Access).\n");
         return;
     }
-    
-    serial_write("[NUMA] SRAT found. Parsing topology...\n");
     
     uint8_t* ptr = (uint8_t*)srat + sizeof(struct acpi_srat_header);
     uint8_t* end = (uint8_t*)srat + srat->length;
@@ -81,16 +76,10 @@ void init_numa() {
                 }
             }
         } else {
-            // Defansif Programlama: Bilinmeyen tipleri yoksay
-            // serial_write("[NUMA] Ignored unknown SRAT entry type.\n");
         }
         
         ptr += header->length;
     }
-    
-    char buf[128];
-    sprintf(buf, "[NUMA] Detected %d Nodes.\n", numa_node_count);
-    serial_write(buf);
 }
 
 void numa_print_topology() {

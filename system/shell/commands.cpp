@@ -212,7 +212,7 @@ int Shell::cmd_system(const char* arg) {
     else if (strcmp(arg, "mem") == 0) { kheap_print_stats(); show_memory_map(); }
     else if (strcmp(arg, "tasks") == 0) { show_task_list(); }
     else if (strcmp(arg, "all") == 0) { show_system_info_all(); }
-    else if (strcmp(arg, "ffi") == 0) { MeowFFI::print_ffi_stats(); }
+    else if (strcmp(arg, "ffi") == 0) { SingularityFFI::print_ffi_stats(); }
     else {
         printf("Unknown system command: %s\n", arg);
         console_set_auto_flush(true);

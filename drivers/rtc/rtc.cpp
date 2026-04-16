@@ -145,11 +145,6 @@ RTCDriver::RTCDriver() : Device("System Clock", DEV_UNKNOWN) {
 
 int RTCDriver::init(void) {
     DeviceManager::registerDevice(this);
-    if (uefi_available()) {
-        print_status("[ RTC  ]", "Using UEFI Runtime Services for Time", "INFO");
-    } else {
-        print_status("[ RTC  ]", "UEFI unavailable. Using CMOS RTC fallback.", "WARN");
-    }
     return 1;
 }
 

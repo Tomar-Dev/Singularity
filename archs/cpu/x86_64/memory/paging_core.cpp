@@ -87,15 +87,14 @@ void PagingManager::init() {
         uint64_t efer = rdmsr(MSR_EFER);
         if (!(efer & MSR_EFER_NXE)) wrmsr(MSR_EFER, efer | MSR_EFER_NXE);
         nx_enabled = true;
-        serial_write("[PAGING] NX (No-Execute) Enabled.\n");
     }
 
     __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(7), "c"(0));
     uint64_t cr4_val; 
     __asm__ volatile("mov %%cr4, %0" : "=r"(cr4_val));
     cr4_val |= (1u << 7);
-    if (b & (1u << 7))  { cr4_val |= CR4_SMEP; serial_write("[PAGING] SMEP Enabled.\n"); }
-    if (b & (1u << 20)) { cr4_val |= CR4_SMAP; serial_write("[PAGING] SMAP Enabled.\n"); }
+    if (b & (1u << 7))  { cr4_val |= CR4_SMEP; }
+    if (b & (1u << 20)) { cr4_val |= CR4_SMAP; }
     __asm__ volatile("mov %0, %%cr4" :: "r"(cr4_val));
 
     g_Paging = this;
@@ -105,7 +104,6 @@ void PagingManager::initPcid() {
     uint32_t a, b, c, d;
     __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1));
     if (!(c & (1u << 17))) { 
-        serial_write("[PAGING] PCID: not supported.\n"); 
         return; 
     }
     uint64_t cr4_val; 
@@ -117,7 +115,6 @@ void PagingManager::initPcid() {
     cr4_val |= (1u << 17);
     __asm__ volatile("mov %0, %%cr4" :: "r"(cr4_val));
     pcid_enabled = true;
-    serial_write("[PAGING] PCID activated (CR4.PCIDE=1).\n");
 }
 
 uint16_t PagingManager::allocPcid() {
@@ -174,7 +171,7 @@ int PagingManager::mapPage(uint64_t virt, uint64_t phys, uint64_t flags) {
             pmm_free_frame(reinterpret_cast<void*>(ph)); 
         }
         spinlock_release(&paging_lock, irq); 
-        if (c4) hal_tlb_flush_all(); // GÜVENLİK YAMASI: IPI kilit dışına taşındı
+        if (c4) hal_tlb_flush_all(); 
         return 0;
     }
 
@@ -188,7 +185,7 @@ int PagingManager::mapPage(uint64_t virt, uint64_t phys, uint64_t flags) {
         }
         pd->entries[p2].setRaw(phys | flags);
         spinlock_release(&paging_lock, irq); 
-        tlbInvalidate(virt, 1); // GÜVENLİK YAMASI: Kilit sonrası çağrı
+        tlbInvalidate(virt, 1); 
         return 1;
     }
 
@@ -206,12 +203,12 @@ int PagingManager::mapPage(uint64_t virt, uint64_t phys, uint64_t flags) {
             pmm_free_frame(reinterpret_cast<void*>(ph)); 
         }
         spinlock_release(&paging_lock, irq); 
-        if (c4 || c3) hal_tlb_flush_all(); // GÜVENLİK YAMASI
+        if (c4 || c3) hal_tlb_flush_all(); 
         return 0;
     }
     pt->entries[p1].setRaw(phys | flags);
     spinlock_release(&paging_lock, irq);
-    tlbInvalidate(virt, 1); // GÜVENLİK YAMASI
+    tlbInvalidate(virt, 1); 
     return 1;
 }
 
@@ -237,12 +234,12 @@ int PagingManager::mapPage1G(uint64_t virt, uint64_t phys, uint64_t flags) {
             pmm_free_frame(reinterpret_cast<void*>(ph)); 
         }
         spinlock_release(&paging_lock, irq); 
-        if (c4) hal_tlb_flush_all(); // GÜVENLİK YAMASI
+        if (c4) hal_tlb_flush_all(); 
         return 0;
     }
     pdp->entries[p3].setRaw(phys | flags);
     spinlock_release(&paging_lock, irq);
-    tlbInvalidate(virt, 1); // GÜVENLİK YAMASI
+    tlbInvalidate(virt, 1); 
     return 1;
 }
 
@@ -432,7 +429,7 @@ bool PagingManager::handleCowFault(uint64_t fault_addr) {
     }
     spinlock_release(&paging_lock, irq);
     void* npp = pmm_alloc_frame(); 
-    if(!npp){serial_write("[CoW] OOM\n");return false;}
+    if(!npp){return false;}
     uint64_t np = reinterpret_cast<uintptr_t>(npp);
     void* tmp = g_Paging->ioremap(np, PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_NX);
     if(!tmp){pmm_free_frame(npp);return false;}

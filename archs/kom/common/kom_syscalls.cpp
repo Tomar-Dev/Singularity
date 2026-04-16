@@ -14,7 +14,6 @@ extern "C" {
 void kom_init() {
     kernel_handle_table = new (kom_memory_buffer) HandleTable();
     kernel_handle_table->init();
-    printf("[ KOM  ] Kernel Object Model Initialized (Capability Sec Active)\n");
 }
 
 uint64_t kom_open(const char* path, uint16_t requested_caps) {
