@@ -7,7 +7,6 @@ use alloc::format;
 use crate::arch::sync::IrqSpinlock;
 use core::ffi::{c_void, c_char, CStr};
 
-// QUAL-001 FIX: Color codes directly matched with C definitions
 const CONSOLE_COLOR_BLACK:       u8 = 0;
 const CONSOLE_COLOR_LIGHT_GREY:  u8 = 7;
 const CONSOLE_COLOR_DARK_GREY:   u8 = 8;
@@ -34,7 +33,7 @@ unsafe extern "C" {
     pub fn cpp_device_read_block(dev: *mut c_void, lba: u64, count: u32, buf: *mut u8) -> i32;
     pub fn cpp_partition_get_gpt_type(dev: *mut c_void) -> *const c_char;
     pub fn cpp_device_get_free_space(dev: *mut c_void) -> u64;
-    pub fn console_set_color(fg: u8, bg: u8); // QUAL-001 FIX
+    pub fn console_set_color(fg: u8, bg: u8); 
     pub fn device_release(dev: *mut c_void);
 }
 
@@ -104,8 +103,11 @@ pub fn register_device_silent(name: &str, class: DeviceClass, block_size: u32, t
     token
 }
 
+// BUG-003 FIX: Size Formatting returns "Unknown" correctly instead of 0 B
 fn format_size_dec(bytes: u64) -> String {
-    if bytes == 0 || bytes == u64::MAX { 
+    if bytes == u64::MAX {
+        return String::from("Unknown");
+    } else if bytes == 0 { 
         return String::from("0 B"); 
     } else if bytes >= 1024 * 1024 * 1024 {
         let gb = bytes / (1024 * 1024 * 1024);
@@ -139,12 +141,10 @@ fn pad_right(s: &str, width: usize) -> String {
     }
 }
 
-// OPTİMİZASYON YAMASI: FFI üzerinden string allocation (tahsis) işlemleri tamamen
-// iptal edilerek, maliyetsiz bir integer (enum) döndüren modele geçildi.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_device_detect_fs(dev: *mut c_void) -> u32 {
     let bs = unsafe { cpp_device_get_block_size(dev) } as usize;
-    let mut fs = 0; // 0 = raw
+    let mut fs = 0; 
 
     if bs > 0 {
         let mut buf = alloc::vec![0u8; bs.max(2048)];
@@ -155,52 +155,30 @@ pub unsafe extern "C" fn rust_device_detect_fs(dev: *mut c_void) -> u32 {
                 if tag_id == 2 {
                     let mut sum: u8 = 0;
                     for i in 0..16 {
-                        if i != 4 { 
-                            sum = sum.wrapping_add(buf[i]); 
-                        } else { 
-                            /* Escaped Checksum bit */ 
-                        }
+                        if i != 4 { sum = sum.wrapping_add(buf[i]); } else { /* Ignore */ }
                     }
                     if sum == buf[4] {
                         fs = 4; // udf
-                    } else {
-                        // Integrity lost
-                    }
-                } else {
-                    // Not AVDP
-                }
-            } else {
-                // I/O Fault
-            }
+                    } else { /* Checksum failed */ }
+                } else { /* Not AVDP */ }
+            } else { /* Block Read Error */ }
             
             if fs == 0 && bs == 2048 {
                 if unsafe { cpp_device_read_block(dev, 16, 1, buf.as_mut_ptr()) } == 1 {
                     if buf[1] == b'C' && buf[2] == b'D' && buf[3] == b'0' && buf[4] == b'0' && buf[5] == b'1' {
                         fs = 3; /* iso9660 */
-                    } else {
-                        // Not ISO9660
-                    }
-                } else {
-                    // I/O Fault
-                }
-            } else {
-                // Bypass
-            }
-        } else {
-            // Not optical media bounds
-        }
+                    } else { /* Not ISO9660 */ }
+                } else { /* Block Read Error */ }
+            } else { /* Ignored */ }
+        } else { /* Out of bounds */ }
 
         if fs == 0 && bs == 512 {
             if unsafe { cpp_device_read_block(dev, 2, 2, buf.as_mut_ptr()) } == 1 {
                 let ext_magic = u16::from_le_bytes([buf[56], buf[57]]); 
                 if ext_magic == 0xEF53 { 
                     fs = 2; /* ext4 */ 
-                } else {
-                    // Not Ext4
-                }
-            } else {
-                // I/O Fault
-            }
+                } else { /* Not Ext4 */ }
+            } else { /* Block Read Error */ }
             
             if fs == 0 {
                 let mut boot_buf =[0u8; 512];
@@ -208,23 +186,13 @@ pub unsafe extern "C" fn rust_device_detect_fs(dev: *mut c_void) -> u32 {
                     if boot_buf[510] == 0x55 && boot_buf[511] == 0xAA {
                         if &boot_buf[82..87] == b"FAT32" { 
                             fs = 1; /* fat32 */ 
-                        } else {
-                            // Not FAT32
-                        }
-                    } else {
-                        // Missing boot signature
-                    }
-                } else {
-                    // I/O Fault
-                }
-            } else {
-                // FS already found
-            }
-        } else {
-            // Not standard HDD block size
-        }
+                        } else { /* Not FAT32 */ }
+                    } else { /* Missing Magic */ }
+                } else { /* Block Read Error */ }
+            } else { /* Found */ }
+        } else { /* Ignored */ }
     } else {
-        fs = 5; // Unknown / Block size 0
+        fs = 5; // Unknown
     }
 
     fs
@@ -263,7 +231,7 @@ pub extern "C" fn rust_device_print_disks() {
 
                 let mut p_count = 0;
                 let mut p_idx = 0u32;
-                let mut p_name_buf = [0i8; 64];
+                let mut p_name_buf =[0i8; 64];
                 let mut p_type = 0u8;
                 let prefix = format!("{}_p", d_name);
                 
@@ -272,9 +240,7 @@ pub extern "C" fn rust_device_print_disks() {
                     let p_name = unsafe { CStr::from_ptr(p_name_buf.as_ptr()).to_str().unwrap_or("") };
                     if p_name.starts_with(&prefix) { 
                         p_count += 1; 
-                    } else {
-                        // Unrelated element
-                    }
+                    } else { /* Bypass */ }
                 }
 
                 print_c(&pad_right(&format!(" {}", d_name), 15), CONSOLE_COLOR_LIGHT_GREEN);
@@ -321,14 +287,14 @@ pub extern "C" fn rust_device_print_parts() {
             disk_list.push(dev_ptr);
         } else if !dev_ptr.is_null() {
             unsafe { device_release(dev_ptr); }
-        } else {
-            // Null pointer handled
-        }
+        } else { /* Passed */ }
     }
 
     for &disk_ptr in disk_list.iter() {
         let d_name = unsafe { CStr::from_ptr(cpp_device_get_name(disk_ptr)).to_str().unwrap_or("?") };
         let d_total_cap = unsafe { cpp_device_get_capacity(disk_ptr) };
+        let is_ro = unsafe { cpp_device_is_read_only(disk_ptr) };
+        let fs_base_val = unsafe { rust_device_detect_fs(disk_ptr) };
         let mut d_used_cap = 0u64;
 
         let mut p_idx = 0u32;
@@ -365,23 +331,23 @@ pub extern "C" fn rust_device_print_parts() {
                     print_c(&format!("| {}\n", free_str), CONSOLE_COLOR_LIGHT_GREEN);
 
                     unsafe { device_release(part_ptr); }
-                } else {
-                    // Safe drop
-                }
-            } else {
-                // Not a partition of current disk
-            }
+                } else { /* Passed */ }
+            } else { /* Passed */ }
         }
 
-        if d_total_cap > d_used_cap + (1024 * 1024) {
-            let unalloc = d_total_cap - d_used_cap;
-            print_c(&pad_right(" *Unallocated*", 15), CONSOLE_COLOR_DARK_GREY);
-            print_c(&pad_right(&format!("| {}", d_name), 15), CONSOLE_COLOR_DARK_GREY);
-            print_c(&pad_right("| None", 15), CONSOLE_COLOR_DARK_GREY);
-            print_c(&pad_right(&format!("| {}", format_size_dec(unalloc)), 15), CONSOLE_COLOR_DARK_GREY);
-            print_c("| Available for Use\n", CONSOLE_COLOR_DARK_GREY);
+        // BUG-004 FIX: Do not calculate Unallocated Space for Optical / Read-Only media.
+        // Types: 3 (ISO9660) and 4 (UDF) are optical media profiles natively.
+        if !is_ro && fs_base_val != 3 && fs_base_val != 4 {
+            if d_total_cap > d_used_cap + (1024 * 1024) {
+                let unalloc = d_total_cap - d_used_cap;
+                print_c(&pad_right(" *Unallocated*", 15), CONSOLE_COLOR_DARK_GREY);
+                print_c(&pad_right(&format!("| {}", d_name), 15), CONSOLE_COLOR_DARK_GREY);
+                print_c(&pad_right("| None", 15), CONSOLE_COLOR_DARK_GREY);
+                print_c(&pad_right(&format!("| {}", format_size_dec(unalloc)), 15), CONSOLE_COLOR_DARK_GREY);
+                print_c("| Available for Use\n", CONSOLE_COLOR_DARK_GREY);
+            } else { /* Disk perfectly matched */ }
         } else {
-            // Disk space fully claimed
+            // Read-Only disc media bypasses unallocated reporting
         }
         unsafe { device_release(disk_ptr); }
     }

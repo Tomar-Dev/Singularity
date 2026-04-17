@@ -25,7 +25,7 @@ typedef struct {
     uint8_t  second;
     uint8_t  pad1;
     uint32_t nanosecond;
-    int16_t  timezone;    // Minutes offset from UTC; EFI_UNSPECIFIED_TIMEZONE = 0x07FF
+    int16_t  timezone;    
     uint8_t  daylight;
     uint8_t  pad2;
 } efi_time_t;
@@ -42,7 +42,6 @@ typedef struct {
 
 // EFI System Table signature: "IBI SYST" (0x5453595320494249)
 #define EFI_SYSTEM_TABLE_SIGNATURE  0x5453595320494249ULL
-// EFI Runtime Services signature: "RUNTSERV" (0x56524553544E5552)
 #define EFI_RUNTIME_SERVICES_SIGNATURE 0x56524553544E5552ULL
 
 typedef struct {
@@ -63,6 +62,12 @@ typedef struct {
     void* query_variable_info;
 } efi_runtime_services_t;
 
+// BUG-001 FIX: EFI Configuration Table Structures Added
+typedef struct {
+    efi_guid_t vendor_guid;
+    void*      vendor_table;
+} efi_configuration_table_t;
+
 typedef struct {
     efi_table_header_t hdr;
     void*    firmware_vendor;
@@ -76,7 +81,7 @@ typedef struct {
     void*    runtime_services;
     void*    boot_services;
     uint64_t number_of_table_entries;
-    void*    configuration_table;
+    void*    configuration_table; // Points to efi_configuration_table_t array
 } efi_system_table_t;
 
 #define EFI_RESET_COLD     0
@@ -115,6 +120,8 @@ int uefi_set_variable(const char* name, efi_guid_t* guid,
                        uint32_t attributes,
                        uint64_t data_size, void* data);
 
+void* uefi_get_configuration_table(efi_guid_t* target_guid);
+
 #ifdef __cplusplus
 }
 
@@ -144,6 +151,8 @@ public:
     int setVariable(const char* name, efi_guid_t* guid,
                     uint32_t attributes,
                     uint64_t data_size, void* data);
+                    
+    void* getConfigurationTable(efi_guid_t* target_guid);
 };
 
 #endif

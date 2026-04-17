@@ -30,7 +30,9 @@ extern "C" {
     extern volatile uint64_t cpu_tick_counts[];
     extern uint8_t num_cpus;
     extern bool uefi_available();
-    extern void kmain(void*);
+    
+    // YENİ: LTO Optimization Bypass
+    extern void syscall_entry();
     
     struct process;
     extern struct process* process_list_head;
@@ -206,8 +208,10 @@ static int check_rtc_sanity() {
 
 static int check_symbol_resolver() {
     uint64_t offset = 0;
-    const char* sym = ksyms_resolve_symbol((uint64_t)kmain, &offset);
-    if (sym && strcmp(sym, "kmain") == 0 && offset == 0) { return 1; } else { return 2; } 
+    // BUG-006 FIX: kmain LTO tarafından inline yapılmış olabilir. 
+    // Assembler tarafından export edilen kesin fonksiyon: syscall_entry
+    const char* sym = ksyms_resolve_symbol((uint64_t)syscall_entry, &offset);
+    if (sym && strcmp(sym, "syscall_entry") == 0 && offset == 0) { return 1; } else { return 2; } 
 }
 
 static int check_rcu_sync() {
