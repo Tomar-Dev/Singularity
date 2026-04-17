@@ -65,7 +65,6 @@ extern void init_string_optimization();
 extern void detect_cpu_topology();
 extern void vmm_init_manager();
 extern void hardware_integrity_check();
-extern void vga_set_color(uint8_t fg, uint8_t bg);
 extern void shell_init_c();
 extern void shell_update_c();
 extern void shell_run_startup_c();
@@ -85,25 +84,14 @@ static struct multiboot_tag* safe_multiboot_ptr = NULL;
 volatile int  g_input_system_ready = 0;
 volatile bool g_audio_ready        = false;
 
-#define VGA_BLACK       0
-#define VGA_GREEN       2
-#define VGA_RED         4
-#define VGA_LIGHT_GREY  7
-#define VGA_DARK_GREY   8
-#define VGA_LIGHT_GREEN 10
-#define VGA_LIGHT_CYAN  11
-#define VGA_LIGHT_RED   12
-#define VGA_WHITE       15
-#define VGA_YELLOW      14
-
 uint64_t kernel_boot_start_tsc = 0;
 
 void show_system_info() {
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf("\n===================================\n");
     printf("     %s %s (%s)      \n", SINGULARITY_SYS_NAME, SINGULARITY_SYS_VER, SINGULARITY_SYS_ARCH);
     printf("===================================\n\n");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 }
 
 void print_status(const char* prefix, const char* msg, const char* status) {
@@ -111,51 +99,48 @@ void print_status(const char* prefix, const char* msg, const char* status) {
 
     char serial_buf[256];
     const char* s_tag = "[ INFO ]";
-    if      (strcmp(status, "OK")   == 0) s_tag = "[  OK  ]";
-    else if (strcmp(status, "FAIL") == 0) s_tag = "[ FAIL ]";
+    if      (strcmp(status, "OK")   == 0) { s_tag = "[  OK  ]"; }
+    else if (strcmp(status, "FAIL") == 0) { s_tag = "[ FAIL ]"; } else { /* Neutral */ }
 
     snprintf(serial_buf, sizeof(serial_buf), "%s %s %s\n", s_tag, prefix, msg);
     serial_write(serial_buf);
 
     if (strcmp(status, "OK") == 0) {
-        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_LIGHT_GREEN, CONSOLE_COLOR_BLACK);
         console_write("[  OK  ] ");
     } else if (strcmp(status, "ERR") == 0 || strcmp(status, "FAIL") == 0) {
-        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_LIGHT_RED, CONSOLE_COLOR_BLACK);
         console_write("[ FAIL ] ");
     } else {
-        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
         console_write("[ INFO ] ");
     }
 
-    vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK);
     console_write(prefix);
     console_write(" ");
 
     if (strcmp(status, "INFO") == 0) {
-        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     } else {
-        vga_set_color(VGA_WHITE, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     console_write(msg);
     console_write("\n");
 
-    vga_set_color(VGA_WHITE, VGA_BLACK);
-    if (!scheduler_active) framebuffer_flush();
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    if (!scheduler_active) { framebuffer_flush(); } else { /* Maintained by daemon */ }
 
     stdio_release_lock(flags);
 }
 
-// DİKKAT: Bu fonksiyon çağrıldığı anki zamanı ölçer. Yani ekrana basılan süre, 
-// YENİ başlayan kategorinin değil, BİR ÖNCEKİ kategorinin tamamlanma süresidir. 
-// Bu mantığı değiştirmeyin, aksi takdirde log formatı ve hizalaması bozulur!
 void print_section_header(const char* title) {
     static uint64_t last_tsc = 0;
-    if (last_tsc == 0) last_tsc = kernel_boot_start_tsc;
+    if (last_tsc == 0) { last_tsc = kernel_boot_start_tsc; } else { /* Evaluated */ }
     
     uint64_t current_tsc = rdtsc_ordered();
     uint64_t freq = get_tsc_freq();
-    if (freq == 0) freq = 2000000000ULL; 
+    if (freq == 0) { freq = 2000000000ULL; } else { /* Synced clock */ }
     
     uint64_t diff_ms = ((current_tsc - last_tsc) * 1000) / freq;
     uint64_t total_ms = ((current_tsc - kernel_boot_start_tsc) * 1000) / freq;
@@ -163,7 +148,7 @@ void print_section_header(const char* title) {
     last_tsc = current_tsc;
 
     uint64_t flags = stdio_acquire_lock();
-    vga_set_color(VGA_YELLOW, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK);
     
     char buf[128];
     snprintf(buf, sizeof(buf), "\n>>> %-25s [ +%lu ms | %lu ms ] <<<\n", title, diff_ms, total_ms);
@@ -171,7 +156,7 @@ void print_section_header(const char* title) {
     serial_write(buf);
     console_write(buf);
     
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     stdio_release_lock(flags);
 }
 
@@ -202,6 +187,8 @@ void memory_monitor_task() {
             serial_write("[MEM] Low Memory detected! Triggering Reaper...\n");
             reaper_invoke();
             disk_cache_flush_all();
+        } else {
+            // Memory stable
         }
     }
 }
@@ -243,10 +230,10 @@ void kmain(void* multiboot_structure_addr) {
     init_string_optimization();
     init_stack_protector();
 
-    if (multiboot_structure_addr == NULL) PANIC("Multiboot info structure is NULL!");
+    if (multiboot_structure_addr == NULL) { PANIC("Multiboot info structure is NULL!"); } else { /* Intact */ }
 
     uint32_t mb_size = *(uint32_t*)multiboot_structure_addr;
-    if (mb_size > MULTIBOOT_STORAGE_SIZE) mb_size = MULTIBOOT_STORAGE_SIZE;
+    if (mb_size > MULTIBOOT_STORAGE_SIZE) { mb_size = MULTIBOOT_STORAGE_SIZE; } else { /* Size validated */ }
 
     memcpy(multiboot_storage, multiboot_structure_addr, mb_size);
     safe_multiboot_ptr = (struct multiboot_tag*)(multiboot_storage + 8);
@@ -261,6 +248,8 @@ void kmain(void* multiboot_structure_addr) {
             struct multiboot_tag_string* cmd_tag = (struct multiboot_tag_string*)search_tag;
             boot_cmdline = cmd_tag->string;
             break;
+        } else {
+            // Keep searching
         }
     }
     
@@ -298,7 +287,7 @@ void kmain(void* multiboot_structure_addr) {
     print_status("[ KOM  ]", "Kernel Object Model & Handle Table", "OK");
     print_status("[ ONS  ]", "Object Namespace Root Directory", "OK");
     print_status("[ SEC  ]", "RNG & Stack Protector",           "OK");
-    if (uefi_available()) print_status("[ UEFI ]", "Runtime Services", "OK");
+    if (uefi_available()) { print_status("[ UEFI ]", "Runtime Services", "OK"); } else { /* Deprecated BIOS Mode */ }
     hardware_integrity_check();
 
     print_section_header("BUS/TIME STARTING");
@@ -323,7 +312,7 @@ void kmain(void* multiboot_structure_addr) {
     init_smbus();
     
     init_ahci_late();       print_status("[ DISK ]", "AHCI Driver (SATA)",               "OK");
-    if (init_nvme_late()) { print_status("[ DISK ]", "NVMe Driver (PCIe SSD)",           "OK"); }
+    if (init_nvme_late()) { print_status("[ DISK ]", "NVMe Driver (PCIe SSD)",           "OK"); } else { /* NVMe absent */ }
     init_virtio();          
 
     struct multiboot_tag* f_tag;
@@ -332,10 +321,12 @@ void kmain(void* multiboot_structure_addr) {
          f_tag->type != 0;
          f_tag = (struct multiboot_tag*)((uint8_t*)f_tag + ((f_tag->size + 7) & ~7)))
     {
-        if ((uint64_t)f_tag >= (uint64_t)multiboot_storage + MULTIBOOT_STORAGE_SIZE) break;
+        if ((uint64_t)f_tag >= (uint64_t)multiboot_storage + MULTIBOOT_STORAGE_SIZE) { break; } else { /* Array bounded */ }
         if (f_tag->type == 3) {
             struct multiboot_tag_module* mod = (struct multiboot_tag_module*)f_tag;
             tar_inflater_init((void*)(uint64_t)mod->mod_start, (uint32_t)(mod->mod_end - mod->mod_start));
+        } else {
+            // Not a module tag
         }
     }
     
@@ -421,22 +412,22 @@ void kmain(void* multiboot_structure_addr) {
     signal_reaper();
     printf("\n");
 
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREEN, CONSOLE_COLOR_BLACK);
     printf("System Initialized Successfully!\n");
     
     rtc_time_t t;
     rtc_get_time(&t);
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("Time: %02d:%02d\n",           t.hour, t.minute);
     printf("Date: %02d.%02d.%04d\n",      t.day,  t.month, t.year);
 
     uint64_t end_tsc = rdtsc_ordered();
     uint64_t diff    = end_tsc - kernel_boot_start_tsc;
     uint64_t freq    = get_tsc_freq();
-    if (freq == 0) freq = 2000000000ULL;
+    if (freq == 0) { freq = 2000000000ULL; } else { /* Synced */ }
     uint64_t ms      = (diff * 1000) / freq;
 
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("Total Kernel Boot Time: %lu ms (Cycles: %lu)\n", ms, diff);
 
     console_set_auto_flush(false);

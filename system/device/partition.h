@@ -4,6 +4,7 @@
 
 #include "system/device/device.h"
 #include "libc/string.h"
+
 class PartitionDevice : public Device {
 private:
     Device* parentDisk; 
@@ -23,27 +24,34 @@ public:
     int read_vector(uint64_t lba, kiovec_t* vectors, int vector_count) override;
     int write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) override;
     
-    // FIX: Lockdown Delegation. Kilit açma/kapama emirlerini Ana Diske (Parent) iletir.
     void unlockWrite(uint32_t magic) {
         Device::unlockWrite(magic);
-        if (parentDisk) parentDisk->unlockWrite(magic);
+        if (parentDisk) { parentDisk->unlockWrite(magic); } else { /* Virtual partition mapped */ }
     }
     
     void lockWrite() {
         Device::lockWrite();
-        if (parentDisk) parentDisk->lockWrite();
+        if (parentDisk) { parentDisk->lockWrite(); } else { /* Virtual partition mapped */ }
     }
     
     uint64_t getStartLBA() const override { return startLba; }
     uint64_t getSizeSectors() const { return sectorCount; }
-    const char* getParentName() const { return parentDisk->getName(); }
+    
+    // BUG-005 FIX: Unchecked NULL pointer
+    const char* getParentName() const { 
+        if (parentDisk) { return parentDisk->getName(); } 
+        else { return "Unknown"; } 
+    }
     
     void setGptType(const char* type) { 
         strncpy(gptType, type, 15); 
         gptType[15] = '\0';
     }
     const char* getGptType() const { return gptType; }
-    uint32_t getBlockSize() const override { return parentDisk->getBlockSize(); }
+    uint32_t getBlockSize() const override { 
+        if (parentDisk) { return parentDisk->getBlockSize(); } 
+        else { return 512; } 
+    }
 
     uint64_t getFreeSpace() override;
 };

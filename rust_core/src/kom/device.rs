@@ -7,14 +7,15 @@ use alloc::format;
 use crate::arch::sync::IrqSpinlock;
 use core::ffi::{c_void, c_char, CStr};
 
-const VGA_BLACK: u8       = 0;
-const VGA_LIGHT_GREY: u8  = 7;
-const VGA_DARK_GREY: u8   = 8;
-const VGA_LIGHT_GREEN: u8 = 10;
-const VGA_LIGHT_CYAN: u8  = 11;
-const VGA_LIGHT_RED: u8   = 12;
-const VGA_YELLOW: u8      = 14;
-const VGA_WHITE: u8       = 15;
+// QUAL-001 FIX: Color codes directly matched with C definitions
+const CONSOLE_COLOR_BLACK:       u8 = 0;
+const CONSOLE_COLOR_LIGHT_GREY:  u8 = 7;
+const CONSOLE_COLOR_DARK_GREY:   u8 = 8;
+const CONSOLE_COLOR_LIGHT_GREEN: u8 = 10;
+const CONSOLE_COLOR_LIGHT_CYAN:  u8 = 11;
+const CONSOLE_COLOR_LIGHT_RED:   u8 = 12;
+const CONSOLE_COLOR_YELLOW:      u8 = 14;
+const CONSOLE_COLOR_WHITE:       u8 = 15;
 
 unsafe extern "C" {
     fn get_secure_random() -> u64;
@@ -33,7 +34,7 @@ unsafe extern "C" {
     pub fn cpp_device_read_block(dev: *mut c_void, lba: u64, count: u32, buf: *mut u8) -> i32;
     pub fn cpp_partition_get_gpt_type(dev: *mut c_void) -> *const c_char;
     pub fn cpp_device_get_free_space(dev: *mut c_void) -> u64;
-    pub fn vga_set_color(fg: u8, bg: u8);
+    pub fn console_set_color(fg: u8, bg: u8); // QUAL-001 FIX
     pub fn device_release(dev: *mut c_void);
 }
 
@@ -122,10 +123,10 @@ fn format_size_dec(bytes: u64) -> String {
 
 fn print_c(s: &str, fg: u8) {
     unsafe {
-        vga_set_color(fg, VGA_BLACK);
+        console_set_color(fg, CONSOLE_COLOR_BLACK);
         let c_msg = format!("{}\0", s);
         kprintf_string(c_msg.as_ptr() as *const i8);
-        vga_set_color(VGA_WHITE, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
 }
 
@@ -154,39 +155,76 @@ pub unsafe extern "C" fn rust_device_detect_fs(dev: *mut c_void) -> u32 {
                 if tag_id == 2 {
                     let mut sum: u8 = 0;
                     for i in 0..16 {
-                        if i != 4 { sum = sum.wrapping_add(buf[i]); }
+                        if i != 4 { 
+                            sum = sum.wrapping_add(buf[i]); 
+                        } else { 
+                            /* Escaped Checksum bit */ 
+                        }
                     }
                     if sum == buf[4] {
                         fs = 4; // udf
+                    } else {
+                        // Integrity lost
                     }
+                } else {
+                    // Not AVDP
                 }
+            } else {
+                // I/O Fault
             }
             
             if fs == 0 && bs == 2048 {
-                if unsafe { cpp_device_read_block(dev, 16, 1, buf.as_mut_ptr()) } == 1
-                    && buf[1] == b'C' && buf[2] == b'D' && buf[3] == b'0'
-                    && buf[4] == b'0' && buf[5] == b'1'
-                { fs = 3; /* iso9660 */ }
+                if unsafe { cpp_device_read_block(dev, 16, 1, buf.as_mut_ptr()) } == 1 {
+                    if buf[1] == b'C' && buf[2] == b'D' && buf[3] == b'0' && buf[4] == b'0' && buf[5] == b'1' {
+                        fs = 3; /* iso9660 */
+                    } else {
+                        // Not ISO9660
+                    }
+                } else {
+                    // I/O Fault
+                }
+            } else {
+                // Bypass
             }
+        } else {
+            // Not optical media bounds
         }
 
         if fs == 0 && bs == 512 {
             if unsafe { cpp_device_read_block(dev, 2, 2, buf.as_mut_ptr()) } == 1 {
                 let ext_magic = u16::from_le_bytes([buf[56], buf[57]]); 
-                if ext_magic == 0xEF53 { fs = 2; /* ext4 */ } else {}
-            } else {}
+                if ext_magic == 0xEF53 { 
+                    fs = 2; /* ext4 */ 
+                } else {
+                    // Not Ext4
+                }
+            } else {
+                // I/O Fault
+            }
             
             if fs == 0 {
                 let mut boot_buf =[0u8; 512];
                 if unsafe { cpp_device_read_block(dev, 0, 1, boot_buf.as_mut_ptr()) } == 1 {
                     if boot_buf[510] == 0x55 && boot_buf[511] == 0xAA {
-                        if &boot_buf[82..87] == b"FAT32" { fs = 1; /* fat32 */ } else {}
-                    } else {}
-                } else {}
-            } else {}
-        } else {}
+                        if &boot_buf[82..87] == b"FAT32" { 
+                            fs = 1; /* fat32 */ 
+                        } else {
+                            // Not FAT32
+                        }
+                    } else {
+                        // Missing boot signature
+                    }
+                } else {
+                    // I/O Fault
+                }
+            } else {
+                // FS already found
+            }
+        } else {
+            // Not standard HDD block size
+        }
     } else {
-        fs = 5; // Unknown
+        fs = 5; // Unknown / Block size 0
     }
 
     fs
@@ -194,14 +232,14 @@ pub unsafe extern "C" fn rust_device_detect_fs(dev: *mut c_void) -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_device_print_disks() {
-    print_c("========================================================================================================================\n", VGA_LIGHT_CYAN);
-    print_c(&pad_right(" DISK NAME", 15), VGA_WHITE);
-    print_c(&pad_right("| TYPE", 20), VGA_WHITE);
-    print_c(&pad_right("| CAPACITY", 15), VGA_WHITE);
-    print_c(&pad_right("| R/W", 8), VGA_WHITE);
-    print_c(&pad_right("| PARTS", 10), VGA_WHITE);
-    print_c("| MODEL\n", VGA_WHITE);
-    print_c("------------------------------------------------------------------------------------------------------------------------\n", VGA_DARK_GREY);
+    print_c("========================================================================================================================\n", CONSOLE_COLOR_LIGHT_CYAN);
+    print_c(&pad_right(" DISK NAME", 15), CONSOLE_COLOR_WHITE);
+    print_c(&pad_right("| TYPE", 20), CONSOLE_COLOR_WHITE);
+    print_c(&pad_right("| CAPACITY", 15), CONSOLE_COLOR_WHITE);
+    print_c(&pad_right("| R/W", 8), CONSOLE_COLOR_WHITE);
+    print_c(&pad_right("| PARTS", 10), CONSOLE_COLOR_WHITE);
+    print_c("| MODEL\n", CONSOLE_COLOR_WHITE);
+    print_c("------------------------------------------------------------------------------------------------------------------------\n", CONSOLE_COLOR_DARK_GREY);
 
     let path = c"/devices";
     let mut idx = 0u32;
@@ -211,7 +249,9 @@ pub extern "C" fn rust_device_print_disks() {
     while unsafe { ons_enumerate(path.as_ptr(), idx, name_buf.as_mut_ptr(), &mut obj_type) } {
         idx += 1;
         let dev_ptr = unsafe { device_get(name_buf.as_ptr()) };
-        if dev_ptr.is_null() { continue; } else {
+        if dev_ptr.is_null() { 
+            continue; 
+        } else {
             if unsafe { cpp_device_get_type(dev_ptr) } != 4 { 
                 unsafe { device_release(dev_ptr); }
                 continue; 
@@ -226,40 +266,51 @@ pub extern "C" fn rust_device_print_disks() {
                 let mut p_name_buf = [0i8; 64];
                 let mut p_type = 0u8;
                 let prefix = format!("{}_p", d_name);
+                
                 while unsafe { ons_enumerate(path.as_ptr(), p_idx, p_name_buf.as_mut_ptr(), &mut p_type) } {
                     p_idx += 1;
                     let p_name = unsafe { CStr::from_ptr(p_name_buf.as_ptr()).to_str().unwrap_or("") };
-                    if p_name.starts_with(&prefix) { p_count += 1; } else {}
+                    if p_name.starts_with(&prefix) { 
+                        p_count += 1; 
+                    } else {
+                        // Unrelated element
+                    }
                 }
 
-                print_c(&pad_right(&format!(" {}", d_name), 15), VGA_LIGHT_GREEN);
-                print_c(&pad_right("| Block Storage", 20), VGA_WHITE);
-                print_c(&pad_right(&format!("| {}", format_size_dec(d_cap)), 15), VGA_YELLOW);
-                print_c("| ", VGA_WHITE);
-                if is_ro { print_c(&pad_right("R/O", 6), VGA_LIGHT_RED); } else { print_c(&pad_right("R/W", 6), VGA_LIGHT_GREEN); }
-                print_c(&pad_right(&format!("| {}", p_count), 10), VGA_LIGHT_CYAN);
-                print_c(&format!("| {}\n", d_model), VGA_LIGHT_GREY);
+                print_c(&pad_right(&format!(" {}", d_name), 15), CONSOLE_COLOR_LIGHT_GREEN);
+                print_c(&pad_right("| Block Storage", 20), CONSOLE_COLOR_WHITE);
+                print_c(&pad_right(&format!("| {}", format_size_dec(d_cap)), 15), CONSOLE_COLOR_YELLOW);
+                print_c("| ", CONSOLE_COLOR_WHITE);
+                
+                if is_ro { 
+                    print_c(&pad_right("R/O", 6), CONSOLE_COLOR_LIGHT_RED); 
+                } else { 
+                    print_c(&pad_right("R/W", 6), CONSOLE_COLOR_LIGHT_GREEN); 
+                }
+                
+                print_c(&pad_right(&format!("| {}", p_count), 10), CONSOLE_COLOR_LIGHT_CYAN);
+                print_c(&format!("| {}\n", d_model), CONSOLE_COLOR_LIGHT_GREY);
                 
                 unsafe { device_release(dev_ptr); }
             }
         }
     }
-    print_c("========================================================================================================================\n", VGA_LIGHT_CYAN);
+    print_c("========================================================================================================================\n", CONSOLE_COLOR_LIGHT_CYAN);
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_device_print_parts() {
-    print_c("========================================================================================================================\n", VGA_LIGHT_CYAN);
-    print_c(&pad_right(" PARTITION", 15), VGA_WHITE);
-    print_c(&pad_right("| DISK", 15), VGA_WHITE);
-    print_c(&pad_right("| FILE SYSTEM", 15), VGA_WHITE);
-    print_c(&pad_right("| CAPACITY", 15), VGA_WHITE);
-    print_c("| FREE SPACE\n", VGA_WHITE);
-    print_c("------------------------------------------------------------------------------------------------------------------------\n", VGA_DARK_GREY);
+    print_c("========================================================================================================================\n", CONSOLE_COLOR_LIGHT_CYAN);
+    print_c(&pad_right(" PARTITION", 15), CONSOLE_COLOR_WHITE);
+    print_c(&pad_right("| DISK", 15), CONSOLE_COLOR_WHITE);
+    print_c(&pad_right("| FILE SYSTEM", 15), CONSOLE_COLOR_WHITE);
+    print_c(&pad_right("| CAPACITY", 15), CONSOLE_COLOR_WHITE);
+    print_c("| FREE SPACE\n", CONSOLE_COLOR_WHITE);
+    print_c("------------------------------------------------------------------------------------------------------------------------\n", CONSOLE_COLOR_DARK_GREY);
 
     let path = c"/devices";
     let mut idx = 0u32;
-    let mut name_buf =[0i8; 64];
+    let mut name_buf = [0i8; 64];
     let mut obj_type = 0u8;
 
     let mut disk_list = Vec::new();
@@ -270,7 +321,9 @@ pub extern "C" fn rust_device_print_parts() {
             disk_list.push(dev_ptr);
         } else if !dev_ptr.is_null() {
             unsafe { device_release(dev_ptr); }
-        } else {}
+        } else {
+            // Null pointer handled
+        }
     }
 
     for &disk_ptr in disk_list.iter() {
@@ -292,7 +345,6 @@ pub extern "C" fn rust_device_print_parts() {
                     let p_cap = unsafe { cpp_device_get_capacity(part_ptr) };
                     d_used_cap += p_cap;
 
-                    // MİMARİ YAMASI: FFI Integer üzerinden dosya sistemi çözümleme
                     let fs_val = unsafe { rust_device_detect_fs(part_ptr) };
                     let fs_name = match fs_val {
                         1 => "fat32",
@@ -304,30 +356,36 @@ pub extern "C" fn rust_device_print_parts() {
                     
                     let d_free = unsafe { cpp_device_get_free_space(part_ptr) };
 
-                    print_c(&pad_right(&format!(" {}", p_name), 15), VGA_LIGHT_CYAN);
-                    print_c(&pad_right(&format!("| {}", d_name), 15), VGA_WHITE);
-                    print_c(&pad_right(&format!("| {}", fs_name), 15), VGA_WHITE);
-                    print_c(&pad_right(&format!("| {}", format_size_dec(p_cap)), 15), VGA_YELLOW);
+                    print_c(&pad_right(&format!(" {}", p_name), 15), CONSOLE_COLOR_LIGHT_CYAN);
+                    print_c(&pad_right(&format!("| {}", d_name), 15), CONSOLE_COLOR_WHITE);
+                    print_c(&pad_right(&format!("| {}", fs_name), 15), CONSOLE_COLOR_WHITE);
+                    print_c(&pad_right(&format!("| {}", format_size_dec(p_cap)), 15), CONSOLE_COLOR_YELLOW);
                     
                     let free_str = if d_free == u64::MAX { "Unknown".to_string() } else { format_size_dec(d_free) };
-                    print_c(&format!("| {}\n", free_str), VGA_LIGHT_GREEN);
+                    print_c(&format!("| {}\n", free_str), CONSOLE_COLOR_LIGHT_GREEN);
 
                     unsafe { device_release(part_ptr); }
-                } else {}
-            } else {}
+                } else {
+                    // Safe drop
+                }
+            } else {
+                // Not a partition of current disk
+            }
         }
 
         if d_total_cap > d_used_cap + (1024 * 1024) {
             let unalloc = d_total_cap - d_used_cap;
-            print_c(&pad_right(" *Unallocated*", 15), VGA_DARK_GREY);
-            print_c(&pad_right(&format!("| {}", d_name), 15), VGA_DARK_GREY);
-            print_c(&pad_right("| None", 15), VGA_DARK_GREY);
-            print_c(&pad_right(&format!("| {}", format_size_dec(unalloc)), 15), VGA_DARK_GREY);
-            print_c("| Available for Use\n", VGA_DARK_GREY);
-        } else {}
+            print_c(&pad_right(" *Unallocated*", 15), CONSOLE_COLOR_DARK_GREY);
+            print_c(&pad_right(&format!("| {}", d_name), 15), CONSOLE_COLOR_DARK_GREY);
+            print_c(&pad_right("| None", 15), CONSOLE_COLOR_DARK_GREY);
+            print_c(&pad_right(&format!("| {}", format_size_dec(unalloc)), 15), CONSOLE_COLOR_DARK_GREY);
+            print_c("| Available for Use\n", CONSOLE_COLOR_DARK_GREY);
+        } else {
+            // Disk space fully claimed
+        }
         unsafe { device_release(disk_ptr); }
     }
-    print_c("========================================================================================================================\n", VGA_LIGHT_CYAN);
+    print_c("========================================================================================================================\n", CONSOLE_COLOR_LIGHT_CYAN);
 }
 
 #[unsafe(no_mangle)]

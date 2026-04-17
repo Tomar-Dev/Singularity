@@ -19,8 +19,6 @@ static bool klog_full = false;
 static char debug_fmt_buf[1024];
 static spinlock_t debug_lock = {0, 0, {0}};
 
-extern void vga_set_color(uint8_t fg, uint8_t bg);
-
 void debug_force_unlock() {
     spinlock_init(&debug_lock);
 }
@@ -40,6 +38,8 @@ static void klog_append(const char* str) {
         if (klog_head == klog_tail) {
             klog_full = true;
             klog_tail = (klog_tail + 1) % KLOG_BUF_SIZE;
+        } else {
+            // Buffer not totally overwritten yet
         }
     }
 }
@@ -72,9 +72,11 @@ void print_stack_trace_from(uint64_t rbp, uint64_t rip) {
             printf(" [!] Stack walk aborted: Frame pointer (0x%lx) invalid or unaligned.\n", (uint64_t)stk);
             dbg_direct(" [!] Stack walk aborted: Invalid frame pointer.\n");
             break;
+        } else {
+            // Address safe bounds verified
         }
         
-        if (stk->rip == 0) break;
+        if (stk->rip == 0) { break; } else { /* Exists */ }
 
         offset = 0;
         sym = ksyms_resolve_symbol(stk->rip, &offset);
@@ -104,6 +106,8 @@ void print_stack_trace() {
         printf(" [!] Stack trace unavailable (Invalid RBP: 0x%016lx).\n", current_rbp);
         dbg_direct(" [!] Stack trace unavailable (Invalid RBP).\n");
         return;
+    } else {
+        // Active caller sequence intact
     }
 
     current_rip = ((uint64_t*)current_rbp)[1]; 
@@ -112,10 +116,10 @@ void print_stack_trace() {
 
 void kernel_warning(const char* file, int line, const char* msg) {
     uint64_t flags = spinlock_acquire(&debug_lock);
-    vga_set_color(14, 0); 
+    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK); 
     printf("\n[WARNING] %s\n", msg);
     printf("Location: %s:%d\n", file, line);
-    vga_set_color(15, 0); 
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK); 
     spinlock_release(&debug_lock, flags);
     print_stack_trace();
 }
@@ -126,17 +130,19 @@ void klog_hex(const void* ptr, size_t size) {
     printf("\n--- Memory Dump at 0x%p (%lu bytes) ---\n", ptr, size);
     for (size_t i = 0; i < size; ++i) {
         if (i % 16 == 0) {
-            if (i != 0) printf("  %s\n", ascii);
+            if (i != 0) { printf("  %s\n", ascii); } else { /* Beginning of hex grid */ }
             printf("%04lx: ", i);
+        } else {
+            // Inline parsing
         }
         printf("%02x ", p[i]);
-        if (p[i] >= 32 && p[i] <= 126) ascii[i % 16] = p[i];
-        else ascii[i % 16] = '.';
+        if (p[i] >= 32 && p[i] <= 126) { ascii[i % 16] = p[i]; }
+        else { ascii[i % 16] = '.'; }
         ascii[(i % 16) + 1] = '\0';
     }
     size_t remainder = size % 16;
     if (remainder != 0) {
-        for (size_t i = 0; i < 16 - remainder; i++) printf("   ");
+        for (size_t i = 0; i < 16 - remainder; i++) { printf("   "); }
         printf("  %s\n", ascii);
     } else {
         printf("  %s\n", ascii);
@@ -151,16 +157,16 @@ void klog(log_level_t level, const char* fmt, ...) {
     rtc_get_formatted_time(time_buf);
     
     const char* level_str;
-    uint8_t color;
+    console_color_t color;
     
     switch (level) {
-        case LOG_INFO:    level_str = "INFO"; color = 7; break;
-        case LOG_WARN:    level_str = "WARN"; color = 14; break;
-        case LOG_ERROR:   level_str = "ERR "; color = 12; break;
-        case LOG_DEBUG:   level_str = "DBG "; color = 8; break;
-        case LOG_SUCCESS: level_str = " OK "; color = 10; break;
-        case LOG_CRITICAL:level_str = "CRIT"; color = 12; break;
-        default:          level_str = "LOG "; color = 15; break;
+        case LOG_INFO:    level_str = "INFO"; color = CONSOLE_COLOR_LIGHT_GREY; break;
+        case LOG_WARN:    level_str = "WARN"; color = CONSOLE_COLOR_YELLOW; break;
+        case LOG_ERROR:   level_str = "ERR "; color = CONSOLE_COLOR_LIGHT_RED; break;
+        case LOG_DEBUG:   level_str = "DBG "; color = CONSOLE_COLOR_DARK_GREY; break;
+        case LOG_SUCCESS: level_str = " OK "; color = CONSOLE_COLOR_LIGHT_GREEN; break;
+        case LOG_CRITICAL:level_str = "CRIT"; color = CONSOLE_COLOR_LIGHT_RED; break;
+        default:          level_str = "LOG "; color = CONSOLE_COLOR_WHITE; break;
     }
 
     va_list args;
@@ -172,11 +178,11 @@ void klog(log_level_t level, const char* fmt, ...) {
     snprintf(temp_log, sizeof(temp_log), "[%s][%s] %s\n", time_buf, level_str, debug_fmt_buf);
     klog_append(temp_log);
 
-    vga_set_color(9, 0);
+    console_set_color(CONSOLE_COLOR_LIGHT_BLUE, CONSOLE_COLOR_BLACK);
     printf("[%s] ", time_buf);
-    vga_set_color(color, 0);
+    console_set_color(color, CONSOLE_COLOR_BLACK);
     printf("[%s] ", level_str);
-    vga_set_color(15, 0);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("%s\n", debug_fmt_buf);
 
     spinlock_release(&debug_lock, flags);
@@ -206,6 +212,8 @@ void export_crashdump_to_nvram() {
     if (!uefi_available()) {
         printf("\n[DUMP] UEFI Runtime Services not available. Cannot write to NVRAM.\n");
         return;
+    } else {
+        // NVRAM link is open
     }
 
     static char crash_buf[2048];

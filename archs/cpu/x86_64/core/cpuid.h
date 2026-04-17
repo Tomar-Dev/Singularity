@@ -53,7 +53,10 @@ typedef struct {
     bool has_avx; bool has_avx2; bool has_avx512; bool has_fma3;
     bool has_aes; bool has_sha;
 
-    bool has_rdrand; bool has_xsave;
+    bool has_rdrand; 
+    bool has_rdseed; // BUG-007 FIX: Struct parameter created
+    bool has_xsave;
+    
     bool has_vmx; bool has_svm; bool has_ht;
     bool has_dts; bool has_pdcm;
     bool has_xsaveopt;
@@ -63,8 +66,8 @@ typedef struct {
     bool has_cet_ss;
     bool has_cet_ibt;
     
-    bool has_smep; // GÜVENLİK YAMASI
-    bool has_smap; // GÜVENLİK YAMASI
+    bool has_smep; 
+    bool has_smap; 
 
     bool is_hypervisor;
 

@@ -17,9 +17,6 @@ extern "C" {
 
 CacheSet DiskCache::sets[CACHE_SETS];
 
-// OPTİMİZASYON YAMASI: FNV-1a Hashing Algoritması
-// Eski ağır 64-bit çarpma işlemleri yerine XOR ve Bitwise Shift tabanlı
-// çok daha hızlı ve çarpışma oranı düşük olan FNV-1a algoritmasına geçildi.
 uint32_t DiskCache::hash(Device* dev, uint64_t lba) {
     uint32_t hash = 2166136261u;
     uint64_t dev_val = (uint64_t)dev;
@@ -39,7 +36,6 @@ uint32_t DiskCache::hash(Device* dev, uint64_t lba) {
 
 void DiskCache::init() {
     for (int i = 0; i < CACHE_SETS; i++) {
-        // NOLINTNEXTLINE(clang-diagnostic-missing-field-initializers)
         spinlock_init(&sets[i].lock);
         for (int w = 0; w < CACHE_WAYS; w++) {
             sets[i].ways[w].valid = false;
@@ -50,7 +46,11 @@ void DiskCache::init() {
 
 int DiskCache::readBlock(Device* dev, uint64_t lba, uint32_t count, void* buffer) {
     if (dev->getBlockSize() != 512 || count > 1 || (((uint64_t)buffer & 0x1FF) != 0)) {
+        // Bypass durumunda okunan LBA'ların çöp kalma riski yoktur ancak
+        // yine de defansif olarak geçelim.
         return dev->readBlock(lba, count, buffer);
+    } else {
+        // Standard cache hit mechanics
     }
 
     uint8_t* ptr = (uint8_t*)buffer;
@@ -75,26 +75,34 @@ int DiskCache::readBlock(Device* dev, uint64_t lba, uint32_t count, void* buffer
                     spinlock_release(&set->lock, flags);
                     serial_write("[CACHE] TOCTOU Violation: Target memory unmapped during cache read!\n");
                     return 0;
+                } else {
+                    // Safe to proceed
                 }
 
                 memcpy((void*)start_addr, set->ways[w].data, 512);
                 found = true;
                 break;
+            } else {
+                // Not the target cache line
             }
         }
         spinlock_release(&set->lock, flags);
 
-        if (found) continue;
+        if (found) { continue; } else { /* Proceed to fetch */ }
 
         if (!bounce_buf) {
             bounce_buf = (uint8_t*)kmalloc_contiguous(4096);
-            if (!bounce_buf) return 0;
+            if (!bounce_buf) { return 0; } else { /* Allocated */ }
+        } else {
+            // Buffer already initialized
         }
         memset(bounce_buf, 0, 512);
         
         if (!dev->readBlock(current_lba, 1, bounce_buf)) {
             kfree_contiguous(bounce_buf, 4096);
             return 0;
+        } else {
+            // Successfully fetched from physical device
         }
 
         uint64_t start_addr = (uint64_t)ptr + ((uint64_t)i * 512);
@@ -104,6 +112,8 @@ int DiskCache::readBlock(Device* dev, uint64_t lba, uint32_t count, void* buffer
             kfree_contiguous(bounce_buf, 4096);
             serial_write("[CACHE] TOCTOU Violation: Target memory unmapped after disk read!\n");
             return 0;
+        } else {
+            // Safely write to target memory
         }
         
         memcpy((void*)start_addr, bounce_buf, 512);
@@ -117,10 +127,13 @@ int DiskCache::readBlock(Device* dev, uint64_t lba, uint32_t count, void* buffer
             if (!set->ways[w].valid) {
                 victim_way = w;
                 break;
-            }
-            if (set->ways[w].last_access < oldest_time) {
-                oldest_time = set->ways[w].last_access;
-                victim_way = w;
+            } else {
+                if (set->ways[w].last_access < oldest_time) {
+                    oldest_time = set->ways[w].last_access;
+                    victim_way = w;
+                } else {
+                    // Current is newer
+                }
             }
         }
 
@@ -133,13 +146,29 @@ int DiskCache::readBlock(Device* dev, uint64_t lba, uint32_t count, void* buffer
         spinlock_release(&set->lock, flags);
     }
 
-    if (bounce_buf) kfree_contiguous(bounce_buf, 4096);
+    if (bounce_buf) { kfree_contiguous(bounce_buf, 4096); } else { /* Clean */ }
     return 1;
 }
 
 int DiskCache::writeBlock(Device* dev, uint64_t lba, uint32_t count, const void* buffer) {
     if (dev->getBlockSize() != 512 || count > 1 || (((uint64_t)buffer & 0x1FF) != 0)) {
+        // BUG-002 FIX: Invalidate cache before bypass write to prevent stale data!
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t set_idx = hash(dev, lba + i);
+            CacheSet* set = &sets[set_idx];
+            uint64_t flags = spinlock_acquire(&set->lock);
+            for (int w = 0; w < CACHE_WAYS; w++) {
+                if (set->ways[w].valid && set->ways[w].device == dev && set->ways[w].lba == lba + i) {
+                    set->ways[w].valid = false; // Mark dirty line as destroyed
+                } else {
+                    // Ignore irrelevant data
+                }
+            }
+            spinlock_release(&set->lock, flags);
+        }
         return dev->writeBlock(lba, count, buffer);
+    } else {
+        // Normal cache write sequence
     }
 
     const uint8_t* ptr = (const uint8_t*)buffer;
@@ -150,7 +179,9 @@ int DiskCache::writeBlock(Device* dev, uint64_t lba, uint32_t count, const void*
         
         if (!bounce_buf) {
             bounce_buf = (uint8_t*)kmalloc_contiguous(4096);
-            if (!bounce_buf) return 0;
+            if (!bounce_buf) { return 0; } else { /* Allocated */ }
+        } else {
+            // Buffer already initialized
         }
 
         uint64_t start_addr = (uint64_t)ptr + ((uint64_t)i * 512);
@@ -160,6 +191,8 @@ int DiskCache::writeBlock(Device* dev, uint64_t lba, uint32_t count, const void*
             kfree_contiguous(bounce_buf, 4096);
             serial_write("[CACHE] TOCTOU Violation: Source memory unmapped during cache write!\n");
             return 0;
+        } else {
+            // Safely proceed
         }
 
         memcpy(bounce_buf, (void*)start_addr, 512);
@@ -167,6 +200,8 @@ int DiskCache::writeBlock(Device* dev, uint64_t lba, uint32_t count, const void*
         if (!dev->writeBlock(current_lba, 1, bounce_buf)) {
             kfree_contiguous(bounce_buf, 4096);
             return 0;
+        } else {
+            // Flushed to disk safely
         }
 
         uint32_t set_idx = hash(dev, current_lba);
@@ -181,6 +216,8 @@ int DiskCache::writeBlock(Device* dev, uint64_t lba, uint32_t count, const void*
                 memcpy(set->ways[w].data, bounce_buf, 512);
                 updated = true;
                 break;
+            } else {
+                // Not target or invalid
             }
         }
 
@@ -192,10 +229,13 @@ int DiskCache::writeBlock(Device* dev, uint64_t lba, uint32_t count, const void*
                 if (!set->ways[w].valid) {
                     victim_way = w;
                     break;
-                }
-                if (set->ways[w].last_access < oldest_time) {
-                    oldest_time = set->ways[w].last_access;
-                    victim_way = w;
+                } else {
+                    if (set->ways[w].last_access < oldest_time) {
+                        oldest_time = set->ways[w].last_access;
+                        victim_way = w;
+                    } else {
+                        // Current is newer
+                    }
                 }
             }
 
@@ -204,23 +244,23 @@ int DiskCache::writeBlock(Device* dev, uint64_t lba, uint32_t count, const void*
             set->ways[victim_way].lba = current_lba;
             set->ways[victim_way].last_access = hal_timer_get_ticks();
             memcpy(set->ways[victim_way].data, bounce_buf, 512);
+        } else {
+            // Line updated correctly
         }
 
         spinlock_release(&set->lock, flags);
     }
 
-    if (bounce_buf) kfree_contiguous(bounce_buf, 4096);
+    if (bounce_buf) { kfree_contiguous(bounce_buf, 4096); } else { /* Clean */ }
     return 1;
 }
 
 int DiskCache::readVector(Device* dev, uint64_t lba, kiovec_t* vectors, int vector_count) {
-    if (!dev || !vectors || vector_count == 0) return 0;
-    return dev->read_vector(lba, vectors, vector_count);
+    if (!dev || !vectors || vector_count == 0) { return 0; } else { return dev->read_vector(lba, vectors, vector_count); }
 }
 
 int DiskCache::writeVector(Device* dev, uint64_t lba, kiovec_t* vectors, int vector_count) {
-    if (!dev || !vectors || vector_count == 0) return 0;
-    return dev->write_vector(lba, vectors, vector_count);
+    if (!dev || !vectors || vector_count == 0) { return 0; } else { return dev->write_vector(lba, vectors, vector_count); }
 }
 
 void DiskCache::invalidateDevice(Device* dev) {
@@ -229,6 +269,8 @@ void DiskCache::invalidateDevice(Device* dev) {
         for (int w = 0; w < CACHE_WAYS; w++) {
             if (sets[i].ways[w].valid && sets[i].ways[w].device == dev) {
                 sets[i].ways[w].valid = false;
+            } else {
+                // Ignore
             }
         }
         spinlock_release(&sets[i].lock, flags);
@@ -243,19 +285,22 @@ void DiskCache::flushAll() {
             if (sets[i].ways[w].valid) {
                 sets[i].ways[w].valid = false;
                 flushed_count++;
+            } else {
+                // Already empty
             }
         }
         spinlock_release(&sets[i].lock, flags);
     }
     
     char buf[64];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     snprintf(buf, sizeof(buf), "Cache synced (%d buffers cleared)", flushed_count);
     
     extern bool scheduler_active;
     if (!scheduler_active) {
         print_shutdown(buf);
-    } 
+    } else {
+        // Output naturally
+    }
 }
 
 size_t DiskCache::getCacheSize() {
@@ -263,7 +308,7 @@ size_t DiskCache::getCacheSize() {
     for (int i = 0; i < CACHE_SETS; i++) {
         uint64_t flags = spinlock_acquire(&sets[i].lock);
         for (int w = 0; w < CACHE_WAYS; w++) {
-            if (sets[i].ways[w].valid) total += 512;
+            if (sets[i].ways[w].valid) { total += 512; } else { /* Empty */ }
         }
         spinlock_release(&sets[i].lock, flags);
     }

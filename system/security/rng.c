@@ -4,6 +4,7 @@
 #include "libc/stdio.h"
 #include "drivers/serial/serial.h"
 #include "archs/cpu/cpu_hal.h"
+
 static bool rng_initialized = false;
 static bool has_rdrand = false;
 static bool has_rdseed = false;
@@ -16,6 +17,8 @@ static inline uint64_t rdrand_step(uint64_t* success) {
         if (ok) {
             *success = 1;
             return val;
+        } else {
+            // Hardware timeout bypass
         }
     }
     *success = 0;
@@ -30,6 +33,8 @@ static inline uint64_t rdseed_step(uint64_t* success) {
         if (ok) {
             *success = 1;
             return val;
+        } else {
+            // Hardware timeout bypass
         }
         hal_cpu_relax();
     }
@@ -40,11 +45,8 @@ static inline uint64_t rdseed_step(uint64_t* success) {
 void init_rng() {
     has_rdrand = cpu_info.has_rdrand;
     
-    uint32_t a, b, c, d;
-    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(7), "c"(0));
-    if (b & (1 << 18)) {
-        has_rdseed = true;
-    }
+    // BUG-007 FIX: Uncoupled MSR reading, unified topology struct tracking.
+    has_rdseed = cpu_info.has_rdseed; 
     
     rng_initialized = true;
 }
@@ -55,12 +57,24 @@ uint64_t get_secure_random() {
 
     if (has_rdseed) {
         val = rdseed_step(&success);
-        if (success) return val;
+        if (success) { 
+            return val; 
+        } else {
+            // Degraded hardware signal, drop to RDRAND
+        }
+    } else {
+        // Not equipped
     }
 
     if (has_rdrand) {
         val = rdrand_step(&success);
-        if (success) return val;
+        if (success) { 
+            return val; 
+        } else {
+            // Degraded hardware signal, drop to environmental entropy
+        }
+    } else {
+        // Not equipped
     }
 
     uint32_t lo, hi;

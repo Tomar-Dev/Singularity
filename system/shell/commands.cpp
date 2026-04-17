@@ -24,16 +24,6 @@
 #include "system/ffi/ffi.hpp"
 #include "archs/kom/kom_aal.h"
 
-#define VGA_BLACK 0
-#define VGA_LIGHT_GREY 7
-#define VGA_DARK_GREY 8
-#define VGA_LIGHT_BLUE 9
-#define VGA_LIGHT_GREEN 10
-#define VGA_LIGHT_CYAN 11
-#define VGA_LIGHT_RED 12
-#define VGA_YELLOW 14
-#define VGA_WHITE 15
-
 extern "C" {
     void acpi_suspend();
     void beep(uint32_t freq, uint32_t duration_ms);
@@ -44,7 +34,6 @@ extern "C" {
     
     extern uint8_t num_cpus;
     void console_set_auto_flush(bool enabled);
-    void vga_set_color(uint8_t fg, uint8_t bg);
     void console_clear();
 
     void rust_usb_print_ports(void);
@@ -106,18 +95,20 @@ int Shell::cmd_i2c(const char* arg) {
     if (!arg || arg[0] == '\0') {
         printf("Usage: i2c <hex_addr> (e.g., i2c 0x50 for RAM SPD)\n");
         return 1;
+    } else {
+        // Argument validated
     }
 
     uint64_t addr = 0;
     const char* p = arg;
-    if (p[0] == '0' && p[1] == 'x') p += 2;
+    if (p[0] == '0' && p[1] == 'x') { p += 2; } else { /* Clean parameter */ }
 
     while (*p) {
         addr <<= 4;
-        if (*p >= '0' && *p <= '9') addr |= (*p - '0');
-        else if (*p >= 'a' && *p <= 'f') addr |= (*p - 'a' + 10);
-        else if (*p >= 'A' && *p <= 'F') addr |= (*p - 'A' + 10);
-        else break;
+        if (*p >= '0' && *p <= '9') { addr |= (*p - '0'); }
+        else if (*p >= 'a' && *p <= 'f') { addr |= (*p - 'a' + 10); }
+        else if (*p >= 'A' && *p <= 'F') { addr |= (*p - 'A' + 10); }
+        else { break; }
         p++;
     }
 
@@ -135,12 +126,16 @@ int Shell::cmd_fbtest(const char* arg) {
     if (!fb_node) {
         printf("Error: /devices/fb0 not found in ONS!\n");
         return 1;
+    } else {
+        // Exists inside KOM memory space
     }
 
     if (fb_node->type != KObjectType::GPU_DEVICE) {
         printf("Error: fb0 is not a GPU_DEVICE.\n");
         kobject_unref(fb_node);
         return 1;
+    } else {
+        // Strict boundary check passed
     }
 
     KDevice* dev = (KDevice*)fb_node;
@@ -151,15 +146,19 @@ int Shell::cmd_fbtest(const char* arg) {
             printf("Error: Could not get screen info.\n");
             kobject_unref(fb_node);
             return 1;
-        } else {}
-    } else {}
+        } else {
+            // Derived correctly
+        }
+    } else {
+        // Query accepted natively
+    }
 
     printf("Screen Info: %dx%d, %d bpp\n", vinfo.xres, vinfo.yres, vinfo.bits_per_pixel);
     printf("Drawing SMP-Themed test pattern via Direct KDevice Write...\n");
 
     uint32_t w = 250, h = 250;
     uint32_t* buf = (uint32_t*)kmalloc(w * h * 4);
-    if (!buf) { kobject_unref(fb_node); return 1; }
+    if (!buf) { kobject_unref(fb_node); return 1; } else { /* Memory acquired */ }
 
     for (uint32_t y = 0; y < h; y++) {
         for (uint32_t x = 0; x < w; x++) {
@@ -182,20 +181,20 @@ int Shell::cmd_fbtest(const char* arg) {
     ((Device*)dev)->ioctl(FBIO_WAITFORVSYNC, nullptr);
     kfree(buf); kobject_unref(fb_node);
 
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREEN, CONSOLE_COLOR_BLACK);
     printf("Test pattern successfully drawn via ONS Device!\n");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     return 0;
 }
 
 int Shell::cmd_log(const char* arg) {
-    if (!arg) return 0;
+    if (!arg) { return 0; } else { /* Process normally */ }
     const char* msg_ptr = arg;
     const char* p = arg;
-    while (*p && *p != ' ') p++;
-    if (*p == ' ') msg_ptr = p + 1; else {}
-    vga_set_color(VGA_DARK_GREY, VGA_BLACK); printf("[ STARTUP ] ");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    while (*p && *p != ' ') { p++; }
+    if (*p == ' ') { msg_ptr = p + 1; } else { /* Use base arg */ }
+    console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK); printf("[ STARTUP ] ");
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("%s\n", msg_ptr);
     return 0;
 }
@@ -244,7 +243,6 @@ int Shell::cmd_beep(const char* arg) { (void)arg; beep(1000, 200); printf("Beep!
 int Shell::cmd_crash_stack(const char* arg) {
     (void)arg;
     printf("[TEST] Smashing stack canary to trigger Panic...\n");
-    // Canary'yi zorla ezmek için tamponu kasıtlı olarak taşırıyoruz.
     volatile char buf[8];
     for (volatile int i = 0; i < 64; i++) {
         buf[i] = 0xAA;
@@ -261,9 +259,9 @@ int Shell::cmd_suspend(const char* arg) { (void)arg; printf("Suspending to RAM (
 int Shell::cmd_gui(const char* arg) { (void)arg; gui_mode_start(); return 0; }
 
 int Shell::cmd_profile(const char* arg) {
-    if (!arg || arg[0] == '\0') { printf("Usage: profile <on/off/show>\n"); return 1; }
-    if (strcmp(arg, "on") == 0) profiler_enable(true);
-    else if (strcmp(arg, "off") == 0) profiler_enable(false);
+    if (!arg || arg[0] == '\0') { printf("Usage: profile <on/off/show>\n"); return 1; } else { /* Bounds validated */ }
+    if (strcmp(arg, "on") == 0) { profiler_enable(true); }
+    else if (strcmp(arg, "off") == 0) { profiler_enable(false); }
     else if (strcmp(arg, "show") == 0) { profiler_print_report(); }
     else { printf("Unknown option.\n"); return 1; }
     return 0;
@@ -280,23 +278,23 @@ int Shell::cmd_numa(const char* arg) { (void)arg; numa_print_topology(); return 
 
 int Shell::cmd_help(const char* arg) {
     (void)arg;
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK); printf("\n========== ");
-    vga_set_color(VGA_WHITE, VGA_BLACK); printf("AVAILABLE COMMANDS");
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK); printf(" ==========\n");
-    vga_set_color(VGA_DARK_GREY, VGA_BLACK); printf("----------------------------------------\n");
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK); printf("\n========== ");
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK); printf("AVAILABLE COMMANDS");
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK); printf(" ==========\n");
+    console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK); printf("----------------------------------------\n");
+    console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
 
     for (int i = 0; i < command_count; i++) {
         if (kconfig.lockdown && (strcmp(command_table[i].name, "fdisk") == 0 || strcmp(command_table[i].name, "mkfs") == 0)) {
-            vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+            console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK);
             printf("%-12s : %s (Locked)\n", command_table[i].name, command_table[i].description);
-            vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+            console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
         } else {
             printf("%-12s : %s\n", command_table[i].name, command_table[i].description);
         }
     }
 
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK); printf("========================================\n"); vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK); printf("========================================\n"); console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     return 0;
 }
 
@@ -318,12 +316,14 @@ int Shell::cmd_reap(const char* arg) {
 }
 
 int Shell::dispatchCommand(const char* cmd, const char* arg) {
-    if (!cmd || cmd[0] == '\0') return 0;
+    if (!cmd || cmd[0] == '\0') { return 0; } else { /* Valid */ }
     
     for (int i = 0; i < command_count; i++) {
         if (strcmp(cmd, command_table[i].name) == 0) {
             return (this->*(command_table[i].handler))(arg);
-        } else {}
+        } else {
+            // Not this index
+        }
     }
     
     printf("Unknown command: '%s'. Type 'help' for a list of commands.\n", cmd);

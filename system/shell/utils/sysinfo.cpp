@@ -12,22 +12,13 @@
 #include "drivers/serial/serial.h"
 #include "archs/cpu/x86_64/smp/smp.h"
 #include "kernel/config.h"
+#include "system/console/console.h"
 
 #include "archs/kom/common/kblob.hpp"
 #include "archs/kom/common/kcontainer.hpp"
 #include "archs/kom/common/ons.hpp"
 
-#define VGA_BLACK       0
-#define VGA_LIGHT_GREY  7
-#define VGA_DARK_GREY   8
-#define VGA_LIGHT_GREEN 10
-#define VGA_LIGHT_CYAN  11
-#define VGA_LIGHT_RED   12
-#define VGA_YELLOW      14
-#define VGA_WHITE       15
-
 extern "C" {
-    void vga_set_color(uint8_t fg, uint8_t bg);
     void smbios_print_full_info();
     void smbios_get_ram_info(ram_hw_info_t* info);
     void print_cpu_z_info();
@@ -49,12 +40,14 @@ extern "C" {
     void     pmm_flush_magazines();
 }
 
-static void print_size(const char* label, uint64_t bytes, uint8_t val_color) {
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+static void print_size(const char* label, uint64_t bytes, console_color_t val_color) {
+    console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     if (label && label[0]) {
         printf("%-16s: ", label);
+    } else {
+        // Space mapped natively
     }
-    vga_set_color(val_color, VGA_BLACK);
+    console_set_color(val_color, CONSOLE_COLOR_BLACK);
 
     if (bytes >= 1024ULL * 1024ULL) {
         uint64_t mb = bytes / (1024ULL * 1024ULL);
@@ -70,9 +63,9 @@ static void print_size(const char* label, uint64_t bytes, uint8_t val_color) {
 }
 
 static void print_kv(const char* key, const char* val_fmt, ...) {
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("%-14s: ", key);
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     va_list args;
     va_start(args, val_fmt);
     vprintf(val_fmt, args);
@@ -91,6 +84,8 @@ void show_memory_map() {
     uint64_t dynamic       = 0;
     if (pmm_used > kernel_static) {
         dynamic = pmm_used - kernel_static;
+    } else {
+        // Avoid calculation bounds underflow
     }
 
     uint64_t heap_reserved = kheap_get_reserved_size();
@@ -100,6 +95,8 @@ void show_memory_map() {
     uint64_t other = 0;
     if (dynamic > heap_reserved) {
         other = dynamic - heap_reserved;
+    } else {
+        // Free bounds matched perfectly
     }
 
     uint64_t disk_cached       = disk_cache_get_size();
@@ -109,90 +106,92 @@ void show_memory_map() {
 
     if (active_used > pmm_used) {
         active_used = pmm_used;
+    } else {
+        // Values coherent
     }
 
     uint64_t available = pmm_free;
 
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf("\n========== ");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("MEMORY STATISTICS");
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf(" ==========\n");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 
-    print_size("Total RAM",  pmm_total, VGA_WHITE);       printf("\n");
-    print_size("Available",  available, VGA_LIGHT_GREEN); printf("\n");
+    print_size("Total RAM",  pmm_total, CONSOLE_COLOR_WHITE);       printf("\n");
+    print_size("Available",  available, CONSOLE_COLOR_LIGHT_GREEN); printf("\n");
 
     printf("\n--- Breakdown ---\n");
 
-    print_size("Active Used",   active_used,  VGA_LIGHT_RED);
-    vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+    print_size("Active Used",   active_used,  CONSOLE_COLOR_LIGHT_RED);
+    console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK);
     printf(" (non-reclaimable)\n");
 
-    print_size("  Kernel/Static", kernel_static, VGA_WHITE); printf("\n");
-    print_size("  Heap Objects",  heap_payload,  VGA_WHITE); printf("\n");
-    print_size("  Buffers/Stack", other,         VGA_WHITE); printf("\n");
+    print_size("  Kernel/Static", kernel_static, CONSOLE_COLOR_WHITE); printf("\n");
+    print_size("  Heap Objects",  heap_payload,  CONSOLE_COLOR_WHITE); printf("\n");
+    print_size("  Buffers/Stack", other,         CONSOLE_COLOR_WHITE); printf("\n");
 
-    print_size("Cached",   total_reclaimable, VGA_YELLOW);
-    vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+    print_size("Cached",   total_reclaimable, CONSOLE_COLOR_YELLOW);
+    console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK);
     printf(" (reclaimable)\n");
-    print_size("  Slab cache",  heap_cached,  VGA_DARK_GREY); printf("\n");
-    print_size("  Disk cache",  disk_cached,  VGA_DARK_GREY); printf("\n");
+    print_size("  Slab cache",  heap_cached,  CONSOLE_COLOR_DARK_GREY); printf("\n");
+    print_size("  Disk cache",  disk_cached,  CONSOLE_COLOR_DARK_GREY); printf("\n");
 
-    print_size("Free Frames", pmm_free, VGA_WHITE); printf("\n");
+    print_size("Free Frames", pmm_free, CONSOLE_COLOR_WHITE); printf("\n");
 
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf("=======================================\n");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 }
 
 void show_task_list() {
     int total = 0, running = 0, zombie = 0;
     process_get_info(&total, &running, &zombie);
 
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf("\n========== ");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("PROCESS SUMMARY");
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf(" ==========\n");
 
     print_kv("Total Tasks", "%d", total);
     print_kv("Running",     "%d", running);
 
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("%-14s: ", "Zombies");
     if (zombie > 0) {
-        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_LIGHT_RED, CONSOLE_COLOR_BLACK);
     } else {
-        vga_set_color(VGA_WHITE, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     printf("%d\n", zombie);
 
     printf("\n");
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("[SMP] Core Activity (Interrupts):\n");
     for (int i = 0; i < num_cpus; i++) {
-        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
         printf("  CPU %d: ", i);
-        vga_set_color(VGA_WHITE, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
         printf("%lu ticks\n", cpu_tick_counts[i]);
     }
 
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf("==================================\n");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 }
 
 void show_system_info_all() {
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf("\n========== ");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("%s SYSTEM REPORT", SINGULARITY_SYS_NAME);
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf(" ==========\n");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 
     print_kv("Kernel Ver", "%s %s (%s)", SINGULARITY_SYS_NAME, SINGULARITY_SYS_VER, SINGULARITY_SYS_ARCH);
     print_kv("Build Date", "%s", kernel_build_date);
@@ -203,14 +202,14 @@ void show_system_info_all() {
 
     print_cpu_z_info();
 
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("%-14s:[ ", "Features");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     if (cpu_info.has_avx)      printf("AVX ");
     if (cpu_info.has_sse2)     printf("SSE2 ");
     if (cpu_info.has_rdrand)   printf("RDRAND ");
     if (cpu_info.has_xsaveopt) printf("XSAVEOPT ");
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("]\n");
 
     smbios_print_full_info();
@@ -227,6 +226,8 @@ void show_task_manager() {
     for (int i = 0; i < num_cpus; i++) {
         if (per_cpu_data[i]) {
             start_idle_ticks[i] = per_cpu_data[i]->idle_ticks;
+        } else {
+            // Null Struct
         }
     }
 
@@ -234,29 +235,33 @@ void show_task_manager() {
 
     uint64_t end_total   = timer_get_ticks();
     uint64_t delta_total = end_total - start_total;
-    if (delta_total == 0) { delta_total = 1; }
+    if (delta_total == 0) { delta_total = 1; } else { /* Bounds Safe */ }
 
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf("\n========== ");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("%s TASK MANAGER", SINGULARITY_SYS_NAME);
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf(" ==========\n");
 
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("CPU Usage (snapshot):\n");
 
     for (int i = 0; i < num_cpus; i++) {
         if (per_cpu_data[i]) {
             end_idle_ticks[i] = per_cpu_data[i]->idle_ticks;
+        } else {
+            // Node mapping disabled
         }
 
         uint64_t delta_idle = 0;
         if (end_idle_ticks[i] >= start_idle_ticks[i]) {
             delta_idle = end_idle_ticks[i] - start_idle_ticks[i];
+        } else {
+            // Tick wraparound
         }
 
-        if (delta_idle > delta_total) { delta_idle = delta_total; }
+        if (delta_idle > delta_total) { delta_idle = delta_total; } else { /* Underflow Guard */ }
 
         uint64_t delta_active = 0;
         if (delta_total >= delta_idle) {
@@ -267,19 +272,19 @@ void show_task_manager() {
 
         int usage = (int)((delta_active * 100ULL) / delta_total);
 
-        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
         printf("  Core %d: ", i);
 
         int bars = usage / 5;
-        uint8_t bar_color = (usage > 80)
-                            ? VGA_LIGHT_RED
-                            : (usage > 50 ? VGA_YELLOW : VGA_LIGHT_GREEN);
-        vga_set_color(bar_color, VGA_BLACK);
+        console_color_t bar_color = (usage > 80)
+                            ? CONSOLE_COLOR_LIGHT_RED
+                            : (usage > 50 ? CONSOLE_COLOR_YELLOW : CONSOLE_COLOR_LIGHT_GREEN);
+        console_set_color(bar_color, CONSOLE_COLOR_BLACK);
         for (int k = 0; k < 20; k++) {
             printf("%c", (k < bars) ? '|' : '.');
         }
 
-        vga_set_color(VGA_WHITE, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
         printf(" %3d%%\n", usage);
     }
 
@@ -299,16 +304,16 @@ void show_task_manager() {
     }
 
     printf("\nMemory Usage:\n");
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
-    printf("  Total : "); print_size("", total,         VGA_WHITE);      printf("\n");
-    printf("  Active: "); print_size("", active_used,   VGA_LIGHT_RED);  printf("\n");
-    printf("  Cached: "); print_size("", total_cached,  VGA_YELLOW);     printf("\n");
-    printf("  Kernel: "); print_size("", kernel_static, VGA_WHITE);      printf("\n");
+    console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
+    printf("  Total : "); print_size("", total,         CONSOLE_COLOR_WHITE);      printf("\n");
+    printf("  Active: "); print_size("", active_used,   CONSOLE_COLOR_LIGHT_RED);  printf("\n");
+    printf("  Cached: "); print_size("", total_cached,  CONSOLE_COLOR_YELLOW);     printf("\n");
+    printf("  Kernel: "); print_size("", kernel_static, CONSOLE_COLOR_WHITE);      printf("\n");
 
     printf("\n");
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf("================================\n");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 }
 
 static size_t uptime_read_cb(uint64_t offset, void* buffer, size_t count) {
@@ -343,7 +348,6 @@ static size_t meminfo_read_cb(uint64_t offset, void* buffer, size_t count) {
 
 static size_t version_read_cb(uint64_t offset, void* buffer, size_t count) {
     char ver[128];
-    // OPTİMİZASYON YAMASI: Gereksiz dil ve mimari etiketleri temizlendi
     snprintf(ver, sizeof(ver), "%s %s (%s)\n", SINGULARITY_SYS_NAME, SINGULARITY_SYS_VER, SINGULARITY_SYS_ARCH);
     size_t len = strlen(ver);
     if (offset >= len) {
@@ -376,9 +380,13 @@ extern "C" {
             kobject_unref(b_ver);
 
             kobject_unref(info_dir);
+        } else {
+            // Unbound logic tree
         }
         if (sys_dir_obj) {
             kobject_unref(sys_dir_obj);
+        } else {
+            // Free operation mapped
         }
     }
 }

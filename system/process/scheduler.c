@@ -44,6 +44,8 @@ static void __sched_enqueue_locked(uint8_t cpu_id, process_t* task,
                                    kernel_prio_t prio, int16_t affinity) {
     if (task->is_queued) {
         return;
+    } else {
+        // Enqueue process safely
     }
 
     task->priority = prio;
@@ -53,6 +55,8 @@ static void __sched_enqueue_locked(uint8_t cpu_id, process_t* task,
     int p = (int)prio;
     if (p >= PRIO_COUNT) {
         p = PRIO_COUNT - 1;
+    } else {
+        // Valid priority range
     }
 
     uint64_t now = timer_get_ticks();
@@ -60,6 +64,8 @@ static void __sched_enqueue_locked(uint8_t cpu_id, process_t* task,
 
     if (task->vruntime < sched_queues[cpu_id].min_vruntime) {
         task->vruntime = sched_queues[cpu_id].min_vruntime;
+    } else {
+        // vruntime already satisfies constraint
     }
 
     task->rq_next = NULL;
@@ -81,6 +87,8 @@ static void __sched_enqueue_locked(uint8_t cpu_id, process_t* task,
 void sched_enqueue(uint8_t cpu_id, process_t* task, kernel_prio_t prio, int16_t affinity) {
     if (unlikely(cpu_id >= MAX_CPUS || !task)) {
         return;
+    } else {
+        // Safe context
     }
     uint64_t flags = spinlock_acquire(&sched_queues[cpu_id].lock);
     __sched_enqueue_locked(cpu_id, task, prio, affinity);
@@ -90,11 +98,15 @@ void sched_enqueue(uint8_t cpu_id, process_t* task, kernel_prio_t prio, int16_t 
 static void __sched_remove_locked(uint8_t cpu_id, process_t* task) {
     if (!task->is_queued) {
         return;
+    } else {
+        // It is currently queued
     }
 
     int p = (int)task->priority;
     if (p >= PRIO_COUNT) {
         p = PRIO_COUNT - 1;
+    } else {
+        // Priority bounded
     }
 
     if (task->rq_prev) {
@@ -111,6 +123,8 @@ static void __sched_remove_locked(uint8_t cpu_id, process_t* task) {
 
     if (!sched_queues[cpu_id].queues[p].head) {
         sched_queues[cpu_id].active_queues &= ~(1U << p);
+    } else {
+        // Queue still has members
     }
 
     task->rq_next    = NULL;
@@ -119,12 +133,16 @@ static void __sched_remove_locked(uint8_t cpu_id, process_t* task) {
 
     if (sched_queues[cpu_id].total_tasks > 0) {
         sched_queues[cpu_id].total_tasks--;
+    } else {
+        // Underflow protection
     }
 }
 
 void sched_remove(uint8_t cpu_id, process_t* task) {
     if (unlikely(cpu_id >= MAX_CPUS || !task)) {
         return;
+    } else {
+        // Proceed securely
     }
     uint64_t flags = spinlock_acquire(&sched_queues[cpu_id].lock);
     __sched_remove_locked(cpu_id, task);
@@ -134,6 +152,8 @@ void sched_remove(uint8_t cpu_id, process_t* task) {
 void sched_wake_task(process_t* task) {
     if (!task) {
         return;
+    } else {
+        // Has a valid task
     }
     uint8_t target_cpu = task->cpu_id;
 
@@ -152,15 +172,21 @@ void sched_wake_task(process_t* task) {
                     }
                     p->sleep_next = NULL;
                     break;
+                } else {
+                    // Traverse sleep line
                 }
                 prev = p;
                 p    = p->sleep_next;
             }
+        } else {
+            // Task is blocked, not in sleep chain
         }
 
         task->state    = PROCESS_READY;
         task->wake_tick = 0;
         __sched_enqueue_locked(target_cpu, task, task->priority, task->affinity);
+    } else {
+        // Unnecessary wakeup signal
     }
 
     spinlock_release(&sched_queues[target_cpu].lock, flags);
@@ -178,6 +204,8 @@ void sched_sleep_current(uint64_t ticks) {
 
         if (target < now_ticks) {
             target = 0xFFFFFFFFFFFFFFFFULL;
+        } else {
+            // No tick overflow 
         }
 
         curr->state    = PROCESS_SLEEPING;
@@ -190,23 +218,27 @@ void sched_sleep_current(uint64_t ticks) {
 
         if (per_cpu_data[cpu_id]) {
             per_cpu_data[cpu_id]->pending_task = NULL;
+        } else {
+            // Uninitialized struct bounds
         }
 
         spinlock_release(&sched_queues[cpu_id].lock, flags);
+    } else {
+        // Idle task cannot sleep!
     }
 }
 
 static inline int get_cpu_distance(uint8_t cpu_a, uint8_t cpu_b) {
-    if (cpu_a == cpu_b) return 0;
+    if (cpu_a == cpu_b) { return 0; } else { /* Proceed */ }
     cpu_topology_t* ta = &cpu_topologies[cpu_a];
     cpu_topology_t* tb = &cpu_topologies[cpu_b];
-    if (ta->package_id != tb->package_id) return 3;
-    if (ta->core_id != tb->core_id) return 2;
+    if (ta->package_id != tb->package_id) { return 3; } else { /* Closer */ }
+    if (ta->core_id != tb->core_id) { return 2; } else { /* Nearest */ }
     return 1;
 }
 
 process_t* sched_pick_next(uint8_t cpu_id) {
-    if (unlikely(cpu_id >= MAX_CPUS)) return NULL;
+    if (unlikely(cpu_id >= MAX_CPUS)) { return NULL; } else { /* Bound check passed */ }
 
     uint64_t flags = spinlock_acquire(&sched_queues[cpu_id].lock);
     uint64_t now   = timer_get_ticks();
@@ -222,7 +254,11 @@ process_t* sched_pick_next(uint8_t cpu_id) {
                     __sched_remove_locked(cpu_id, front);
                     spinlock_release(&sched_queues[cpu_id].lock, flags);
                     return front;
+                } else {
+                    // Process didn't starve long enough to preempt strictly
                 }
+            } else {
+                // Ghost bit enabled
             }
             check_aq &= ~(1U << p);
         }
@@ -233,16 +269,22 @@ process_t* sched_pick_next(uint8_t cpu_id) {
             __sched_remove_locked(cpu_id, front);
 
             uint64_t weight = (uint64_t)(PRIO_COUNT - p);
-            if (weight == 0) weight = 1;
+            if (weight == 0) { weight = 1; } else { /* Weight normalized */ }
 
             front->vruntime += (100 * 1024) / weight;
             if (front->vruntime > sched_queues[cpu_id].min_vruntime) {
                 sched_queues[cpu_id].min_vruntime = front->vruntime;
+            } else {
+                // Kept bounds
             }
 
             spinlock_release(&sched_queues[cpu_id].lock, flags);
             return front;
+        } else {
+            // Safety fallback
         }
+    } else {
+        // Proceed to Work Stealing
     }
     
     spinlock_release(&sched_queues[cpu_id].lock, flags);
@@ -251,22 +293,21 @@ process_t* sched_pick_next(uint8_t cpu_id) {
     int     min_distance = 255;
     int     max_load     = 0;
 
-    // OPTİMİZASYON YAMASI: Lock-Free Work Stealing (İş Çalma)
-    // Thundering Herd (Sürü Psikolojisi) kilitlenmelerini önlemek için taramaya
-    // rastgele bir çekirdekten başlanır ve kilit alınmadan önce kuyruk boyutu atomik kontrol edilir.
     uint8_t start_cpu = (uint8_t)(timer_get_ticks() % num_cpus);
 
     for (uint8_t i = 0; i < num_cpus; i++) {
         uint8_t target = (start_cpu + i) % num_cpus;
-        if (target == cpu_id) continue;
+        if (target == cpu_id) { continue; } else { /* Other node selected */ }
         
         int count = __atomic_load_n(&sched_queues[target].total_tasks, __ATOMIC_RELAXED);
-        if (count == 0) continue;
+        // BUG-003 FIX: Livelock Check. The target CPU MUST have at least 2 tasks.
+        // If it has 1 task, that task is literally running right now and stealing it is useless overhead.
+        if (count <= 1) { continue; } else { /* Viable Stealing Target Found */ }
 
         uint64_t remote_flags;
         if (spinlock_try_acquire(&sched_queues[target].lock, &remote_flags)) {
             count = sched_queues[target].total_tasks;
-            if (count > 0) {
+            if (count > 1) {
                 int dist = get_cpu_distance(cpu_id, target);
                 if (dist == 1) {
                     best_victim = target;
@@ -276,9 +317,15 @@ process_t* sched_pick_next(uint8_t cpu_id) {
                     max_load     = count;
                     min_distance = dist;
                     best_victim  = target;
+                } else {
+                    // Inferior target, looking on...
                 }
+            } else {
+                // Load dropped between lock operations
             }
             spinlock_release(&sched_queues[target].lock, remote_flags);
+        } else {
+            // Livelock Avoidance: Target is busy modifying its queue, skip.
         }
     }
 
@@ -292,17 +339,22 @@ process_t* sched_pick_next(uint8_t cpu_id) {
                 __sched_remove_locked(best_victim, back);
                 spinlock_release(&sched_queues[best_victim].lock, remote_flags);
                 return back;
+            } else {
+                // Task is bound to the target CPU via affinity. Cannot steal.
             }
+        } else {
+            // Active Queues suddenly dried up
         }
         spinlock_release(&sched_queues[best_victim].lock, remote_flags);
+    } else {
+        // No stealable threads in the entire SMP grid
     }
 
     return NULL;
 }
 
 uint64_t sched_get_load(uint8_t cpu_id) {
-    if (cpu_id >= MAX_CPUS) return 0;
-    return (uint64_t)sched_queues[cpu_id].total_tasks;
+    if (cpu_id >= MAX_CPUS) { return 0; } else { return (uint64_t)sched_queues[cpu_id].total_tasks; }
 }
 
 void sched_debug_dump(void) {
@@ -313,13 +365,13 @@ void sched_debug_dump(void) {
         total_pending += count;
         if (count > 0) {
             char msg[64];
-            // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
             snprintf(msg, sizeof(msg), "  CPU %d: %d tasks pending\n", i, count);
             serial_write(msg);
+        } else {
+            // CPU clear
         }
     }
     char msg[64];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     snprintf(msg, sizeof(msg), "  Total Pending Tasks: %d\n", total_pending);
     serial_write(msg);
     serial_write("[SCHED-DUMP] End.\n");
@@ -329,7 +381,6 @@ void init_multitasking(void) {
     init_process_manager();
 
     for (int i = 0; i < MAX_CPUS; i++) {
-        // NOLINTNEXTLINE(clang-diagnostic-missing-field-initializers)
         spinlock_init(&sched_queues[i].lock);
         sched_queues[i].total_tasks  = 0;
         sched_queues[i].min_vruntime = 0;
@@ -356,62 +407,76 @@ void enable_scheduler(void) {
 
 void init_multitasking_ap(void) {
     uint8_t cpu_id = (uint8_t)get_cpu_id_fast();
-    if (cpu_id >= MAX_CPUS) return;
+    if (cpu_id >= MAX_CPUS) { return; } else { /* Init Task Process */ }
     process_t* idle     = create_idle_task(cpu_id);
     current_process[cpu_id] = idle;
     idle_tasks[cpu_id]  = idle;
     if (per_cpu_data[cpu_id]) {
         per_cpu_data[cpu_id]->current_process = current_process[cpu_id];
+    } else {
+        // Critical GS mapping fail
     }
 }
 
 void update_task_priority(process_t* proc, bool used_full_slice) {
-    if (proc->pid == 0) return;
+    if (proc->pid == 0) { return; } else { /* Proceed to demote/promote */ }
     
     int p = (int)proc->priority;
     if (!used_full_slice) {
         if (p < (int)PRIO_HIGH) {
             proc->priority = (kernel_prio_t)(p + 1);
+        } else {
+            // Already Max Prio
         }
     } else {
         if (p > (int)PRIO_LOW) {
             proc->priority = (kernel_prio_t)(p - 1);
+        } else {
+            // Already Min Prio
         }
     }
 }
 
 void check_pending_task(void) {
     uint8_t cpu_id = (uint8_t)get_cpu_id_fast();
-    if (cpu_id >= MAX_CPUS || !per_cpu_data[cpu_id]) return;
+    if (cpu_id >= MAX_CPUS || !per_cpu_data[cpu_id]) { return; } else { /* Check Ghost Tasks */ }
     process_t* pending = (process_t*)per_cpu_data[cpu_id]->pending_task;
     per_cpu_data[cpu_id]->pending_task = NULL;
 
     if (pending && pending->state == PROCESS_READY) {
         sched_enqueue(cpu_id, pending, pending->priority, pending->affinity);
+    } else {
+        // Task either exited or properly destroyed
     }
 }
 
 __attribute__((no_stack_protector))
 void schedule(void) {
-    if (unlikely(global_panic_active)) return;
+    if (unlikely(global_panic_active)) { return; } else { /* Scheduler permitted */ }
 
     uint64_t rflags;
     __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
 
     if (unlikely(!scheduler_active)) {
-        if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+        if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* Proceed Muted */ }
         return;
+    } else {
+        // Safe to context switch
     }
 
     uint8_t cpu_id = (uint8_t)get_cpu_id_fast();
     if (unlikely(cpu_id >= MAX_CPUS)) {
-        if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+        if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* Check Rflags */ }
         return;
+    } else {
+        // Legitimate execution node
     }
 
     if (per_cpu_data[cpu_id] && per_cpu_data[cpu_id]->preempt_count > 0) {
-        if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+        if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* Skip context switch (RCU Read lock active) */ }
         return;
+    } else {
+        // Pass through
     }
 
     paging_check_tlb_flush(cpu_id);
@@ -424,11 +489,15 @@ void schedule(void) {
             process_t* old_pending = (process_t*)per_cpu_data[cpu_id]->pending_task;
             if (old_pending->state == PROCESS_READY) {
                 sched_enqueue(cpu_id, old_pending, old_pending->priority, old_pending->affinity);
+            } else {
+                // Not runnable
             }
+        } else {
+            // No pending collisions
         }
-        if (per_cpu_data[cpu_id]) per_cpu_data[cpu_id]->pending_task = curr;
+        if (per_cpu_data[cpu_id]) { per_cpu_data[cpu_id]->pending_task = curr; } else { /* Failsafe */ }
     } else {
-        if (per_cpu_data[cpu_id]) per_cpu_data[cpu_id]->pending_task = NULL;
+        if (per_cpu_data[cpu_id]) { per_cpu_data[cpu_id]->pending_task = NULL; } else { /* Failsafe */ }
     }
 
     process_t* next = sched_pick_next(cpu_id);
@@ -437,15 +506,19 @@ void schedule(void) {
         if (next->state == PROCESS_ZOMBIE || next->state == PROCESS_DEAD) {
             next = sched_pick_next(cpu_id);
             continue;
+        } else {
+            // Task is ready
         }
 
         bool active_elsewhere = false;
         for (int i = 0; i < num_cpus; i++) {
-            if (i == cpu_id) continue;
+            if (i == cpu_id) { continue; } else { /* Inspect other nodes */ }
             if (current_process[i] == next || 
                (per_cpu_data[i] && per_cpu_data[i]->switching_task == next)) {
                 active_elsewhere = true;
                 break;
+            } else {
+                // Cross-core isolation passed
             }
         }
 
@@ -453,6 +526,8 @@ void schedule(void) {
             sched_enqueue(cpu_id, next, next->priority, next->affinity);
             next = idle_tasks[cpu_id];
             break;
+        } else {
+            // Guaranteed single execution thread constraint holds.
         }
         
         break;
@@ -463,18 +538,22 @@ void schedule(void) {
         if (unlikely(!next)) {
             panic_at("scheduler.c", __LINE__, KERR_NULL_DEREFERENCE, "CRITICAL: No runnable task and IDLE task is NULL!");
             __builtin_unreachable();
+        } else {
+            // Rescued by Idle node
         }
+    } else {
+        // Proceeding smoothly with task 
     }
 
     next->cpu_id = cpu_id;
     next->state  = PROCESS_RUNNING;
 
     if (next != curr) {
-        if (per_cpu_data[cpu_id]) per_cpu_data[cpu_id]->switching_task = curr;
+        if (per_cpu_data[cpu_id]) { per_cpu_data[cpu_id]->switching_task = curr; } else { /* Valid struct */ }
         current_process[cpu_id] = next;
 
         uint64_t kernel_stack_top = (uint64_t)next->stack_base + KERNEL_STACK_SIZE;
-        if (per_cpu_data[cpu_id]) per_cpu_data[cpu_id]->kernel_stack = kernel_stack_top;
+        if (per_cpu_data[cpu_id]) { per_cpu_data[cpu_id]->kernel_stack = kernel_stack_top; } else { /* Valid */ }
         set_kernel_stack(cpu_id, kernel_stack_top);
 
         prefetch_stack((void*)next->rsp);
@@ -482,9 +561,9 @@ void schedule(void) {
 
         switch_to_task(&curr->rsp, next->rsp, curr->fxsave_region, next->fxsave_region, next);
 
-        if (per_cpu_data[cpu_id]) per_cpu_data[cpu_id]->switching_task = NULL;
+        if (per_cpu_data[cpu_id]) { per_cpu_data[cpu_id]->switching_task = NULL; } else { /* Switch complete */ }
     } else {
-        if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+        if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* Unmodified */ }
     }
 
     check_pending_task();
@@ -496,32 +575,38 @@ void yield(void) {
     
     uint8_t    cpu_id = (uint8_t)get_cpu_id_fast();
     process_t* curr   = current_process[cpu_id];
-    if (curr && curr->pid != 0) update_task_priority(curr, false);
+    if (curr && curr->pid != 0) { update_task_priority(curr, false); } else { /* Idle skip */ }
     
     schedule();
     
     if (rflags & 0x200) {
         __asm__ volatile("sti" ::: "memory");
+    } else {
+        // Do nothing to avoid breaking lock guarantees!
     }
 }
 
 void yield_cpu(void) { yield(); }
 
 void process_tick(void) {
-    if (unlikely(global_panic_active)) return;
+    if (unlikely(global_panic_active)) { return; } else { /* Tick active */ }
 
     uint8_t cpu_id = (uint8_t)get_cpu_id_fast();
-    if (cpu_id >= MAX_CPUS) return;
+    if (cpu_id >= MAX_CPUS) { return; } else { /* Valid */ }
 
     cpu_tick_counts[cpu_id]++;
 
     if (current_process[cpu_id] && current_process[cpu_id]->pid == 0) {
-        if (per_cpu_data[cpu_id]) per_cpu_data[cpu_id]->idle_ticks++;
+        if (per_cpu_data[cpu_id]) { per_cpu_data[cpu_id]->idle_ticks++; } else { /* Verified structure */ }
+    } else {
+        // Target is busy, idle stays put
     }
 
     if (cpu_id == 0) {
         extern volatile uint64_t system_ticks;
         system_ticks++; 
+    } else {
+        // Only core 0 manages monolithic global timer reference
     }
 
     uint64_t now_ticks = timer_get_ticks();
@@ -533,8 +618,8 @@ void process_tick(void) {
     while (p) {
         process_t* next_p = p->sleep_next;
         if (now_ticks >= p->wake_tick) {
-            if (prev) prev->sleep_next = next_p;
-            else sched_queues[cpu_id].sleep_queue = next_p;
+            if (prev) { prev->sleep_next = next_p; }
+            else { sched_queues[cpu_id].sleep_queue = next_p; }
 
             p->sleep_next = NULL;
             p->state      = PROCESS_READY;
@@ -551,6 +636,8 @@ void process_tick(void) {
     process_t* curr = current_process[cpu_id];
     if (curr && curr->pid != 0 && curr->state == PROCESS_RUNNING) {
         update_task_priority(curr, true);
+    } else {
+        // Pass
     }
     schedule();
 }
@@ -576,6 +663,8 @@ void task_sleep(uint64_t ticks) {
         schedule();
         if (rflags & 0x200) {
             __asm__ volatile("sti" ::: "memory");
+        } else {
+            // Keep sealed
         }
     }
 }

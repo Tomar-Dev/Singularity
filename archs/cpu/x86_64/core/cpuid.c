@@ -125,7 +125,9 @@ static void guess_microarchitecture() {
         strncpy(cpu_info.codename, "Virtual CPU", sizeof(cpu_info.codename)-1);
         strncpy(cpu_info.socket, "Virtual Socket", sizeof(cpu_info.socket)-1);
         strncpy(cpu_info.lithography, "N/A", sizeof(cpu_info.lithography)-1);
-    } else {}
+    } else {
+        // Physical Hardware mapping intact
+    }
     
     cpu_info.codename[sizeof(cpu_info.codename)-1] = '\0';
     cpu_info.socket[sizeof(cpu_info.socket)-1] = '\0';
@@ -142,7 +144,7 @@ static void detect_cache_topology() {
         for (int i = 0; i < 10; i++) {
             cpuid_count(4, i, &a, &b, &c, &d);
             int type = a & 0x1F;
-            if (type == 0) break;
+            if (type == 0) { break; } else { /* Valid */ }
 
             int level = (a >> 5) & 0x7;
             int sets = c + 1;
@@ -152,10 +154,10 @@ static void detect_cache_topology() {
 
             uint32_t size_kb = (sets * partitions * ways * line_size) / 1024;
 
-            if (level == 1) cpu_info.l1_cache_size += size_kb;
-            else if (level == 2) cpu_info.l2_cache_size = size_kb;
-            else if (level == 3) cpu_info.l3_cache_size = size_kb;
-            else {}
+            if (level == 1) { cpu_info.l1_cache_size += size_kb; }
+            else if (level == 2) { cpu_info.l2_cache_size = size_kb; }
+            else if (level == 3) { cpu_info.l3_cache_size = size_kb; }
+            else { /* Extraneous */ }
         }
     } else if (cpu_info.vendor == VENDOR_AMD) {
         cpuid(0x80000005, &a, &b, &c, &d);
@@ -165,6 +167,7 @@ static void detect_cache_topology() {
         cpu_info.l2_cache_size = (c >> 16) & 0xFFFF;
         cpu_info.l3_cache_size = (d >> 18) * 512;
     } else {
+        // Unknown Architecture Topologies
     }
 }
 
@@ -185,30 +188,34 @@ static void detect_core_topology() {
             cpuid_count(0xB, 0, &a, &b, &c, &d);
             if ((c & 0xFF00) >> 8 == 1) { 
                 logical_per_core = b & 0xFFFF;
-            } else {}
+            } else {
+                // SMT Thread structure missed
+            }
 
             cpuid_count(0xB, 1, &a, &b, &c, &d);
             if ((c & 0xFF00) >> 8 == 2) { 
                 logical_total = b & 0xFFFF;
-            } else {}
+            } else {
+                // Logical core thread missed
+            }
 
             if (logical_per_core > 0 && logical_total > 0) {
                 cpu_info.logical_cores  = logical_total;
                 cpu_info.physical_cores = logical_total / logical_per_core;
-                if (cpu_info.physical_cores == 0) cpu_info.physical_cores = 1; else {}
+                if (cpu_info.physical_cores == 0) { cpu_info.physical_cores = 1; } else { /* Valid */ }
             } else {
                 cpuid(1, &a, &b, &c, &d);
                 uint32_t max_logical = (b >> 16) & 0xFF;
-                cpu_info.logical_cores  = (max_logical > 0) ? max_logical : 1;
-                cpu_info.physical_cores = cpu_info.has_ht ? (cpu_info.logical_cores / 2) : cpu_info.logical_cores;
-                if (cpu_info.physical_cores == 0) cpu_info.physical_cores = 1; else {}
+                if (max_logical > 0) { cpu_info.logical_cores = max_logical; } else { cpu_info.logical_cores = 1; }
+                if (cpu_info.has_ht) { cpu_info.physical_cores = (cpu_info.logical_cores / 2); } else { cpu_info.physical_cores = cpu_info.logical_cores; }
+                if (cpu_info.physical_cores == 0) { cpu_info.physical_cores = 1; } else { /* Valid */ }
             }
         } else {
             cpuid(1, &a, &b, &c, &d);
             uint32_t max_logical = (b >> 16) & 0xFF;
-            cpu_info.logical_cores  = (max_logical > 0) ? max_logical : 1;
-            cpu_info.physical_cores = cpu_info.has_ht ? (cpu_info.logical_cores / 2) : cpu_info.logical_cores;
-            if (cpu_info.physical_cores == 0) cpu_info.physical_cores = 1; else {}
+            if (max_logical > 0) { cpu_info.logical_cores = max_logical; } else { cpu_info.logical_cores = 1; }
+            if (cpu_info.has_ht) { cpu_info.physical_cores = (cpu_info.logical_cores / 2); } else { cpu_info.physical_cores = cpu_info.logical_cores; }
+            if (cpu_info.physical_cores == 0) { cpu_info.physical_cores = 1; } else { /* Valid */ }
         }
 
     } else if (cpu_info.vendor == VENDOR_AMD || cpu_info.vendor == VENDOR_HYGON) {
@@ -223,12 +230,17 @@ static void detect_core_topology() {
             if (max_ext >= 0x8000001E) {
                 cpuid(0x8000001E, &a, &b, &c, &d);
                 threads_per_core = ((b >> 8) & 0xFF) + 1;
-            } else {}
+            } else {
+                // Single Threading Only
+            }
 
             cpu_info.physical_cores = nc;
             cpu_info.logical_cores  = nc * threads_per_core;
-        } else {}
+        } else {
+            // Missing Topology Leaf
+        }
     } else {
+        // Unknown Architecture Core Count
     }
 }
 
@@ -255,9 +267,19 @@ void detect_cpu() {
 
     if (max_std_func >= 7) {
         cpuid_count(7, 0, &eax, &ebx, &ecx, &edx);
-        cpu_info.has_smep = (ebx & (1 << 7));  // GÜVENLİK YAMASI
-        cpu_info.has_smap = (ebx & (1 << 20)); // GÜVENLİK YAMASI
-    } else {}
+        cpu_info.has_smep = (ebx & (1 << 7));  
+        cpu_info.has_smap = (ebx & (1 << 20)); 
+        cpu_info.has_avx2   = (ebx & (1 << 5));
+        cpu_info.has_avx512 = (ebx & (1 << 16));
+        cpu_info.has_sha    = (ebx & (1 << 29));
+        cpu_info.has_cet_ss  = (ecx & (1 << 7));
+        cpu_info.has_cet_ibt = (edx & (1 << 20));
+        
+        // BUG-007 FIX: Unified feature struct mappings
+        cpu_info.has_rdseed = (ebx & (1 << 18)) != 0;
+    } else {
+        // Pre-Haswell features only
+    }
 
     if (max_std_func >= 1) {
         cpuid(1, &eax, &ebx, &ecx, &edx);
@@ -271,7 +293,9 @@ void detect_cpu() {
             model  += ((eax >> 16) & 0xF) << 4;
         } else if (family == 6) {
             model += ((eax >> 16) & 0xF) << 4;
-        } else {}
+        } else {
+            // Unchanged mapped IDs
+        }
 
         cpu_info.family   = family;
         cpu_info.model    = model;
@@ -299,7 +323,9 @@ void detect_cpu() {
         cpu_info.has_rdrand = (ecx & (1 << 30));
 
         cpu_info.is_hypervisor = (ecx & (1U << 31));
-    } else {}
+    } else {
+        // Obsolete processors
+    }
 
     cpuid(0x40000000, &eax, &ebx, &ecx, &edx);
     if (eax >= 0x40000001) {
@@ -318,23 +344,19 @@ void detect_cpu() {
         } else if (strcmp(hv_sig, "VMwareVMware") == 0) {
             cpu_info.vendor = VENDOR_VMWARE;
             cpu_info.is_hypervisor = true;
-        } else {}
-    } else {}
-
-    if (max_std_func >= 7) {
-        cpuid_count(7, 0, &eax, &ebx, &ecx, &edx);
-        cpu_info.has_avx2   = (ebx & (1 << 5));
-        cpu_info.has_avx512 = (ebx & (1 << 16));
-        cpu_info.has_sha    = (ebx & (1 << 29));
-        
-        cpu_info.has_cet_ss  = (ecx & (1 << 7));
-        cpu_info.has_cet_ibt = (edx & (1 << 20));
-    } else {}
+        } else {
+            // Unmapped hypervisor string
+        }
+    } else {
+        // Native Hardware 
+    }
 
     if (max_std_func >= 0xD) {
         cpuid_count(0xD, 1, &eax, &ebx, &ecx, &edx);
         cpu_info.has_xsaveopt = (eax & (1 << 0));
-    } else {}
+    } else {
+        // Safe drop
+    }
 
     uint32_t max_ext_func;
     cpuid(0x80000000, &max_ext_func, &ebx, &ecx, &edx);
@@ -343,8 +365,10 @@ void detect_cpu() {
         cpuid(0x80000001, &eax, &ebx, &ecx, &edx);
         cpu_info.has_longmode = (edx & (1 << 29));
         cpu_info.has_sse4a    = (ecx & (1 << 6));
-        if (cpu_info.vendor == VENDOR_AMD) { cpu_info.has_svm = (ecx & (1 << 2)); } else {}
-    } else {}
+        if (cpu_info.vendor == VENDOR_AMD) { cpu_info.has_svm = (ecx & (1 << 2)); } else { /* Clean Intel */ }
+    } else {
+        // Unmapped properties
+    }
 
     if (max_ext_func >= 0x80000004) {
         cpuid(0x80000002, &eax, &ebx, &ecx, &edx);
@@ -372,7 +396,9 @@ void detect_cpu() {
         if(i > 0) {
             while(cpu_info.brand_string[i]) { cpu_info.brand_string[j++] = cpu_info.brand_string[i++]; }
             cpu_info.brand_string[j] = '\0';
-        } else {}
+        } else {
+            // Perfect trimmed alignment
+        }
     } else {
         strncpy(cpu_info.brand_string, "Unknown CPU", sizeof(cpu_info.brand_string)-1);
         cpu_info.brand_string[sizeof(cpu_info.brand_string)-1] = '\0';
@@ -396,10 +422,13 @@ void detect_cpu() {
 
     if (current_cpu_driver && current_cpu_driver->init) {
         current_cpu_driver->init();
-    } else {}
+    } else {
+        // Fallback default logic missing hook
+    }
 
     printf("[CPU] Detected: %s\n", cpu_info.brand_string);
 }
 
 void print_cpu_z_info() {
+    // Blank wrapper for future system utilities GUI additions
 }

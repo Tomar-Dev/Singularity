@@ -17,7 +17,6 @@
 
 extern void console_set_auto_flush(bool enabled);
 extern uint64_t timer_get_ticks();
-extern void vga_set_color(uint8_t fg, uint8_t bg);
 extern void stdio_force_unlock(); 
 extern void console_force_unlock(); 
 extern void framebuffer_force_unlock();
@@ -79,27 +78,19 @@ void set_panic_registers(registers_t* regs) {
     global_panic_regs = regs;
 }
 
-// --------------------------------------------------------------------------------
-// PANIC İZOLASYON KATMANI (Bozuk sistem kodlarına güvenilmez)
-// --------------------------------------------------------------------------------
-
 static void panic_raw_reboot(void) {
     panic_print_serial("\n[PANIC] Executing Raw Hardware Reboot...\n");
     printf("\n[PANIC] Rebooting System...\n");
     framebuffer_flush();
     
-    // Klavye portu üzerinden donanımsal reset
     uint8_t good = 0x02;
     while (good & 0x02) good = hal_io_inb(0x64);
     hal_io_outb(0x64, 0xFE);
     
-    // PCI veri yolu üzerinden zorunlu reset
     hal_io_outb(0xCF9, 0x06);
     
-    // UEFI üzerinden reset
-    if (uefi_available()) uefi_reset_system(1); // EFI_RESET_WARM
+    if (uefi_available()) uefi_reset_system(1); 
     
-    // Son çare: IDT'yi silip işlemciyi Triple Fault'a düşür
     __asm__ volatile ("lidt (%0); int3" : : "r" (0));
     for(;;) hal_cpu_halt();
 }
@@ -109,24 +100,19 @@ static void panic_raw_shutdown(void) {
     printf("\n[PANIC] Shutting Down System...\n");
     framebuffer_flush();
     
-    // ACPI Soft-Off (Güvenli Port I/O)
     acpi_power_off(); 
     
-    // QEMU ve VirtualBox Sihirli Kapatma Portları
     hal_io_outw(0x604,  0x2000); 
     hal_io_outw(0xB004, 0x2000); 
     hal_io_outw(0x4004, 0x3400); 
     
-    // UEFI üzerinden kapatma
-    if (uefi_available()) uefi_reset_system(2); // EFI_RESET_SHUTDOWN
+    if (uefi_available()) uefi_reset_system(2); 
     
-    // Son çare: IDT'yi silip işlemciyi dondur
     __asm__ volatile ("lidt (%0); int3" : : "r" (0));
     for(;;) hal_cpu_halt();
 }
 
 static void panic_raw_diagnostic(void) {
-    // Allocation veya Kilit (Lock) gerektirmeyen, salt donanım okuması yapan izole tanılayıcı
     printf("\n--- SAFE PANIC DIAGNOSTICS ---\n");
     
     uint64_t cr0, cr2, cr3, cr4, efer, lstar;
@@ -137,19 +123,17 @@ static void panic_raw_diagnostic(void) {
     efer = rdmsr(0xC0000080);
     lstar = rdmsr(0xC0000082);
     
-    vga_set_color(14, 9);
+    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_LIGHT_BLUE);
     printf("CR0 : 0x%016lx | CR2 : 0x%016lx\n", cr0, cr2);
     printf("CR3 : 0x%016lx | CR4 : 0x%016lx\n", cr3, cr4);
     printf("EFER: 0x%016lx | LSTAR: 0x%016lx\n", efer, lstar);
-    vga_set_color(15, 9);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_LIGHT_BLUE);
     
     uint64_t up_ms = timer_get_ticks() * 4;
     printf("Panic Uptime: %lu.%03lu sec\n", up_ms / 1000, up_ms % 1000);
     printf("------------------------------\n");
     framebuffer_flush();
 }
-
-// --------------------------------------------------------------------------------
 
 static void dump_exception_details(registers_t* regs, kernel_error_t code) {
     if (!regs) return;
@@ -168,20 +152,22 @@ static void dump_exception_details(registers_t* regs, kernel_error_t code) {
         printf("Faulting Address: 0x%016lx\n", cr2);
         
         if (cr2 < 4096) {
-            vga_set_color(14, 9);
+            console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_LIGHT_BLUE);
             printf(">>> EXPLICIT NULL POINTER DEREFERENCE DETECTED <<<\n");
-            vga_set_color(15, 9);
+            console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_LIGHT_BLUE);
         } else if (cr2 >= regs->rsp - 8192 && cr2 <= regs->rsp + 8192) {
-            vga_set_color(14, 9);
+            console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_LIGHT_BLUE);
             printf(">>> PROBABLE STACK OVERFLOW (Guard Page Hit) <<<\n");
-            vga_set_color(15, 9);
+            console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_LIGHT_BLUE);
+        } else {
+            // General mapped access fault
         }
 
         printf("Access Type     : %s\n", fetch ? "Instruction Fetch" : (write ? "Write" : "Read"));
         printf("Privilege Level : %s\n", user ? "User Mode (Ring 3)" : "Kernel Mode (Ring 0)");
         printf("Reason          : %s\n", present ? "Protection Violation (Page is read-only or no exec)" 
                                          : "Page Not Present (Not mapped in RAM)");
-        if (rsvd) printf("!!! Reserved Bit Violation in Page Table !!!\n");
+        if (rsvd) { printf("!!! Reserved Bit Violation in Page Table !!!\n"); } else { /* Clean */ }
         
         panic_print_serial("\n[PAGE FAULT] CR2: 0x%016lx | %s | %s | %s\n", 
                            cr2, write?"Write":"Read", user?"User":"Kernel", present?"ProtViol":"NotPresent");
@@ -193,10 +179,12 @@ static void dump_exception_details(registers_t* regs, kernel_error_t code) {
             bool idt = (regs->err_code >> 1) & 1;
             uint16_t index = regs->err_code >> 3;
             printf("Segment Selector Index: 0x%04x (Table: %s)\n", index, idt ? "IDT" : "GDT/LDT");
-            if (ext) printf("Exception originated from an external event.\n");
+            if (ext) { printf("Exception originated from an external event.\n"); } else { /* internal */ }
         } else {
             printf("Error Code is 0. Likely an invalid memory reference, unaligned SSE access, or privileged instruction.\n");
         }
+    } else {
+        // Safe skip
     }
 }
 
@@ -204,6 +192,8 @@ static void dump_registers_formatted(registers_t* regs, kernel_error_t code) {
     if (!regs) {
         printf("\n(No Register Context Available)\n");
         return;
+    } else {
+        // Continue formatting
     }
     
     uint64_t offset = 0;
@@ -212,9 +202,9 @@ static void dump_registers_formatted(registers_t* regs, kernel_error_t code) {
     uint64_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
 
-    vga_set_color(14, 9); 
+    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_LIGHT_BLUE); 
     printf("\n--- CPU CONTEXT (Exception) ---\n");
-    vga_set_color(15, 9); 
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_LIGHT_BLUE); 
     
     printf("RIP: 0x%016lx\n", regs->rip);
     
@@ -226,24 +216,28 @@ static void dump_registers_formatted(registers_t* regs, kernel_error_t code) {
     printf("R11: 0x%016lx  R12: 0x%016lx  R13: 0x%016lx\n", regs->r11, regs->r12, regs->r13);
     printf("R14: 0x%016lx  R15: 0x%016lx\n", regs->r14, regs->r15);
 
-    vga_set_color(14, 9);
+    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_LIGHT_BLUE);
     uint64_t rip_phys = get_physical_address(regs->rip);
     uint64_t rsp_phys = get_physical_address(regs->rsp);
     if (rip_phys == 0) {
         printf(" [!] DANGER: RIP is executing UNMAPPED memory!\n");
         panic_print_serial(" [!] DANGER: RIP is executing UNMAPPED memory!\n");
+    } else {
+        // Executing mapped logic
     }
     if (rsp_phys == 0) {
         printf(" [!] DANGER: RSP points to UNMAPPED memory (Stack destroyed)!\n");
         panic_print_serial(" [!] DANGER: RSP points to UNMAPPED memory (Stack destroyed)!\n");
+    } else {
+        // Stack valid
     }
-    vga_set_color(15, 9);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_LIGHT_BLUE);
 
     dump_exception_details(regs, code);
 
     panic_print_serial("\n--- CPU CONTEXT ---\n");
-    if (rip_sym) panic_print_serial("RIP: 0x%016lx <%s+%ld>\n", regs->rip, rip_sym, offset);
-    else         panic_print_serial("RIP: 0x%016lx\n", regs->rip);
+    if (rip_sym) { panic_print_serial("RIP: 0x%016lx <%s+%ld>\n", regs->rip, rip_sym, offset); }
+    else         { panic_print_serial("RIP: 0x%016lx\n", regs->rip); }
     panic_print_serial("RAX: 0x%016lx  RBX: 0x%016lx  RCX: 0x%016lx\n", regs->rax, regs->rbx, regs->rcx);
     panic_print_serial("RDX: 0x%016lx  RSP: 0x%016lx  RBP: 0x%016lx\n", regs->rdx, regs->rsp, regs->rbp);
     
@@ -262,10 +256,10 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
                                  (code >= KERR_RUST_PANIC && code <= KERR_RUST_SAFE_MEM);
                                  
     bool can_sandbox = true;
-    if (curr == NULL || curr->pid == 0) can_sandbox = false;
-    if (curr && (curr->flags & PROC_FLAG_CRITICAL)) can_sandbox = false;
-    if (code == KERR_DOUBLE_FAULT || code == KERR_DEADLOCK_DETECTED) can_sandbox = false;
-    if (is_fatal_memory_error) can_sandbox = false; 
+    if (curr == NULL || curr->pid == 0) { can_sandbox = false; } else { /* Valid */ }
+    if (curr && (curr->flags & PROC_FLAG_CRITICAL)) { can_sandbox = false; } else { /* Sandboxable */ }
+    if (code == KERR_DOUBLE_FAULT || code == KERR_DEADLOCK_DETECTED) { can_sandbox = false; } else { /* Recoverable code */ }
+    if (is_fatal_memory_error) { can_sandbox = false; } else { /* Recoverable */ }
     
     if (can_sandbox) {
         char sbox_buf[512];
@@ -278,6 +272,8 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
                  curr->pid, message, file, line);
         dbg_direct(sbox_buf);
         process_exit(); 
+    } else {
+        // Dropping into absolute hardware panic state
     }
 
     global_panic_active = true;
@@ -287,9 +283,10 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
     if (depth > 0) {
         dbg_direct("\n[PANIC] RECURSIVE PANIC DETECTED — Halting.\n");
         for(;;) { __asm__ volatile("cli; hlt" ::: "memory"); }
+    } else {
+        // Proceeding smoothly
     }
 
-    // Ekran ve I/O kilitlerini zorla aç
     stdio_force_unlock();
     console_force_unlock();
     debug_force_unlock();
@@ -300,7 +297,7 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
     while (__atomic_test_and_set(&panic_lock, __ATOMIC_ACQUIRE)) {
         hal_cpu_relax();
         start++;
-        if (start > 10000000) break; 
+        if (start > 10000000) { break; } else { /* Await */ }
     }
     
     console_set_auto_flush(true);
@@ -311,12 +308,12 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
     panic_print_serial("\n\n!!! KERNEL PANIC !!!\n");
     panic_print_serial("Time    : %lu.%lu sec\n", uptime / 1000, uptime % 1000);
     panic_print_serial("CPU     : %d\n", cpu_id);
-    if (curr) panic_print_serial("Task    : PID %lu\n", curr->pid);
+    if (curr) { panic_print_serial("Task    : PID %lu\n", curr->pid); } else { /* Ignored */ }
     panic_print_serial("Code    : 0x%02x (%s)\n", code, get_error_string(code));
     panic_print_serial("Message : %s\n", message);
     panic_print_serial("Location: %s:%d\n", file, line);
 
-    console_set_color(15, 9); 
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_LIGHT_BLUE); 
     console_clear();
 
     printf("\n[ %s KERNEL PANIC ]   \n", SINGULARITY_SYS_NAME);
@@ -327,6 +324,8 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
         uint64_t fn_offset = 0;
         const char* fn_name = ksyms_resolve_symbol((uint64_t)curr->thread_fn, &fn_offset);
         printf("Task    : PID %lu[%s]\n", curr->pid, fn_name ? fn_name : "Unknown");
+    } else {
+        // Blank
     }
     printf("Code    : 0x%02x (%s)\n", code, get_error_string(code));
     printf("Message : %s\n", message);
@@ -348,27 +347,26 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
     
     framebuffer_flush(); 
 
-    // Klavye tamponunda kalmış önceki basışları temizle
-    while (hal_io_inb(0x64) & 1) hal_io_inb(0x60);
+    while (hal_io_inb(0x64) & 1) { hal_io_inb(0x60); }
     
     bool ctrl_held = false;
     bool shift_held = false;
     
     for(;;) {
-        // Güç tuşunu dinle
         if (acpi_check_power_button_status()) {
             panic_raw_shutdown();
+        } else {
+            // Ignored
         }
 
-        // Klavyeyi dinle (Raw Port I/O)
         if (hal_io_inb(0x64) & 1) {
             uint8_t sc = hal_io_inb(0x60);
-            if (sc == 0xE0) continue;
+            if (sc == 0xE0) { continue; } else { /* Read correctly */ }
             bool is_break = (sc & 0x80) != 0;
             uint8_t key = sc & 0x7F;
             
-            if (key == 0x1D) ctrl_held = !is_break;
-            else if (key == 0x2A || key == 0x36) shift_held = !is_break;
+            if (key == 0x1D) { ctrl_held = !is_break; }
+            else if (key == 0x2A || key == 0x36) { shift_held = !is_break; }
             else if (!is_break && ctrl_held && shift_held) {
                 if (key == 0x02) { 
                     panic_raw_reboot(); 
@@ -386,8 +384,14 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
                 }
                 else if (key == 0x06) { 
                     panic_raw_reboot(); 
+                } else {
+                    // Ignored
                 }
+            } else {
+                // Key unmapped
             }
+        } else {
+            // Unresponsive loop
         }
         hal_cpu_relax();
     }

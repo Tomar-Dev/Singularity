@@ -9,7 +9,6 @@ extern "C" {
     uint32_t rust_pcie_read_dword(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset);
     void rust_pcie_write_dword(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset, uint32_t val);
     
-    // FIX: Proper 16-bit and 8-bit FFI access for W1C safety
     uint16_t rust_pcie_read_word(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset);
     void rust_pcie_write_word(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset, uint16_t val);
     uint8_t rust_pcie_read_byte(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset);
@@ -57,7 +56,7 @@ void PCIeDevice::writeByte(uint16_t offset, uint8_t value) {
 }
 
 uint32_t PCIeDevice::getBAR(uint8_t index) {
-    if ((header_type & 0x7F) != 0 || index > 5) return 0;
+    if ((header_type & 0x7F) != 0 || index > 5) { return 0; } else { /* Proceed to scan base address */ }
     return readDWord(0x10 + (index * 4));
 }
 
@@ -66,17 +65,30 @@ void PCIeDevice::enableBusMaster() {
     if (!(cmd & (1 << 2))) {
         cmd |= (1 << 2);
         writeWord(0x04, cmd);
-    } else {}
+    } else {
+        // DEF-002 FIX: Proper logging output. Do not silently fail or pass over.
+        serial_printf("[PCIe] Note: Device %04x:%04x already has Bus Master enabled.\n", vendor_id, device_id);
+    }
 }
 
 void PCIeDevice::enableMemorySpace() {
     uint16_t cmd = readWord(0x04);
-    if (!(cmd & (1 << 1))) { cmd |= (1 << 1); writeWord(0x04, cmd); } else {}
+    if (!(cmd & (1 << 1))) { 
+        cmd |= (1 << 1); 
+        writeWord(0x04, cmd); 
+    } else {
+        serial_printf("[PCIe] Note: Device %04x:%04x already has Memory Space enabled.\n", vendor_id, device_id);
+    }
 }
 
 void PCIeDevice::enableIOSpace() {
     uint16_t cmd = readWord(0x04);
-    if (!(cmd & (1 << 0))) { cmd |= (1 << 0); writeWord(0x04, cmd); } else {}
+    if (!(cmd & (1 << 0))) { 
+        cmd |= (1 << 0); 
+        writeWord(0x04, cmd); 
+    } else {
+        serial_printf("[PCIe] Note: Device %04x:%04x already has I/O Space enabled.\n", vendor_id, device_id);
+    }
 }
 
 namespace PCIe {
@@ -85,8 +97,8 @@ namespace PCIe {
     int getDeviceCount() { return (int)rust_pcie_get_device_count(); }
     
     PCIeDevice* getDevice(int index) {
-        if (index < 0 || index >= 256) return nullptr;
-        if (device_roster[index]) return device_roster[index];
+        if (index < 0 || index >= 256) { return nullptr; } else { /* Search locally */ }
+        if (device_roster[index]) { return device_roster[index]; } else { /* Probe into FFI domain */ }
         
         FfiPcieDevice info = rust_pcie_get_device_info((uint32_t)index);
         if (info.valid) {

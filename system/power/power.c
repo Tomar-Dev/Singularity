@@ -18,9 +18,9 @@ extern void stdio_set_buffering(bool enabled);
 extern void stdio_flush();
 
 void print_shutdown(const char* msg) {
-    vga_set_color(11, 0); 
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK); 
     printf("[ Power ] ");
-    vga_set_color(15, 0); 
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK); 
     printf("%s\n", msg);
     framebuffer_flush();
     stdio_flush(); 
@@ -33,9 +33,9 @@ void system_reboot() {
     scheduler_active = false; 
 
     printf("\n");
-    vga_set_color(14, 0); 
+    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK); 
     printf(" !!! INITIATING SYSTEM REBOOT !!! \n\n");
-    vga_set_color(15, 0);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 
     disk_cache_flush_all();
     device_manager_shutdown();
@@ -47,12 +47,12 @@ void system_reboot() {
     tsc_delay_ms(1000); 
     
     uint8_t good = 0x02;
-    while (good & 0x02) good = hal_io_inb(0x64);
+    while (good & 0x02) { good = hal_io_inb(0x64); }
     hal_io_outb(0x64, 0xFE);
     
     hal_io_outb(0xCF9, 0x06); 
 
-    if (uefi_available()) uefi_reset_system(1);
+    if (uefi_available()) { uefi_reset_system(1); } else { /* Standard */ }
     
     __asm__ volatile ("lidt (%0); int3" : : "r" (0));
     
@@ -66,12 +66,12 @@ void system_shutdown(const char* reason) {
     scheduler_active = false; 
 
     printf("\n");
-    vga_set_color(12, 0); 
+    console_set_color(CONSOLE_COLOR_LIGHT_RED, CONSOLE_COLOR_BLACK); 
     printf(" !!! INITIATING SYSTEM SHUTDOWN !!! \n");
     
-    vga_set_color(11, 0); 
+    console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK); 
     printf("\n Reason: ");
-    vga_set_color(15, 0); 
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK); 
     printf("%s\n\n", reason ? reason : "Unknown");
 
     disk_cache_flush_all();

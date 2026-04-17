@@ -8,12 +8,11 @@
 #include "archs/cpu/x86_64/interrupts/isr.h"
 #include "archs/cpu/cpu_hal.h"
 #include "kernel/fastops.h" 
+#include "system/console/console.h" 
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-extern void vga_set_color(uint8_t fg, uint8_t bg);
 
 #define KERNEL_SPACE_BASE 0xFFFF800000000000ULL
 
@@ -112,7 +111,7 @@ static inline uint64_t rdtsc_profile() {
 
 #define BOOT_TIME_END(name) do { \
     uint64_t _bt_diff = rdtsc_profile() - _bt_start; \
-    vga_set_color(15, 0); \
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK); \
     printf("[%s] %s: %d ms (Cycles: %lu)\n", "TIME", name, \
            (int)(_bt_diff / (CPU_FREQ_ROUGH_MHZ * 1000)), _bt_diff); \
 } while(0)

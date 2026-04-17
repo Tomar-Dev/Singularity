@@ -9,11 +9,30 @@
 extern "C" {
 #endif
 
+typedef enum {
+    CONSOLE_COLOR_BLACK = 0,
+    CONSOLE_COLOR_BLUE = 1,
+    CONSOLE_COLOR_GREEN = 2,
+    CONSOLE_COLOR_CYAN = 3,
+    CONSOLE_COLOR_RED = 4,
+    CONSOLE_COLOR_MAGENTA = 5,
+    CONSOLE_COLOR_BROWN = 6,
+    CONSOLE_COLOR_LIGHT_GREY = 7,
+    CONSOLE_COLOR_DARK_GREY = 8,
+    CONSOLE_COLOR_LIGHT_BLUE = 9,
+    CONSOLE_COLOR_LIGHT_GREEN = 10,
+    CONSOLE_COLOR_LIGHT_CYAN = 11,
+    CONSOLE_COLOR_LIGHT_RED = 12,
+    CONSOLE_COLOR_LIGHT_MAGENTA = 13,
+    CONSOLE_COLOR_YELLOW = 14,
+    CONSOLE_COLOR_WHITE = 15
+} console_color_t;
+
 void console_init();
 
 void console_putchar(char c);
 void console_write(const char* str);
-void console_set_color(uint8_t fg, uint8_t bg);
+void console_set_color(console_color_t fg, console_color_t bg);
 void console_clear();
 
 void console_write_noflush(const char* str);

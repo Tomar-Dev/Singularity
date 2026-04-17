@@ -4,6 +4,8 @@
 #include "libc/stdio.h"
 #include "libc/string.h"
 #include "drivers/serial/serial.h"
+#include "system/console/console.h" // DERLEME YAMASI: Console Header eklendi
+
 #define SMB_HST_STS   0x00
 #define SMB_HST_CNT   0x02
 #define SMB_HST_CMD   0x03
@@ -20,7 +22,11 @@ SMBusDriver::SMBusDriver(PCIeDevice* pci) : Device("Intel SMBus (I2C)", DEV_UNKN
 }
 
 SMBusDriver::~SMBusDriver() {
-    if (g_smbus == this) g_smbus = nullptr;
+    if (g_smbus == this) {
+        g_smbus = nullptr;
+    } else {
+        // Not the global instance
+    }
 }
 
 int SMBusDriver::init() {
@@ -29,7 +35,11 @@ int SMBusDriver::init() {
     uint32_t bar4 = pciDev->getBAR(4);
     io_base = bar4 & 0xFFFE;
     
-    if (io_base == 0) return 0;
+    if (io_base == 0) {
+        return 0;
+    } else {
+        // Base valid
+    }
     
     hal_io_outb(io_base + SMB_HST_STS, 0x1E); 
     
@@ -44,7 +54,7 @@ int SMBusDriver::init() {
 }
 
 uint8_t SMBusDriver::readByte(uint8_t device_addr, uint8_t reg_offset) {
-    if (io_base == 0) return 0xFF;
+    if (io_base == 0) { return 0xFF; } else { /* Valid */ }
     
     uint64_t flags = spinlock_acquire(&lock);
 
@@ -52,18 +62,18 @@ uint8_t SMBusDriver::readByte(uint8_t device_addr, uint8_t reg_offset) {
     while ((hal_io_inb(io_base + SMB_HST_STS) & 0x01) && timeout--) {
         hal_cpu_relax();
     }
+    
     if (timeout <= 0) {
         hal_io_outb(io_base + SMB_HST_STS, 0xFF);
         spinlock_release(&lock, flags);
         return 0xFF;
+    } else {
+        // Bus ready
     }
 
     hal_io_outb(io_base + SMB_HST_STS, 0xFE);
-
     hal_io_outb(io_base + SMB_XMIT_SLVA, (device_addr << 1) | 1);
-    
     hal_io_outb(io_base + SMB_HST_CMD, reg_offset);
-    
     hal_io_outb(io_base + SMB_HST_CNT, 0x48);
 
     timeout = 100000;
@@ -73,6 +83,8 @@ uint8_t SMBusDriver::readByte(uint8_t device_addr, uint8_t reg_offset) {
             hal_io_outb(io_base + SMB_HST_STS, 0xFF);
             spinlock_release(&lock, flags);
             return 0xFF;
+        } else {
+            // Waiting
         }
         hal_cpu_relax();
     }
@@ -91,8 +103,13 @@ extern "C" {
             PCIeDevice* pci = PCIe::getDevice(i);
             if (pci->class_id == 0x0C && pci->subclass_id == 0x05) {
                 SMBusDriver* drv = new SMBusDriver(pci);
-                if (drv->init()) return;
-                delete drv;
+                if (drv->init()) {
+                    return;
+                } else {
+                    delete drv;
+                }
+            } else {
+                // Not SMBus
             }
         }
     }
@@ -101,6 +118,8 @@ extern "C" {
         if (!g_smbus) {
             printf("Error: SMBus/I2C Controller is not initialized.\n");
             return;
+        } else {
+            // Found
         }
         
         printf("Dumping 256 bytes from I2C Device 0x%02X:\n", device_addr);
@@ -111,9 +130,13 @@ extern "C" {
             printf("%02X | ", i * 16);
             for (int j = 0; j < 16; j++) {
                 uint8_t val = g_smbus->readByte(device_addr, (i * 16) + j);
-                if (val == 0xFF) vga_set_color(8, 0);
+                if (val == 0xFF) {
+                    console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK);
+                } else {
+                    // Valid byte color
+                }
                 printf("%02X ", val);
-                vga_set_color(15, 0);
+                console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
             }
             printf("\n");
         }

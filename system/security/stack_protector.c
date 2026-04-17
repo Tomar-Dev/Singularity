@@ -3,6 +3,7 @@
 #include "libc/stdio.h"
 #include "kernel/debug.h"
 #include "system/security/rng.h" 
+
 __attribute__((used, visibility("default"))) uintptr_t __stack_chk_guard = 0;
 
 static uint8_t emergency_panic_stack[8192] __attribute__((aligned(16)));
@@ -10,12 +11,20 @@ static uint8_t emergency_panic_stack[8192] __attribute__((aligned(16)));
 __attribute__((no_stack_protector))
 void init_stack_protector() {
     __stack_chk_guard = get_secure_random();
+    
+    // SEC-003 FIX: Strengthen entropy with raw TSC cycles
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    uint64_t tsc = ((uint64_t)hi << 32) | lo;
+    __stack_chk_guard ^= tsc;
+
     if (__stack_chk_guard == 0) {
         __stack_chk_guard = 0xDEADBEEF0000FFFF;
+    } else {
+        // Entropy successfully collected
     }
 }
 
-// FIX: 'static' kaldırıldı ve 'used' eklendi.
 __attribute__((noreturn, noinline, used, no_stack_protector)) 
 void trigger_panic_safe(void) {
     panic_at("STACK_CHECK", 0, KERR_STACK_SMASH, "Stack Buffer Overflow Detected! (Canary Mismatch)");

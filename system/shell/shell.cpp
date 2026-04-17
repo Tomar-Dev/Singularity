@@ -12,12 +12,11 @@
 #include "kernel/fastops.h"
 #include "drivers/misc/speaker.h"
 #include "kernel/config.h"
+#include "system/console/console.h"
 
 inline void* operator new(size_t, void* p) { return p; }
 
 extern "C" {
-    void vga_set_color(uint8_t fg, uint8_t bg);
-    void set_color_rgb(uint32_t fg, uint32_t bg);
     void console_blink_cursor(bool state);
     void device_print_all(bool detailed);
     void init_pcie_cpp(bool verbose);
@@ -28,17 +27,6 @@ extern "C" {
 }
 
 static Shell* global_shell = nullptr;
-
-#define VGA_BLACK        0
-#define VGA_GREEN        2
-#define VGA_LIGHT_GREY   7
-#define VGA_DARK_GREY    8
-#define VGA_LIGHT_BLUE   9
-#define VGA_LIGHT_GREEN  10
-#define VGA_LIGHT_CYAN   11
-#define VGA_LIGHT_RED    12
-#define VGA_YELLOW       14
-#define VGA_WHITE        15
 
 Shell::Shell() {
     cmdLen = 0;
@@ -55,12 +43,12 @@ Shell::Shell() {
 void Shell::init() {}
 
 void Shell::runStartup() {
-    vga_set_color(VGA_YELLOW, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK);
     printf("\n>>> STARTUP Sequence <<<\n");
 
-    vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK);
     printf("[ STARTUP ] ");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("System services initializing...\n");
 
     executeScript("C:\\system\\startup.cfg");
@@ -68,62 +56,62 @@ void Shell::runStartup() {
     timer_sleep(10); 
     ffi_logger_flush_sync();
 
-    vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK);
     printf("[ STARTUP ] ");
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("System ready. ");
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("Launching shell environment...\n\n");
     
     ffi_logger_flush_sync();
 }
 
 void Shell::showWelcome() {
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREEN, CONSOLE_COLOR_BLACK);
     printf("%s Shell %s\n", SINGULARITY_SYS_NAME, SINGULARITY_SHELL_VER);
 
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("Type \"help\" to see a list of shell commands\n");
     printf("Type \"systemcheck\" to see the system status\n\n");
 
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 
     stdio_flush();
     printPrompt();
 }
 
 void Shell::logStartup(const char* msg, int status) {
-    vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK);
     printf("[ STARTUP ] ");
 
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("%-50s", msg);
 
     if (status == 1) {
-        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_LIGHT_GREEN, CONSOLE_COLOR_BLACK);
         printf("[ OK ]\n");
     } else if (status == 2) {
-        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        console_set_color(CONSOLE_COLOR_LIGHT_RED, CONSOLE_COLOR_BLACK);
         printf("[FAIL]\n");
     } else {
         printf("\n");
     }
 
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 }
 
 void Shell::executeScript(const char* path) {
     KObject* obj = ons_resolve(path);
-    if (!obj) { return; }
-    if (obj->type != KObjectType::BLOB) { kobject_unref(obj); return; }
+    if (!obj) { return; } else { /* Valid */ }
+    if (obj->type != KObjectType::BLOB) { kobject_unref(obj); return; } else { /* Read Stream Activated */ }
 
     KBlob* blob = (KBlob*)obj;
     uint64_t size = blob->getSize();
 
-    if (size == 0 || size > 65536) { kobject_unref(obj); return; }
+    if (size == 0 || size > 65536) { kobject_unref(obj); return; } else { /* Size validated */ }
 
     char* buf = (char*)kmalloc((size_t)size + 1);
-    if (!buf) { kobject_unref(obj); return; }
+    if (!buf) { kobject_unref(obj); return; } else { /* Allocation secure */ }
 
     isScriptMode = true;
     size_t read_bytes = 0;
@@ -138,6 +126,8 @@ void Shell::executeScript(const char* path) {
                 *next_line = '\0';
                 next_line++;
                 while (*next_line == '\r' || *next_line == '\n') { next_line++; }
+            } else {
+                // Break naturally
             }
 
             char* trim_start = line;
@@ -167,6 +157,8 @@ void Shell::executeScript(const char* path) {
                                         cmdTemp[i] = '\0';
                                         arg = &cmdTemp[i + 1];
                                         break;
+                                    } else {
+                                        // Still searching parameters
                                     }
                                 }
                                 
@@ -176,27 +168,43 @@ void Shell::executeScript(const char* path) {
                                 
                                 if (totally_silent && curr) {
                                     curr->flags |= PROC_FLAG_SILENT;
+                                } else {
+                                    // Raw process flags retained
                                 }
 
                                 int ret = dispatchCommand(cmd, arg);
                                 
                                 if (totally_silent && curr) {
                                     curr->flags = old_flags; 
+                                } else {
+                                    // Flags natively retained
                                 }
                                 
                                 if (!totally_silent) {
                                     ffi_logger_flush_sync(); 
                                     logStartup(desc_start, ret == 0 ? 1 : 2);
+                                } else {
+                                    // Silence upheld
                                 }
+                            } else {
+                                // No command given
                             }
+                        } else {
+                            // Syntax error
                         }
+                    } else {
+                        // Syntax error
                     }
                 } else {
                     processCommand(trim_start);
                 }
+            } else {
+                // Empty string
             }
             line = next_line;
         }
+    } else {
+        // I/O read failure on initial target
     }
     isScriptMode = false;
     kfree(buf);
@@ -204,11 +212,11 @@ void Shell::executeScript(const char* path) {
 }
 
 void Shell::printPrompt() {
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_GREEN, CONSOLE_COLOR_BLACK);
     printf("root@sys ");
-    vga_set_color(VGA_LIGHT_BLUE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_LIGHT_BLUE, CONSOLE_COLOR_BLACK);
     printf("%s", currentPath);
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("> ");
     stdio_flush();
 }
@@ -218,6 +226,8 @@ void Shell::resolveAbsolutePath(const char* input, char* output) {
         strncpy(output, currentPath, 255);
         output[255] = '\0';
         return;
+    } else {
+        // Path needs deeper checks
     }
 
     if (strcmp(input, "..") == 0 || strcmp(input, "..\\") == 0) {
@@ -230,19 +240,23 @@ void Shell::resolveAbsolutePath(const char* input, char* output) {
             } else {
                 *last_slash = '\0';
             }
+        } else {
+            // Reached top level
         }
         return;
+    } else {
+        // Normal evaluation bounds
     }
 
     if (((input[0] >= 'A' && input[0] <= 'Z') || (input[0] >= 'a' && input[0] <= 'z')) && input[1] == ':') {
         strncpy(output, input, 255);
         output[255] = '\0';
-        for(int i=0; output[i]; i++) if(output[i] == '/') output[i] = '\\';
-        if (strlen(output) == 2) strncat(output, "\\", 2);
+        for(int i=0; output[i]; i++) { if(output[i] == '/') output[i] = '\\'; }
+        if (strlen(output) == 2) { strncat(output, "\\", 2); } else { /* Valid */ }
     } else if (input[0] == '/' || input[0] == '\\') { 
         strncpy(output, input, 255);
         output[255] = '\0';
-        for(int i=0; output[i]; i++) if(output[i] == '/') output[i] = '\\';
+        for(int i=0; output[i]; i++) { if(output[i] == '/') output[i] = '\\'; }
     } else {
         size_t curLen = strlen(currentPath);
         strncpy(output, currentPath, 255);
@@ -250,15 +264,19 @@ void Shell::resolveAbsolutePath(const char* input, char* output) {
 
         if (curLen > 0 && output[curLen - 1] != '\\') {
             strncat(output, "\\", 255 - strlen(output));
+        } else {
+            // Properly formatted ending
         }
         strncat(output, input, 255 - strlen(output));
-        for(int i=0; output[i]; i++) if(output[i] == '/') output[i] = '\\';
+        for(int i=0; output[i]; i++) { if(output[i] == '/') output[i] = '\\'; }
     }
 }
 
 void Shell::processCommand() {
     if (cmdLen > 0 && cmdLen < CMD_BUF_SIZE) {
         processCommand(cmdBuffer);
+    } else {
+        // Void command sequence
     }
 }
 
@@ -275,12 +293,14 @@ void Shell::processCommand(const char* cmdStr) {
             tempBuf[i] = '\0';
             arg = &tempBuf[i + 1];
             break;
+        } else {
+            // Keep looping bounds
         }
     }
 
     dispatchCommand(cmd, arg);
 
-    vga_set_color(VGA_WHITE, VGA_BLACK);
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     stdio_flush();
 }
 
@@ -299,6 +319,8 @@ void Shell::onKeyDown(char c) {
             cmdBuffer[cmdLen] = '\0';
             printf("\b \b");
             stdio_flush();
+        } else {
+            // Cannot delete beyond zero point
         }
     } else {
         if (cmdLen < CMD_BUF_SIZE - 1) {
@@ -319,6 +341,8 @@ void Shell::update() {
         if (c != 0) {
             onKeyDown(c);
             console_blink_cursor(true);
+        } else {
+            // Empty char
         }
     }
 
@@ -330,6 +354,8 @@ void Shell::update() {
         blink_state = !blink_state;
         console_blink_cursor(blink_state);
         last_blink = now;
+    } else {
+        // Await cycle
     }
 }
 
@@ -345,7 +371,7 @@ extern "C" {
     }
 
     void shell_run_startup_c() {
-        if (global_shell) global_shell->runStartup();
+        if (global_shell) { global_shell->runStartup(); } else { /* Dropped */ }
     }
 
     void shell_update_c() {
@@ -354,8 +380,12 @@ extern "C" {
             if (first_run) {
                 global_shell->showWelcome();
                 first_run = false;
+            } else {
+                // Proceed directly
             }
             global_shell->update();
+        } else {
+            // Null drop
         }
     }
 }

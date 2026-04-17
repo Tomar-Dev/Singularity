@@ -5,17 +5,13 @@
 #include <stdint.h>
 #include "kernel/debug.h"
 
-// GÜVENLİK YAMASI: False Sharing (Cache Line Bouncing) önlendi.
-// spinlock_t yapısı L1 Cache Line boyutuna (64 Byte) hizalandı.
 typedef struct {
     volatile uint32_t next_ticket;
     volatile uint32_t serving_ticket;
     uint8_t _pad[56]; // 64 - 8 bytes = 56 bytes padding
 } __attribute__((aligned(64))) spinlock_t;
 
-// BUG-013 FIX: Deadlock Detection Threshold lowered to ~125ms @ 4GHz (500M cycles)
 #define SPINLOCK_DEADLOCK_CYCLES 500000000ULL
-
 #define RFLAGS_IF_BIT 0x200ULL
 
 static inline void spinlock_init(spinlock_t* lock) {
@@ -62,9 +58,19 @@ static inline uint64_t spinlock_acquire(spinlock_t* lock) {
 
         uint32_t my_ticket = __atomic_fetch_add(&lock->next_ticket, 1, __ATOMIC_RELAXED);
         uint64_t start_cycles = rdtsc_spin();
+        
+        // OPT-003 FIX: Exponential Backoff for Ticket Spinlocks
+        uint32_t backoff = 1;
 
         while (__atomic_load_n(&lock->serving_ticket, __ATOMIC_ACQUIRE) != my_ticket) {
-            hal_cpu_relax();
+            for (uint32_t i = 0; i < backoff; i++) {
+                hal_cpu_relax();
+            }
+            if (backoff < 256) {
+                backoff <<= 1;
+            } else {
+                // Max backoff reached
+            }
 
             extern volatile bool global_panic_active;
             if (!global_panic_active &&
@@ -100,11 +106,19 @@ static inline int spinlock_try_acquire(spinlock_t* lock, uint64_t* rflags) {
                 __asm__ volatile("" ::: "memory");
                 return 1;
             } else {
-                if (*rflags & RFLAGS_IF_BIT) { hal_interrupts_enable(); } else {}
+                if (*rflags & RFLAGS_IF_BIT) { 
+                    hal_interrupts_enable(); 
+                } else {
+                    // Do nothing
+                }
                 return 0;
             }
         } else {
-            if (*rflags & RFLAGS_IF_BIT) { hal_interrupts_enable(); } else {}
+            if (*rflags & RFLAGS_IF_BIT) { 
+                hal_interrupts_enable(); 
+            } else {
+                // Do nothing
+            }
             return 0;
         }
     }

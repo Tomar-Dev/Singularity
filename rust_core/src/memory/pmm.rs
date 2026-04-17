@@ -1,5 +1,4 @@
 // rust_core/src/memory/pmm.rs
-// Singularity Native Physical Memory Manager (v7.2 Enterprise)
 
 use crate::arch::sync::IrqSpinlock;
 use core::ffi::c_void;
@@ -63,7 +62,7 @@ struct PmmState {
     total_usable_memory_bytes: usize,
 
     initialized: bool,
-    nodes:[NumaNode; MAX_NUMA_NODES],
+    nodes: [NumaNode; MAX_NUMA_NODES],
 }
 
 unsafe impl Send for PmmState {}
@@ -83,15 +82,15 @@ static PMM: IrqSpinlock<PmmState> = IrqSpinlock::new(PmmState {
 
 #[derive(Copy, Clone)]
 struct Magazine {
-    frames:[usize; MAGAZINE_SIZE],
+    frames: [usize; MAGAZINE_SIZE],
     count: usize,
 }
 
-struct PerCpuMagazines { slots:[Magazine; MAX_CPUS] }
+struct PerCpuMagazines { slots: [Magazine; MAX_CPUS] }
 unsafe impl Sync for PerCpuMagazines {}
 
 static mut CPU_MAGAZINES: PerCpuMagazines = PerCpuMagazines {
-    slots:[Magazine { frames:[0usize; MAGAZINE_SIZE], count: 0 }; MAX_CPUS],
+    slots:[Magazine { frames: [0usize; MAGAZINE_SIZE], count: 0 }; MAX_CPUS],
 };
 
 static MAGAZINE_TOTAL: AtomicUsize = AtomicUsize::new(0);
@@ -99,22 +98,22 @@ static MAGAZINE_TOTAL: AtomicUsize = AtomicUsize::new(0);
 #[cold]
 #[inline(never)]
 unsafe fn pmm_double_free_panic(frame: usize) -> ! {
-    let mut buf =[0u8; 80];
+    let mut buf = [0u8; 80];
     let prefix = b"PMM Double Free! Frame: 0x";
     buf[..prefix.len()].copy_from_slice(prefix);
     let mut pos  = prefix.len();
     let mut hex  = frame * PAGE_SIZE;
-    let mut tmp  =[0u8; 16];
+    let mut tmp  = [0u8; 16];
     let mut tlen = 0usize;
     loop {
         let nibble = (hex & 0xF) as u8;
         tmp[tlen] = if nibble < 10 { b'0' + nibble } else { b'A' + nibble - 10 };
         tlen += 1;
         hex >>= 4;
-        if hex == 0 { break; } else {}
+        if hex == 0 { break; } else { /* Proceed */ }
     }
     for i in (0..tlen).rev() {
-        if pos < buf.len() - 1 { buf[pos] = tmp[i]; pos += 1; } else {}
+        if pos < buf.len() - 1 { buf[pos] = tmp[i]; pos += 1; } else { /* Stop */ }
     }
     buf[pos] = 0;
 
@@ -130,14 +129,16 @@ unsafe fn pmm_double_free_panic(frame: usize) -> ! {
 }
 
 fn free_region_internal(state: &mut PmmState, start: usize, count: usize) {
-    if count == 0 { return; } else {}
+    if count == 0 { return; } else { /* Proceed */ }
 
     let mut insert_idx = state.extent_count;
     for i in 0..state.extent_count {
         if state.extents[i].start > start {
             insert_idx = i;
             break;
-        } else {}
+        } else {
+            // Keep looking for insertion point
+        }
     }
 
     if state.extent_count >= MAX_EXTENTS {
@@ -165,11 +166,12 @@ fn free_region_internal(state: &mut PmmState, start: usize, count: usize) {
         }
         state.extent_count = w + 1;
     } else {
+        // Array empty
     }
 }
 
 fn reserve_region_internal(state: &mut PmmState, res_start: usize, res_count: usize) {
-    if res_count == 0 { return; } else {}
+    if res_count == 0 { return; } else { /* Proceed */ }
     let res_end = res_start + res_count;
     
     let mut new_extents = [Extent::default(); MAX_EXTENTS];
@@ -184,46 +186,86 @@ fn reserve_region_internal(state: &mut PmmState, res_start: usize, res_count: us
                 if new_count < MAX_EXTENTS {
                     new_extents[new_count] = Extent { start: ext.start, count: res_start - ext.start };
                     new_count += 1;
-                } else {}
+                } else {
+                    // Maximum bounds
+                }
+            } else {
+                // Lower bound clipped
             }
             if ext_end > res_end {
                 if new_count < MAX_EXTENTS {
                     new_extents[new_count] = Extent { start: res_end, count: ext_end - res_end };
                     new_count += 1;
-                } else {}
+                } else {
+                    // Maximum bounds
+                }
+            } else {
+                // Upper bound clipped
             }
         } else {
             if new_count < MAX_EXTENTS {
                 new_extents[new_count] = ext;
                 new_count += 1;
-            } else {}
+            } else {
+                // Maximum bounds
+            }
         }
     }
     state.extents = new_extents;
     state.extent_count = new_count;
 }
 
-fn alloc_contiguous_internal(state: &mut PmmState, count: usize, align: usize) -> Option<usize> {
+fn alloc_contiguous_internal(state: &mut PmmState, count: usize, align: usize, preferred_node: Option<usize>) -> Option<usize> {
     for i in 0..state.extent_count {
         let ext = state.extents[i];
         let aligned_start = (ext.start + align - 1) & !(align - 1);
+        
         if aligned_start >= ext.start {
-            let shift = aligned_start - ext.start;
-            if ext.count >= shift + count {
-                let rem_start = aligned_start + count;
-                let rem_count = (ext.start + ext.count) - rem_start;
-                
-                for j in i..state.extent_count - 1 {
-                    state.extents[j] = state.extents[j+1];
+            // FIX: Removed unused `mut valid_node = true;` logic pattern.
+            // Using idiomatic Rust expression binding without overwriting unused states.
+            let valid_node = if let Some(node_id) = preferred_node {
+                if node_id < MAX_NUMA_NODES {
+                    let node = &state.nodes[node_id];
+                    if node.active {
+                        if aligned_start >= node.start_frame && (aligned_start + count) <= node.end_frame {
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
                 }
-                state.extent_count -= 1;
-                
-                if rem_count > 0 { free_region_internal(state, rem_start, rem_count); } else {}
-                if shift > 0 { free_region_internal(state, ext.start, shift); } else {}
-                
-                return Some(aligned_start);
-            } else {}
-        } else {}
+            } else {
+                true // Global unconstrained allocation
+            };
+
+            if valid_node {
+                let shift = aligned_start - ext.start;
+                if ext.count >= shift + count {
+                    let rem_start = aligned_start + count;
+                    let rem_count = (ext.start + ext.count) - rem_start;
+                    
+                    for j in i..state.extent_count - 1 {
+                        state.extents[j] = state.extents[j+1];
+                    }
+                    state.extent_count -= 1;
+                    
+                    if rem_count > 0 { free_region_internal(state, rem_start, rem_count); } else { /* Clean block */ }
+                    if shift > 0 { free_region_internal(state, ext.start, shift); } else { /* Perfectly aligned */ }
+                    
+                    return Some(aligned_start);
+                } else {
+                    // Contiguous memory too small in this extent
+                }
+            } else {
+                // Skips extent because it doesn't match the required NUMA Node boundary.
+            }
+        } else {
+            // Misaligned bound failure
+        }
     }
     None
 }
@@ -231,7 +273,7 @@ fn alloc_contiguous_internal(state: &mut PmmState, count: usize, align: usize) -
 #[unsafe(no_mangle)]
 pub extern "C" fn pmm_init(multiboot_addr: usize, kernel_end: usize) {
     let mut state = PMM.lock();
-    if state.initialized { return; } else {}
+    if state.initialized { return; } else { /* First time configuration */ }
 
     let mut max_ram_addr = 0u64;
     let mut usable_ram   = 0u64;
@@ -240,7 +282,7 @@ pub extern "C" fn pmm_init(multiboot_addr: usize, kernel_end: usize) {
         let mut ptr = (multiboot_addr + 8) as *const u8;
         loop {
             let tag = ptr::read_unaligned(ptr as *const MultibootTag);
-            if tag.typ == 0 { break; } else {}
+            if tag.typ == 0 { break; } else { /* Valid tag */ }
             if tag.typ == 6 {
                 let mmap = ptr::read_unaligned(ptr as *const MmapTag);
                 let mut eptr = ptr.add(core::mem::size_of::<MmapTag>());
@@ -248,14 +290,18 @@ pub extern "C" fn pmm_init(multiboot_addr: usize, kernel_end: usize) {
                 while eptr < end_ptr {
                     let entry = ptr::read_unaligned(eptr as *const MmapEntry);
                     let region_end = entry.addr + entry.len;
-                    if region_end > max_ram_addr { max_ram_addr = region_end; } else {}
+                    if region_end > max_ram_addr { max_ram_addr = region_end; } else { /* Retain highest */ }
                     if entry.typ == 1 { 
                         usable_ram += entry.len; 
                         free_region_internal(&mut state, (entry.addr as usize) / PAGE_SIZE, (entry.len as usize) / PAGE_SIZE);
-                    } else {}
+                    } else {
+                        // Hardware reserved memory region
+                    }
                     eptr = eptr.add(mmap.entry_size as usize);
                 }
-            } else {}
+            } else {
+                // Not Mmap Tag
+            }
             ptr = ptr.add(((tag.size + 7) & !7) as usize);
         }
     }
@@ -295,22 +341,32 @@ pub extern "C" fn pmm_init(multiboot_addr: usize, kernel_end: usize) {
 }
 
 unsafe fn alloc_from_node(state: &mut PmmState, preferred_node: usize) -> *mut c_void {
-    let mut order =[0usize; MAX_NUMA_NODES];
+    let mut order = [0usize; MAX_NUMA_NODES];
     order[0] = preferred_node;
     let mut k = 1;
     for i in 0..MAX_NUMA_NODES {
-        if i != preferred_node { order[k] = i; k += 1; } else {}
+        if i != preferred_node { order[k] = i; k += 1; } else { /* Placed first */ }
     }
 
     for &node_id in order.iter() {
-        if node_id >= MAX_NUMA_NODES || !state.nodes[node_id].active { continue; } else {}
-        if let Some(f) = alloc_contiguous_internal(state, 1, 1) {
+        if node_id >= MAX_NUMA_NODES || !state.nodes[node_id].active { continue; } else { /* Valid Node */ }
+        if let Some(f) = alloc_contiguous_internal(state, 1, 1, Some(node_id)) {
             unsafe { *state.ref_counts.add(f) = 1; }
             state.used_frames += 1;
             return (f * PAGE_SIZE) as *mut c_void;
-        } else {}
+        } else {
+            // Node empty, falling back to next available NUMA node.
+        }
     }
-    ptr::null_mut()
+    
+    // Total System Starvation Fallback (Ignore NUMA completely)
+    if let Some(f) = alloc_contiguous_internal(state, 1, 1, None) {
+        unsafe { *state.ref_counts.add(f) = 1; }
+        state.used_frames += 1;
+        return (f * PAGE_SIZE) as *mut c_void;
+    } else {
+        ptr::null_mut()
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -328,9 +384,13 @@ pub unsafe extern "C" fn pmm_alloc_frame() -> *mut c_void {
                 mag2.count -= 1;
                 MAGAZINE_TOTAL.fetch_sub(1, Ordering::Relaxed);
                 return (mag2.frames[mag2.count] * PAGE_SIZE) as *mut c_void;
-            } else {}
+            } else {
+                // Magazine totally empty, fallback to Global PMM
+            }
         }
-    } else {}
+    } else {
+        // CPU limit breach
+    }
 
     let mut state = PMM.lock();
     if !state.initialized { return ptr::null_mut(); } else {
@@ -340,7 +400,7 @@ pub unsafe extern "C" fn pmm_alloc_frame() -> *mut c_void {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pmm_free_frame(ptr: *mut c_void) {
-    if ptr.is_null() { return; } else {}
+    if ptr.is_null() { return; } else { /* Active */ }
 
     let frame = ptr as usize / PAGE_SIZE;
     let cpu = unsafe { get_apic_id() } as usize;
@@ -360,16 +420,18 @@ pub unsafe extern "C" fn pmm_free_frame(ptr: *mut c_void) {
             MAGAZINE_TOTAL.fetch_add(1, Ordering::Relaxed);
             return;
         }
-    } else {}
+    } else {
+        // Safe bound bypassed
+    }
 
     let mut state = PMM.lock();
     unsafe { free_frame_locked(&mut state, ptr); }
 }
 
 unsafe fn free_frame_locked(state: &mut PmmState, ptr: *mut c_void) {
-    if ptr.is_null() { return; } else {}
+    if ptr.is_null() { return; } else { /* Valid */ }
     let frame = ptr as usize / PAGE_SIZE;
-    if frame >= state.total_frames { return; } else {}
+    if frame >= state.total_frames { return; } else { /* Valid */ }
 
     unsafe {
         let ref_ptr = state.ref_counts.add(frame);
@@ -382,43 +444,47 @@ unsafe fn free_frame_locked(state: &mut PmmState, ptr: *mut c_void) {
             if *ref_ptr == REF_FREE {
                 free_region_internal(state, frame, 1);
                 state.used_frames -= 1;
-            } else {}
+            } else {
+                // Shared ownership maintained
+            }
         }
     }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pmm_inc_ref(ptr: *mut c_void) {
-    if ptr.is_null() { return; } else {}
+    if ptr.is_null() { return; } else { /* Valid */ }
     let state = PMM.lock();
-    if !state.initialized { return; } else {}
+    if !state.initialized { return; } else { /* Valid */ }
     let frame = ptr as usize / PAGE_SIZE;
     if frame >= state.total_frames { return; } else {
         unsafe {
             let r = state.ref_counts.add(frame);
-            if *r == REF_RESERVED { return; } else {}
-            if *r < 254 { *r += 1; } else {}
+            if *r == REF_RESERVED { return; } else { /* Valid */ }
+            if *r < 254 { *r += 1; } else { /* Max bounds */ }
         }
     }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pmm_dec_ref(ptr: *mut c_void) {
-    if ptr.is_null() { return; } else {}
+    if ptr.is_null() { return; } else { /* Valid */ }
     let frame = ptr as usize / PAGE_SIZE;
     let mut state = PMM.lock();
-    if !state.initialized { return; } else {}
+    if !state.initialized { return; } else { /* Valid */ }
     if frame >= state.total_frames { return; } else {
         unsafe {
             let ref_ptr = state.ref_counts.add(frame);
             let refs = *ref_ptr;
-            if refs == REF_RESERVED { return; } else {}
+            if refs == REF_RESERVED { return; } else { /* Valid */ }
             if refs == REF_FREE { pmm_double_free_panic(frame); } else {
                 *ref_ptr = refs - 1;
                 if *ref_ptr == REF_FREE {
                     free_region_internal(&mut state, frame, 1);
                     state.used_frames -= 1;
-                } else {}
+                } else {
+                    // Shared block
+                }
             }
         }
     }
@@ -442,11 +508,11 @@ pub unsafe extern "C" fn pmm_alloc_contiguous(count: usize) -> *mut c_void {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pmm_alloc_contiguous_aligned(count: usize, align_pages: usize) -> *mut c_void {
-    if count == 0 { return ptr::null_mut(); } else {}
+    if count == 0 { return ptr::null_mut(); } else { /* Safe */ }
     let align = if align_pages == 0 { 1 } else { align_pages };
     let mut state = PMM.lock(); 
     if !state.initialized { return ptr::null_mut(); } else {
-        if let Some(f) = alloc_contiguous_internal(&mut *state, count, align) {
+        if let Some(f) = alloc_contiguous_internal(&mut *state, count, align, None) {
             for i in 0..count {
                 unsafe { *state.ref_counts.add(f + i) = 1; }
             }
@@ -460,7 +526,7 @@ pub unsafe extern "C" fn pmm_alloc_contiguous_aligned(count: usize, align_pages:
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pmm_free_contiguous(ptr: *mut c_void, count: usize) {
-    if ptr.is_null() || count == 0 { return; } else {}
+    if ptr.is_null() || count == 0 { return; } else { /* Valid */ }
     let start_frame = ptr as usize / PAGE_SIZE;
     let mut state = PMM.lock();
     if !state.initialized { return; } else {
@@ -485,12 +551,14 @@ pub unsafe extern "C" fn pmm_free_contiguous(ptr: *mut c_void, count: usize) {
                                     free_start = frame; free_count = 1;
                                 }
                                 state.used_frames -= 1;
-                            } else {}
+                            } else {
+                                // Maintained Ref
+                            }
                         }
                     }
                 }
             }
-            if free_count > 0 { free_region_internal(&mut state, free_start, free_count); } else {}
+            if free_count > 0 { free_region_internal(&mut state, free_start, free_count); } else { /* Safe */ }
         }
     }
 }
@@ -501,7 +569,7 @@ unsafe fn magazine_refill(cpu: usize) -> usize {
         if !state.initialized { return 0; } else {
             let mag = unsafe { &mut CPU_MAGAZINES.slots[cpu] };
             let mut loaded = 0usize;
-            if let Some(start) = alloc_contiguous_internal(&mut state, MAGAZINE_SIZE, 1) {
+            if let Some(start) = alloc_contiguous_internal(&mut state, MAGAZINE_SIZE, 1, None) {
                 for i in 0..MAGAZINE_SIZE {
                     mag.frames[i] = start + i;
                     unsafe { *state.ref_counts.add(start + i) = 1; }
@@ -509,7 +577,7 @@ unsafe fn magazine_refill(cpu: usize) -> usize {
                 loaded = MAGAZINE_SIZE;
             } else {
                 while loaded < MAGAZINE_SIZE {
-                    if let Some(f) = alloc_contiguous_internal(&mut state, 1, 1) {
+                    if let Some(f) = alloc_contiguous_internal(&mut state, 1, 1, None) {
                         mag.frames[loaded] = f;
                         unsafe { *state.ref_counts.add(f) = 1; }
                         loaded += 1;
@@ -597,8 +665,8 @@ pub extern "C" fn pmm_register_region(node_id: u32, base: u64, length: u64) {
         let sf = (base as usize) / PAGE_SIZE;
         let ef = (base as usize + length as usize) / PAGE_SIZE;
         if state.nodes[idx].active {
-            if sf < state.nodes[idx].start_frame { state.nodes[idx].start_frame = sf; } else {}
-            if ef > state.nodes[idx].end_frame { state.nodes[idx].end_frame = ef; } else {}
+            if sf < state.nodes[idx].start_frame { state.nodes[idx].start_frame = sf; } else { /* Bounds mapped */ }
+            if ef > state.nodes[idx].end_frame { state.nodes[idx].end_frame = ef; } else { /* Bounds mapped */ }
         } else {
             state.nodes[idx] = NumaNode { active: true, start_frame: sf, end_frame: ef };
         }

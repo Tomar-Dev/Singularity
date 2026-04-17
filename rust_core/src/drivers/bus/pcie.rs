@@ -91,10 +91,14 @@ impl PcieDevice {
                                     | ((offset as u64) & 0xFFFC);
                     let ptr = (ecam_virt + phys_offset) as *mut u32;
                     unsafe { write_volatile(ptr, value); }
-                } else {}
+                } else {
+                    // Out of bounds for ECAM segment
+                }
             },
             PcieBackend::Legacy => {
-                if offset >= 256 { return; } else {
+                if offset >= 256 { 
+                    return; 
+                } else {
                     let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
                     let _guard = PCI_LEGACY_LOCK.lock();
                     unsafe {
@@ -106,7 +110,6 @@ impl PcieDevice {
         }
     }
 
-    // FIX: Native 16-bit Read to prevent W1C corruption
     pub unsafe fn read_word(bus: u8, dev: u8, func: u8, offset: u16) -> u16 {
         let backend = *PCIE_BACKEND.lock();
         match backend {
@@ -115,10 +118,14 @@ impl PcieDevice {
                     let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
                     let ptr = (ecam_virt + phys_offset) as *const u16;
                     unsafe { read_volatile(ptr) }
-                } else { 0xFFFF }
+                } else { 
+                    0xFFFF 
+                }
             },
             PcieBackend::Legacy => {
-                if offset >= 256 { 0xFFFF } else {
+                if offset >= 256 { 
+                    0xFFFF 
+                } else {
                     let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
                     let _guard = PCI_LEGACY_LOCK.lock();
                     unsafe {
@@ -130,7 +137,6 @@ impl PcieDevice {
         }
     }
 
-    // FIX: Native 16-bit Write to prevent W1C corruption
     pub unsafe fn write_word(bus: u8, dev: u8, func: u8, offset: u16, value: u16) {
         let backend = *PCIE_BACKEND.lock();
         match backend {
@@ -139,6 +145,8 @@ impl PcieDevice {
                     let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
                     let ptr = (ecam_virt + phys_offset) as *mut u16;
                     unsafe { write_volatile(ptr, value); }
+                } else {
+                    // Ignore write
                 }
             },
             PcieBackend::Legacy => {
@@ -149,12 +157,13 @@ impl PcieDevice {
                         io::outl(CONFIG_ADDRESS, address);
                         io::outw(CONFIG_DATA + (offset & 2), value);
                     }
+                } else {
+                    // Out of bounds
                 }
             }
         }
     }
 
-    // FIX: Native 8-bit Read
     pub unsafe fn read_byte(bus: u8, dev: u8, func: u8, offset: u16) -> u8 {
         let backend = *PCIE_BACKEND.lock();
         match backend {
@@ -163,10 +172,14 @@ impl PcieDevice {
                     let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
                     let ptr = (ecam_virt + phys_offset) as *const u8;
                     unsafe { read_volatile(ptr) }
-                } else { 0xFF }
+                } else { 
+                    0xFF 
+                }
             },
             PcieBackend::Legacy => {
-                if offset >= 256 { 0xFF } else {
+                if offset >= 256 { 
+                    0xFF 
+                } else {
                     let address = 0x80000000 | ((bus as u32) << 16) | ((dev as u32) << 11) | ((func as u32) << 8) | ((offset as u32) & 0xFFFC);
                     let _guard = PCI_LEGACY_LOCK.lock();
                     unsafe {
@@ -178,7 +191,6 @@ impl PcieDevice {
         }
     }
 
-    // FIX: Native 8-bit Write
     pub unsafe fn write_byte(bus: u8, dev: u8, func: u8, offset: u16, value: u8) {
         let backend = *PCIE_BACKEND.lock();
         match backend {
@@ -187,6 +199,8 @@ impl PcieDevice {
                     let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
                     let ptr = (ecam_virt + phys_offset) as *mut u8;
                     unsafe { write_volatile(ptr, value); }
+                } else {
+                    // Valid bounds broken
                 }
             },
             PcieBackend::Legacy => {
@@ -197,6 +211,8 @@ impl PcieDevice {
                         io::outl(CONFIG_ADDRESS, address);
                         io::outb(CONFIG_DATA + (offset & 3), value);
                     }
+                } else {
+                    // Exceeded layout structure
                 }
             }
         }
@@ -218,11 +234,17 @@ impl PcieDevice {
                         if (pmcsr & 0x03) != 0 { 
                             pmcsr &= !0x03; 
                             Self::write_word(self.bus, self.dev, self.func, pmcsr_addr, pmcsr);
+                        } else {
+                            // Already active D0
                         }
                         break;
+                    } else {
+                        // Not a Power Management capability
                     }
                     cap_ptr = next_ptr;
                 }
+            } else {
+                // Capabilities list not supported
             }
         }
     }
@@ -250,7 +272,9 @@ impl PcieDevice {
     }
 
     pub fn get_bar(&self, index: u8) -> u32 {
-        if index > 5 { return 0; } else {
+        if index > 5 { 
+            return 0; 
+        } else {
             unsafe { Self::read_dword(self.bus, self.dev, self.func, 0x10 + (index as u16 * 4)) }
         }
     }
@@ -277,11 +301,17 @@ pub fn find_device(class: u8, subclass: u8, prog_if: Option<u8>) -> Option<PcieD
     for p in devices.iter() {
         if p.class_id == class && p.subclass_id == subclass {
             if let Some(pi) = prog_if {
-                if p.prog_if == pi { return Some(*p); } else {}
+                if p.prog_if == pi { 
+                    return Some(*p); 
+                } else {
+                    // Interface mismatch
+                }
             } else {
                 return Some(*p);
             }
-        } else {}
+        } else {
+            // Class mismatch
+        }
     }
     None
 }
@@ -313,8 +343,12 @@ fn scan_bus(bus: u8, devices: &mut Vec<PcieDevice>, dev_count: &mut u32) {
                 let secondary_bus = ((bus_reg >> 8) & 0xFF) as u8;
                 if secondary_bus > bus {
                     scan_bus(secondary_bus, devices, dev_count);
-                } else {}
-            } else {}
+                } else {
+                    // Circular bridge prevented
+                }
+            } else {
+                // Not a bridge
+            }
 
             if (p.header_type & 0x80) != 0 { 
                 for f in 1..8 {
@@ -331,19 +365,33 @@ fn scan_bus(bus: u8, devices: &mut Vec<PcieDevice>, dev_count: &mut u32) {
                             let secondary_bus = ((bus_reg >> 8) & 0xFF) as u8;
                             if secondary_bus > bus {
                                 scan_bus(secondary_bus, devices, dev_count);
-                            } else {}
-                        } else {}
-                    } else {}
+                            } else {
+                                // Circular bridge prevented
+                            }
+                        } else {
+                            // Not a bridge
+                        }
+                    } else {
+                        // Empty function
+                    }
                 }
-            } else {}
-        } else {}
+            } else {
+                // Not a multi-function device
+            }
+        } else {
+            // Empty slot
+        }
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_pcie_enumerate() {
     let mut devices = PCIE_DEVICES.lock();
-    if !devices.is_empty() { return; } else {}
+    if !devices.is_empty() { 
+        return; 
+    } else {
+        // Run Enumeration
+    }
     
     let mut dev_count = 0;
     scan_bus(0, &mut devices, &mut dev_count);
@@ -413,10 +461,11 @@ pub extern "C" fn rust_pcie_write_byte(bus: u8, dev: u8, func: u8, offset: u16, 
 
 fn print_c(s: &str, fg: u8) {
     unsafe {
-        crate::ffi::vga_set_color(fg, 0);
+        // FIX: Replaced obsolete vga_set_color with unified console_set_color API
+        crate::ffi::console_set_color(fg, 0); 
         let c_msg = format!("{}\0", s);
         kprintf_string(c_msg.as_ptr() as *const i8);
-        crate::ffi::vga_set_color(15, 0);
+        crate::ffi::console_set_color(15, 0); 
     }
 }
 
@@ -434,16 +483,16 @@ pub extern "C" fn pcie_print_all() {
     let devices = PCIE_DEVICES.lock();
 
     unsafe {
-        crate::ffi::vga_set_color(11, 0);
+        crate::ffi::console_set_color(11, 0);
         kprintf_string(c"\n========== ".as_ptr());
-        crate::ffi::vga_set_color(15, 0);
+        crate::ffi::console_set_color(15, 0);
         kprintf_string(c"PCIe BUS TOPOLOGY".as_ptr());
-        crate::ffi::vga_set_color(11, 0);
+        crate::ffi::console_set_color(11, 0);
         kprintf_string(c" ==========\n".as_ptr());
 
-        crate::ffi::vga_set_color(15, 0);
+        crate::ffi::console_set_color(15, 0);
         kprintf_string(c"\nADDR     | CLASS                  | VENDOR               | DEVICE\n".as_ptr());
-        crate::ffi::vga_set_color(8, 0);
+        crate::ffi::console_set_color(8, 0);
         kprintf_string(c"---------+------------------------+----------------------+--------------\n".as_ptr());
     }
 
@@ -497,15 +546,19 @@ pub extern "C" fn pcie_print_all() {
             print_c(&format!("{} ", vendor_padded), 7);
             print_c("| ", 8);
             print_c(&format!("{}\n", dev_str), 15);
-        } else {}
+        } else {
+            // Unregistered display omitted for clean topology output
+        }
     }
     
     if !device_found {
         print_c(" No PCI/PCIe devices found by this driver.\n", 7);
-    } else {}
+    } else {
+        // Displayed successfully
+    }
 
     unsafe {
-        crate::ffi::vga_set_color(11, 0);
+        crate::ffi::console_set_color(11, 0);
         kprintf_string(c"========================================================================\n".as_ptr());
     }
 }

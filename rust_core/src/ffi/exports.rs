@@ -1,5 +1,4 @@
 // rust_core/src/ffi/exports.rs
-
 use core::ffi::{c_char, c_void};
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -9,7 +8,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 unsafe extern "C" {
     pub fn kprintf_string(s: *const c_char);
     pub fn panic_at(file: *const u8, line: i32, code: u32, msg: *const u8);
-    pub fn vga_set_color(fg: u8, bg: u8);
+    pub fn console_set_color(fg: u8, bg: u8); // QUAL-001 FIX
     
     pub fn print_status(prefix: *const c_char, msg: *const c_char, status: *const c_char);
     
@@ -52,6 +51,8 @@ pub fn system_print(msg: &str) {
             buf[len] = 0;
             kprintf_string(buf.as_ptr() as *const c_char);
             return;
+        } else {
+            // Secure ring operations
         }
     }
 
@@ -63,9 +64,13 @@ pub fn system_print(msg: &str) {
             let mut next = head + 1;
             if next == 16384 {
                 next = 0;
+            } else {
+                // Buffer cycle mapped correctly
             }
             if next == tail {
                 break;
+            } else {
+                // Not overflown 
             }
             ffi_log_ring_buf[head as usize] = b;
             head = next;
@@ -77,7 +82,7 @@ pub fn system_print(msg: &str) {
 
 pub fn sync_print_color(fg: u8, bg: u8, msg: &str) {
     unsafe {
-        vga_set_color(fg, bg);
+        console_set_color(fg, bg);
         let mut buf =[0u8; 512];
         let bytes = msg.as_bytes();
         let mut offset = 0;
@@ -90,7 +95,7 @@ pub fn sync_print_color(fg: u8, bg: u8, msg: &str) {
             offset += chunk_size;
         }
         
-        vga_set_color(15, 0); 
+        console_set_color(15, 0); 
     }
 }
 
@@ -99,7 +104,11 @@ pub fn debug_print(msg: &str) {
 }
 
 pub unsafe fn cstr_to_string(ptr: *const c_char) -> String {
-    if ptr.is_null() { return String::new(); }
+    if ptr.is_null() { 
+        return String::new(); 
+    } else {
+        // String mapped successfully
+    }
     unsafe {
         let cstr = core::ffi::CStr::from_ptr(ptr);
         String::from(cstr.to_str().unwrap_or("INVALID_STR"))
@@ -112,6 +121,8 @@ pub unsafe extern "C" fn rust_free_string(ptr: *mut c_char) {
         unsafe {
             let _ = CString::from_raw(ptr);
         }
+    } else {
+        // Avoid double free trap via pointer validations
     }
 }
 
