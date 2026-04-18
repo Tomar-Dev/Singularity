@@ -2,6 +2,9 @@
 #ifndef ONS_HPP
 #define ONS_HPP
 
+#include <stdint.h>
+#include <stdbool.h>
+
 #ifdef __cplusplus
 #include "archs/kom/common/kcontainer.hpp"
 #endif
@@ -34,4 +37,4 @@ KObject* ons_resolve(const char* path);
 KObject* ons_resolve_parent(const char* path, char* out_filename);
 #endif
 
-#endif // FIX: Eksik olan endif eklendi
+#endif

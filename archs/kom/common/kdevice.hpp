@@ -2,6 +2,7 @@
 #ifndef KDEVICE_HPP
 #define KDEVICE_HPP
 
+#ifdef __cplusplus
 #include "archs/kom/common/kobject.hpp"
 #include "archs/kom/common/ons.hpp"
 typedef uint32_t error_t;
@@ -45,5 +46,5 @@ public:
     void ons_register(const char* path);
     void ons_unregister();
 };
-
+#endif // __cplusplus
 #endif

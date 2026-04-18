@@ -3,7 +3,7 @@
 #include "archs/cpu/x86_64/core/ports.h"
 #include "archs/cpu/x86_64/smp/smp.h"
 #include "archs/cpu/x86_64/core/topology.h"
-#include "archs/cpu/x86_64/core/cpuid.h" // BUG-004 FIX
+#include "archs/cpu/x86_64/core/cpuid.h"
 #include "kernel/debug.h"
 
 extern void sleep_ms(uint64_t ms);
@@ -23,9 +23,13 @@ uint32_t hal_cpu_get_count(void) {
 
 int hal_cpu_get_numa_node(uint32_t cpu_id) {
     if (cpu_id >= MAX_CPUS) {
-        return 0;
+        panic_at("HAL", 0, KERR_OUT_OF_BOUNDS, "Invalid CPU ID requested for NUMA node");
     } else {
-        return get_cpu_numa_node(cpus[cpu_id].lapic_id);
+        if (per_cpu_data[cpu_id]) {
+            return get_cpu_numa_node(cpus[cpu_id].lapic_id);
+        } else {
+            return 0; // Default node
+        }
     }
 }
 
@@ -73,10 +77,12 @@ void hal_tlb_flush_all(void) {
     __asm__ volatile("mov %0, %%cr3" :: "r"(cr3) : "memory");
 }
 
+// Bulgu 3.1 & FIX: Removed [[unlikely]] attribute to fix Clang C-mode warning. 
+// Using __builtin_expect directly for optimal branch prediction.
 #define HAL_PORT_CHECK(p) \
     if (__builtin_expect((p) > 0xFFFF, 0)) { \
         panic_at(__FILE__, __LINE__, KERR_OUT_OF_BOUNDS, "HAL I/O: Port address exceeds 0xFFFF!"); \
-    } else { /* Proceed normally */ }
+    } else { /* Address is within safe 16-bit range */ }
 
 void hal_io_outb(uint32_t port, uint8_t val)  { HAL_PORT_CHECK(port); outb((uint16_t)port, val); }
 void hal_io_outw(uint32_t port, uint16_t val) { HAL_PORT_CHECK(port); outw((uint16_t)port, val); }
@@ -89,9 +95,8 @@ uint32_t hal_io_inl(uint32_t port) { HAL_PORT_CHECK(port); return inl((uint16_t)
 void hal_io_insw(uint32_t port, void* buffer, uint32_t count)        { HAL_PORT_CHECK(port); insw((uint16_t)port, buffer, count); }
 void hal_io_outsw(uint32_t port, const void* buffer, uint32_t count) { HAL_PORT_CHECK(port); outsw((uint16_t)port, buffer, count); }
 
-// BUG-004 FIX: Safe fallback CRC32 Implementation (Castagnoli Polynomial)
 uint32_t hal_crc32_u64(uint32_t crc, uint64_t data) {
-    if (cpu_info.has_sse4_2) {
+    if (__builtin_expect(cpu_info.has_sse4_2, 1)) {
         __asm__ volatile("crc32q %1, %0" : "+r"(crc) : "rm"(data));
         return crc;
     } else {
@@ -101,11 +106,8 @@ uint32_t hal_crc32_u64(uint32_t crc, uint64_t data) {
         for (int i = 0; i < 8; i++) {
             c ^= p[i];
             for (int b = 0; b < 8; b++) {
-                if (c & 1) { 
-                    c = (c >> 1) ^ 0x82F63B78UL; 
-                } else { 
-                    c >>= 1; 
-                }
+                if (c & 1) { c = (c >> 1) ^ 0x82F63B78UL; }
+                else { c >>= 1; }
             }
         }
         return c;

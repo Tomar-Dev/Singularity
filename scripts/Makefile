@@ -198,10 +198,13 @@ pci:
 	$(Q)python3 update_pci_db.py $(PCI_DB)
 	@echo "$(GREEN)[OK]$(RESET) $(PCI_DB) updated. Run 'make all' to embed."
 
+# BUG FIX: Tidy now respects C++ and C files separately to avoid false-positive syntax errors
 tidy:
 	@echo "$(BLUE)[TIDY]$(RESET) Running Clang-Tidy static analysis..."
-	@echo "Checking files..."
-	$(Q)clang-tidy $(C_SOURCES) $(CXX_SOURCES) -- $(CFLAGS) -m64 -ffreestanding
+	@echo "Checking C files..."
+	$(Q)clang-tidy $(C_SOURCES) -- $(CFLAGS) -m64 -ffreestanding
+	@echo "Checking C++ files..."
+	$(Q)clang-tidy $(CXX_SOURCES) -- $(CXXFLAGS) -m64 -ffreestanding
 
 help:
 	@echo ""

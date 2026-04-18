@@ -44,9 +44,7 @@ static void print_size(const char* label, uint64_t bytes, console_color_t val_co
     console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     if (label && label[0]) {
         printf("%-16s: ", label);
-    } else {
-        // Space mapped natively
-    }
+    } else { /* Alignment space */ }
     console_set_color(val_color, CONSOLE_COLOR_BLACK);
 
     if (bytes >= 1024ULL * 1024ULL) {
@@ -66,16 +64,22 @@ static void print_kv(const char* key, const char* val_fmt, ...) {
     console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("%-14s: ", key);
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    
+    // TIDY FIX: Resolved uninitialized va_list warning by passing args to vsnprintf properly
+    char buf[256];
     va_list args;
     va_start(args, val_fmt);
-    vprintf(val_fmt, args);
+    int ret = vsnprintf(buf, sizeof(buf), val_fmt, args);
     va_end(args);
-    printf("\n");
+    
+    if (ret > 0) {
+        printf("%s\n", buf);
+    } else {
+        printf("Error\n");
+    }
 }
 
 void show_memory_map() {
-    pmm_flush_magazines();
-
     uint64_t pmm_total  = pmm_get_total_memory();
     uint64_t pmm_used   = pmm_get_used_memory();
     uint64_t pmm_free   = pmm_get_free_memory();
@@ -84,9 +88,7 @@ void show_memory_map() {
     uint64_t dynamic       = 0;
     if (pmm_used > kernel_static) {
         dynamic = pmm_used - kernel_static;
-    } else {
-        // Avoid calculation bounds underflow
-    }
+    } else { /* All RAM consumed by Kernel static */ }
 
     uint64_t heap_reserved = kheap_get_reserved_size();
     uint64_t heap_payload  = kheap_get_payload_size();
@@ -95,9 +97,7 @@ void show_memory_map() {
     uint64_t other = 0;
     if (dynamic > heap_reserved) {
         other = dynamic - heap_reserved;
-    } else {
-        // Free bounds matched perfectly
-    }
+    } else { /* Saturated */ }
 
     uint64_t disk_cached       = disk_cache_get_size();
     uint64_t total_reclaimable = heap_cached + disk_cached;
@@ -106,9 +106,7 @@ void show_memory_map() {
 
     if (active_used > pmm_used) {
         active_used = pmm_used;
-    } else {
-        // Values coherent
-    }
+    } else { /* OK */ }
 
     uint64_t available = pmm_free;
 
@@ -226,9 +224,7 @@ void show_task_manager() {
     for (int i = 0; i < num_cpus; i++) {
         if (per_cpu_data[i]) {
             start_idle_ticks[i] = per_cpu_data[i]->idle_ticks;
-        } else {
-            // Null Struct
-        }
+        } else { /* Null node skip */ }
     }
 
     timer_sleep(25);
@@ -250,16 +246,12 @@ void show_task_manager() {
     for (int i = 0; i < num_cpus; i++) {
         if (per_cpu_data[i]) {
             end_idle_ticks[i] = per_cpu_data[i]->idle_ticks;
-        } else {
-            // Node mapping disabled
-        }
+        } else { /* Node unmapped */ }
 
         uint64_t delta_idle = 0;
         if (end_idle_ticks[i] >= start_idle_ticks[i]) {
             delta_idle = end_idle_ticks[i] - start_idle_ticks[i];
-        } else {
-            // Tick wraparound
-        }
+        } else { /* TSC Wrap encountered */ }
 
         if (delta_idle > delta_total) { delta_idle = delta_total; } else { /* Underflow Guard */ }
 
@@ -365,28 +357,27 @@ extern "C" {
         if (sys_dir_obj && sys_dir_obj->type == KObjectType::CONTAINER) {
             KContainer* sys_dir = (KContainer*)sys_dir_obj;
             KContainer* info_dir = new KContainer();
-            sys_dir->bind("info", info_dir);
             
-            KDynamicBlob* b_up = new KDynamicBlob("uptime", uptime_read_cb);
-            info_dir->bind("uptime", b_up);
-            kobject_unref(b_up);
-            
-            KDynamicBlob* b_mem = new KDynamicBlob("meminfo", meminfo_read_cb);
-            info_dir->bind("meminfo", b_mem);
-            kobject_unref(b_mem);
+            if (sys_dir->bind("info", info_dir) == KOM_OK) {
+                KDynamicBlob* b_up = new KDynamicBlob("uptime", uptime_read_cb);
+                info_dir->bind("uptime", b_up);
+                kobject_unref(b_up);
+                
+                KDynamicBlob* b_mem = new KDynamicBlob("meminfo", meminfo_read_cb);
+                info_dir->bind("meminfo", b_mem);
+                kobject_unref(b_mem);
 
-            KDynamicBlob* b_ver = new KDynamicBlob("version", version_read_cb);
-            info_dir->bind("version", b_ver);
-            kobject_unref(b_ver);
-
-            kobject_unref(info_dir);
-        } else {
-            // Unbound logic tree
-        }
+                KDynamicBlob* b_ver = new KDynamicBlob("version", version_read_cb);
+                info_dir->bind("version", b_ver);
+                kobject_unref(b_ver);
+            } else {
+                // Binding failed, info_dir will be destroyed by the unref below.
+            }
+            kobject_unref(info_dir); 
+        } else { /* Node mapping lost */ }
+        
         if (sys_dir_obj) {
             kobject_unref(sys_dir_obj);
-        } else {
-            // Free operation mapped
-        }
+        } else { /* Null bypass */ }
     }
 }

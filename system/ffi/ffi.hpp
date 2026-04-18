@@ -8,16 +8,19 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+
 struct FFIStats {
     uint64_t call_count;
     uint64_t total_cycles;
 };
 
+extern FFIStats ffi_stat_pmm_alloc;
+extern FFIStats ffi_stat_pmm_free;
+
 namespace SingularityFFI {
 
-    // FIX: Üretim Modunda (Release) FFI maliyetini fiziksel olarak sıfırlamak için
-    // profil alma işlemleri log_level'a bağlandı.
-    #if 0 // İstenirse kconfig.log_level > 2 gibi bir şarta bağlanabilir
+    #if 0 
         #define PROFILE_FFI(stat_obj, func_call) \
             uint64_t start_tsc = rdtsc_ordered(); \
             auto ret = func_call; \
@@ -38,4 +41,5 @@ namespace SingularityFFI {
     void print_ffi_stats();
 }
 
+#endif // __cplusplus
 #endif

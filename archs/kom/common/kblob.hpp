@@ -2,6 +2,7 @@
 #ifndef KBLOB_HPP
 #define KBLOB_HPP
 
+#ifdef __cplusplus
 #include "archs/kom/common/kobject.hpp"
 #include "system/sync/rwlock.h"
 #include "archs/kom/common/kiovec.h"
@@ -41,7 +42,6 @@ public:
     }
 };
 
-// VFS RAMFS YERİNE GEÇEN NESNE (Sıfır Overhead)
 class KVolatileBlob : public KBlob {
 private:
     uint8_t* buffer;
@@ -56,7 +56,6 @@ public:
     error_t resize(uint64_t new_size) override;
 };
 
-// VFS PROCFS YERİNE GEÇEN NESNE (Sıfır Overhead)
 typedef size_t (*DynamicReadCallback)(uint64_t offset, void* buffer, size_t count);
 class KDynamicBlob : public KBlob {
 private:
@@ -69,4 +68,5 @@ public:
     error_t write(uint64_t offset, const void* buf, size_t count, size_t* bytes_written) override;
 };
 
+#endif // __cplusplus
 #endif

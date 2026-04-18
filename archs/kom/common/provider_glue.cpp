@@ -4,6 +4,7 @@
 #include "libc/string.h"
 #include "libc/stdio.h"
 #include "system/console/console.h"
+#include "memory/kheap.h" // YENİ: Kmalloc_contiguous için eklendi
 
 static char next_drive_letter = 'D';
 
@@ -266,7 +267,41 @@ uint64_t kom_probe_free_space(void* dev_ptr) {
                     if (free_clusters != 0xFFFFFFFF && free_clusters > 0) {
                         return static_cast<uint64_t>(free_clusters) * bpb->sectors_per_cluster * bpb->bytes_per_sector;
                     } else {
-                        // Stale info cluster mapping 
+                        // YENİ: FAT32 Stale FSINFO Fallback (FAT-Walking)
+                        uint32_t fat_start = bpb->reserved_sectors;
+                        uint32_t fat_sectors = bpb->sectors_per_fat_32;
+                        uint32_t counted_free = 0;
+                        
+                        // Performans için 4KB (8 sektör) bloklar halinde oku
+                        uint8_t* fat_buf = (uint8_t*)kmalloc_contiguous(4096);
+                        if (fat_buf) {
+                            uint32_t sectors_to_read = fat_sectors;
+                            uint32_t current_sector = fat_start;
+                            
+                            while (sectors_to_read > 0) {
+                                uint32_t chunk = (sectors_to_read > 8) ? 8 : sectors_to_read;
+                                if (dev->readBlock(current_sector, chunk, fat_buf)) {
+                                    uint32_t* entries = (uint32_t*)fat_buf;
+                                    uint32_t total_entries = (chunk * 512) / 4;
+                                    for (uint32_t j = 0; j < total_entries; j++) {
+                                        if ((entries[j] & 0x0FFFFFFF) == 0) {
+                                            counted_free++;
+                                        } else { /* Allocated */ }
+                                    }
+                                } else {
+                                    break; // Disk read error, abort walk
+                                }
+                                current_sector += chunk;
+                                sectors_to_read -= chunk;
+                            }
+                            kfree_contiguous(fat_buf, 4096);
+                            
+                            if (counted_free > 0) {
+                                return static_cast<uint64_t>(counted_free) * bpb->sectors_per_cluster * bpb->bytes_per_sector;
+                            } else { /* Disk is truly 100% full */ }
+                        } else {
+                            // OOM during fallback, return Unknown
+                        }
                     }
                 } else {
                     // Safe return out

@@ -5,6 +5,7 @@
 #include "archs/kom/kom_aal.h"
 #include "system/device/device.h"
 
+#ifdef __cplusplus
 struct CDirent {
     char name[128];
     uint32_t inode;
@@ -34,12 +35,12 @@ public:
     bool enumerate(uint32_t index, char* out_name, KObjectType* out_type) override;
     error_t create_child(const char* name, KObjectType type) override;
 };
+#endif // __cplusplus
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// FIX: 'silent' bayrağı silindi
 void kom_mount_provider(const char* dev_name, const char* target_path, const char* provider_type);
 void kom_mkfs_provider(const char* dev_name, const char* provider_type, const char* label);
 uint64_t kom_probe_free_space(void* dev_ptr);

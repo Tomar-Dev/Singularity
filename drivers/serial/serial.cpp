@@ -19,12 +19,12 @@ static volatile uint32_t ring_tail = 0;
 static bool serial_hardware_present = false;
 static bool async_mode = false;
 static KInterrupt* serial_irq_obj = nullptr;
+static SerialDriver* g_serial_driver = nullptr; // TIDY FIX: Memory Leak Prevention
 
 extern "C" void serial_irq_handler_wrapper(registers_t* regs) {
     (void)regs;
-    if (!serial_hardware_present) return;
+    if (!serial_hardware_present) { return; } else { /* Active */ }
 
-    // Wait-Free Consumer: IRQ geldiğinde tamponu boşalt
     while (ring_head != ring_tail) {
         if ((hal_io_inb(COM1 + 5) & 0x20)) {
             uint32_t next_tail = (ring_tail + 1) & RING_MASK;
@@ -49,8 +49,9 @@ int SerialDriver::init() {
     if (serial_hardware_present) {
         DeviceManager::registerDevice(this);
         return 1;
+    } else {
+        return 0;
     }
-    return 0;
 }
 
 int SerialDriver::write(const char* buffer, int size) {
@@ -80,45 +81,43 @@ extern "C" {
 
     void init_serial_late() {
         if (serial_hardware_present) {
-            SerialDriver* drv = new SerialDriver();
-            drv->init();
+            // TIDY FIX: Store pointer globally to prevent memory leak
+            g_serial_driver = new SerialDriver();
+            g_serial_driver->init();
 
             serial_irq_obj = new KInterrupt(36);
             async_mode = true;
             create_kernel_task_prio(serial_thread_fn, PRIO_REALTIME);
             
-            // Kesmeleri aktif et
             hal_io_outb(COM1 + 1, 0x01);
+        } else {
+            // Hardware missing
         }
     }
 
     void serial_putc(char c) {
-        if (!serial_hardware_present) return;
+        if (!serial_hardware_present) { return; } else { /* Valid */ }
 
         if (!async_mode) {
-            // Polling Mode (Early Boot / Panic)
-            while ((hal_io_inb(COM1 + 5) & 0x20) == 0) hal_cpu_relax();
+            while ((hal_io_inb(COM1 + 5) & 0x20) == 0) { hal_cpu_relax(); }
             hal_io_outb(COM1, c);
         } else {
-            // Wait-Free Producer: Tampona yaz, kilit bekleme
             uint32_t next_head = (ring_head + 1) & RING_MASK;
             if (next_head == ring_tail) {
-                // Buffer full: Skip or drop oldest? Enterprise standard: Drop oldest.
                 ring_tail = (ring_tail + 1) & RING_MASK;
-            }
+            } else { /* Buffer has space */ }
             serial_ring[ring_head] = c;
             ring_head = next_head;
             
-            // Eğer donanım boşsa manuel dürt
             if (hal_io_inb(COM1 + 5) & 0x20) {
                 serial_irq_handler_wrapper(nullptr);
-            }
+            } else { /* Hardware busy */ }
         }
     }
 
     void serial_write_atomic(const char* str) {
         while(*str) {
-            if (*str == '\n') serial_putc('\r');
+            if (*str == '\n') { serial_putc('\r'); } else { /* Pass */ }
             serial_putc(*str++);
         }
     }
@@ -129,15 +128,21 @@ extern "C" {
 
     void serial_enable_direct_mode() {
         async_mode = false;
-        hal_io_outb(COM1 + 1, 0x00); // Disable interrupts
+        hal_io_outb(COM1 + 1, 0x00); 
     }
 
+    // TIDY FIX: Explicitly separated va_list operations to prevent uninitialized usage warnings.
     void serial_printf(const char* format, ...) {
         char buf[1024]; 
         va_list args;
         va_start(args, format);
-        vsnprintf(buf, sizeof(buf), format, args);
+        int ret = vsnprintf(buf, sizeof(buf), format, args);
         va_end(args);
-        serial_write(buf);
+        
+        if (ret > 0) {
+            serial_write(buf);
+        } else {
+            // Formatting failed
+        }
     }
 }

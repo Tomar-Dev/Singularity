@@ -28,6 +28,10 @@ extern "C" {
 
 static Shell* global_shell = nullptr;
 
+// Bulgu 4.2 FIX: Use constexpr instead of magic numbers
+static constexpr int MAX_PATH_LEN = 256;
+static constexpr uint64_t MAX_SCRIPT_SIZE = 65536;
+
 Shell::Shell() {
     cmdLen = 0;
     for (int i = 0; i < CMD_BUF_SIZE; i++) { cmdBuffer[i] = 0; }
@@ -100,22 +104,47 @@ void Shell::logStartup(const char* msg, int status) {
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 }
 
+// Bulgu 5.2 FIX: Added kfree() in error paths to prevent memory leaks during script failures
 void Shell::executeScript(const char* path) {
     KObject* obj = ons_resolve(path);
-    if (!obj) { return; } else { /* Valid */ }
-    if (obj->type != KObjectType::BLOB) { kobject_unref(obj); return; } else { /* Read Stream Activated */ }
+    if (!obj) {
+        return; 
+    } else {
+        // Proceed with file object
+    }
+
+    if (obj->type != KObjectType::BLOB) { 
+        kobject_unref(obj); 
+        return; 
+    } else {
+        // Correct object type
+    }
 
     KBlob* blob = (KBlob*)obj;
     uint64_t size = blob->getSize();
 
-    if (size == 0 || size > 65536) { kobject_unref(obj); return; } else { /* Size validated */ }
+    if (size == 0 || size > MAX_SCRIPT_SIZE) { 
+        kobject_unref(obj); 
+        return; 
+    } else {
+        // Size validated
+    }
 
     char* buf = (char*)kmalloc((size_t)size + 1);
-    if (!buf) { kobject_unref(obj); return; } else { /* Allocation secure */ }
+    if (!buf) { 
+        kobject_unref(obj); 
+        return; 
+    } else {
+        // Allocated script buffer
+    }
 
     isScriptMode = true;
     size_t read_bytes = 0;
-    if (blob->read(0, buf, size, &read_bytes) == KOM_OK && read_bytes > 0) {
+    if (blob->read(0, buf, size, &read_bytes) != KOM_OK || read_bytes == 0) {
+        kfree(buf); // Bulgu 5.2 FIX: Memory leak prevented
+        kobject_unref(obj);
+        return;
+    } else {
         buf[read_bytes] = '\0';
         char* line = buf;
         char* next_line = nullptr;
@@ -127,7 +156,7 @@ void Shell::executeScript(const char* path) {
                 next_line++;
                 while (*next_line == '\r' || *next_line == '\n') { next_line++; }
             } else {
-                // Break naturally
+                // Last line of script
             }
 
             char* trim_start = line;
@@ -158,7 +187,7 @@ void Shell::executeScript(const char* path) {
                                         arg = &cmdTemp[i + 1];
                                         break;
                                     } else {
-                                        // Still searching parameters
+                                        // Continue tokenizing
                                     }
                                 }
                                 
@@ -169,7 +198,7 @@ void Shell::executeScript(const char* path) {
                                 if (totally_silent && curr) {
                                     curr->flags |= PROC_FLAG_SILENT;
                                 } else {
-                                    // Raw process flags retained
+                                    // Keep default logging
                                 }
 
                                 int ret = dispatchCommand(cmd, arg);
@@ -177,34 +206,32 @@ void Shell::executeScript(const char* path) {
                                 if (totally_silent && curr) {
                                     curr->flags = old_flags; 
                                 } else {
-                                    // Flags natively retained
+                                    // State maintained
                                 }
                                 
                                 if (!totally_silent) {
                                     ffi_logger_flush_sync(); 
                                     logStartup(desc_start, ret == 0 ? 1 : 2);
                                 } else {
-                                    // Silence upheld
+                                    // Silent execution
                                 }
                             } else {
-                                // No command given
+                                // No executable command
                             }
                         } else {
-                            // Syntax error
+                            // Syntax error: missing end quote
                         }
                     } else {
-                        // Syntax error
+                        // Syntax error: missing start quote
                     }
                 } else {
                     processCommand(trim_start);
                 }
             } else {
-                // Empty string
+                // Whitespace line
             }
             line = next_line;
         }
-    } else {
-        // I/O read failure on initial target
     }
     isScriptMode = false;
     kfree(buf);
@@ -221,53 +248,65 @@ void Shell::printPrompt() {
     stdio_flush();
 }
 
+// Bulgu 1.3 FIX: Prevent root directory path deletion when calling "cd .." at C:\\ root
 void Shell::resolveAbsolutePath(const char* input, char* output) {
     if (!input || input[0] == '\0' || strcmp(input, ".") == 0 || strcmp(input, ".\\") == 0) {
-        strncpy(output, currentPath, 255);
-        output[255] = '\0';
+        strncpy(output, currentPath, MAX_PATH_LEN - 1);
+        output[MAX_PATH_LEN - 1] = '\0';
         return;
     } else {
-        // Path needs deeper checks
+        // Non-trivial path
     }
 
     if (strcmp(input, "..") == 0 || strcmp(input, "..\\") == 0) {
-        strncpy(output, currentPath, 255);
-        output[255] = '\0';
+        // Bulgu 1.3 FIX: Check if we are already at the drive root
+        if (strcmp(currentPath, "C:\\") == 0) {
+            strncpy(output, "C:\\", MAX_PATH_LEN - 1);
+            output[MAX_PATH_LEN - 1] = '\0';
+            return;
+        } else {
+            // We are deeper than root, safe to go back
+        }
+
+        strncpy(output, currentPath, MAX_PATH_LEN - 1);
+        output[MAX_PATH_LEN - 1] = '\0';
+        
         char* last_slash = strrchr(output, '\\');
         if (last_slash && last_slash != output) {
             if (last_slash == &output[2]) {
-                *(last_slash + 1) = '\0'; 
+                *(last_slash + 1) = '\0'; // Clamp at C:\\ drive root
             } else {
-                *last_slash = '\0';
+                *last_slash = '\0'; // Remove child component
             }
         } else {
-            // Reached top level
+            // Unlikely case for absolute paths
         }
         return;
     } else {
-        // Normal evaluation bounds
+        // Proceeding with standard path resolution
     }
 
     if (((input[0] >= 'A' && input[0] <= 'Z') || (input[0] >= 'a' && input[0] <= 'z')) && input[1] == ':') {
-        strncpy(output, input, 255);
-        output[255] = '\0';
+        strncpy(output, input, MAX_PATH_LEN - 1);
+        output[MAX_PATH_LEN - 1] = '\0';
         for(int i=0; output[i]; i++) { if(output[i] == '/') output[i] = '\\'; }
-        if (strlen(output) == 2) { strncat(output, "\\", 2); } else { /* Valid */ }
+        if (strlen(output) == 2) { strncat(output, "\\", 2); } else { /* Validated */ }
     } else if (input[0] == '/' || input[0] == '\\') { 
-        strncpy(output, input, 255);
-        output[255] = '\0';
+        strncpy(output, input, MAX_PATH_LEN - 1);
+        output[MAX_PATH_LEN - 1] = '\0';
         for(int i=0; output[i]; i++) { if(output[i] == '/') output[i] = '\\'; }
     } else {
         size_t curLen = strlen(currentPath);
-        strncpy(output, currentPath, 255);
-        output[255] = '\0';
+        strncpy(output, currentPath, MAX_PATH_LEN - 1);
+        output[MAX_PATH_LEN - 1] = '\0';
 
         if (curLen > 0 && output[curLen - 1] != '\\') {
-            strncat(output, "\\", 255 - strlen(output));
+            strncat(output, "\\", MAX_PATH_LEN - strlen(output) - 1);
         } else {
-            // Properly formatted ending
+            // Separator already present
         }
-        strncat(output, input, 255 - strlen(output));
+        
+        strncat(output, input, MAX_PATH_LEN - strlen(output) - 1);
         for(int i=0; output[i]; i++) { if(output[i] == '/') output[i] = '\\'; }
     }
 }
@@ -276,7 +315,7 @@ void Shell::processCommand() {
     if (cmdLen > 0 && cmdLen < CMD_BUF_SIZE) {
         processCommand(cmdBuffer);
     } else {
-        // Void command sequence
+        // Command buffer is empty
     }
 }
 
@@ -294,7 +333,7 @@ void Shell::processCommand(const char* cmdStr) {
             arg = &tempBuf[i + 1];
             break;
         } else {
-            // Keep looping bounds
+            // Keep scanning for first argument space
         }
     }
 
@@ -320,7 +359,7 @@ void Shell::onKeyDown(char c) {
             printf("\b \b");
             stdio_flush();
         } else {
-            // Cannot delete beyond zero point
+            // Blocked by command start
         }
     } else {
         if (cmdLen < CMD_BUF_SIZE - 1) {
@@ -342,7 +381,7 @@ void Shell::update() {
             onKeyDown(c);
             console_blink_cursor(true);
         } else {
-            // Empty char
+            // Empty char received
         }
     }
 
@@ -355,7 +394,7 @@ void Shell::update() {
         console_blink_cursor(blink_state);
         last_blink = now;
     } else {
-        // Await cycle
+        // Awaiting next blink tick
     }
 }
 
@@ -371,7 +410,11 @@ extern "C" {
     }
 
     void shell_run_startup_c() {
-        if (global_shell) { global_shell->runStartup(); } else { /* Dropped */ }
+        if (global_shell) {
+            global_shell->runStartup();
+        } else {
+            // Shell unit unmapped
+        }
     }
 
     void shell_update_c() {
@@ -381,11 +424,11 @@ extern "C" {
                 global_shell->showWelcome();
                 first_run = false;
             } else {
-                // Proceed directly
+                // Subsequent run
             }
             global_shell->update();
         } else {
-            // Null drop
+            // Shell node inactive
         }
     }
 }

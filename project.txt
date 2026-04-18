@@ -250,6 +250,7 @@ Root_Directory
 |     |     |     |     |--> gpt.rs
 |     |     |     |     |--> mod.rs
 |     |     |--> sys
+|     |     |     |--> acpi.rs
 |     |     |     |--> crypto
 |     |     |     |     |--> mod.rs
 |     |     |     |     |--> sha256.rs
@@ -429,7 +430,7 @@ uint32_t hal_crc32_u64(uint32_t crc, uint64_t data);
 #include "archs/cpu/x86_64/core/ports.h"
 #include "archs/cpu/x86_64/smp/smp.h"
 #include "archs/cpu/x86_64/core/topology.h"
-#include "archs/cpu/x86_64/core/cpuid.h" // BUG-004 FIX
+#include "archs/cpu/x86_64/core/cpuid.h"
 #include "kernel/debug.h"
 
 extern void sleep_ms(uint64_t ms);
@@ -449,9 +450,13 @@ uint32_t hal_cpu_get_count(void) {
 
 int hal_cpu_get_numa_node(uint32_t cpu_id) {
     if (cpu_id >= MAX_CPUS) {
-        return 0;
+        panic_at("HAL", 0, KERR_OUT_OF_BOUNDS, "Invalid CPU ID requested for NUMA node");
     } else {
-        return get_cpu_numa_node(cpus[cpu_id].lapic_id);
+        if (per_cpu_data[cpu_id]) {
+            return get_cpu_numa_node(cpus[cpu_id].lapic_id);
+        } else {
+            return 0; // Default node
+        }
     }
 }
 
@@ -499,10 +504,12 @@ void hal_tlb_flush_all(void) {
     __asm__ volatile("mov %0, %%cr3" :: "r"(cr3) : "memory");
 }
 
+// Bulgu 3.1 & FIX: Removed [[unlikely]] attribute to fix Clang C-mode warning. 
+// Using __builtin_expect directly for optimal branch prediction.
 #define HAL_PORT_CHECK(p) \
     if (__builtin_expect((p) > 0xFFFF, 0)) { \
         panic_at(__FILE__, __LINE__, KERR_OUT_OF_BOUNDS, "HAL I/O: Port address exceeds 0xFFFF!"); \
-    } else { /* Proceed normally */ }
+    } else { /* Address is within safe 16-bit range */ }
 
 void hal_io_outb(uint32_t port, uint8_t val)  { HAL_PORT_CHECK(port); outb((uint16_t)port, val); }
 void hal_io_outw(uint32_t port, uint16_t val) { HAL_PORT_CHECK(port); outw((uint16_t)port, val); }
@@ -515,9 +522,8 @@ uint32_t hal_io_inl(uint32_t port) { HAL_PORT_CHECK(port); return inl((uint16_t)
 void hal_io_insw(uint32_t port, void* buffer, uint32_t count)        { HAL_PORT_CHECK(port); insw((uint16_t)port, buffer, count); }
 void hal_io_outsw(uint32_t port, const void* buffer, uint32_t count) { HAL_PORT_CHECK(port); outsw((uint16_t)port, buffer, count); }
 
-// BUG-004 FIX: Safe fallback CRC32 Implementation (Castagnoli Polynomial)
 uint32_t hal_crc32_u64(uint32_t crc, uint64_t data) {
-    if (cpu_info.has_sse4_2) {
+    if (__builtin_expect(cpu_info.has_sse4_2, 1)) {
         __asm__ volatile("crc32q %1, %0" : "+r"(crc) : "rm"(data));
         return crc;
     } else {
@@ -527,11 +533,8 @@ uint32_t hal_crc32_u64(uint32_t crc, uint64_t data) {
         for (int i = 0; i < 8; i++) {
             c ^= p[i];
             for (int b = 0; b < 8; b++) {
-                if (c & 1) { 
-                    c = (c >> 1) ^ 0x82F63B78UL; 
-                } else { 
-                    c >>= 1; 
-                }
+                if (c & 1) { c = (c >> 1) ^ 0x82F63B78UL; }
+                else { c >>= 1; }
             }
         }
         return c;
@@ -1330,115 +1333,121 @@ static inline void cpuid_count(uint32_t code, uint32_t count, uint32_t *a, uint3
     __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(code), "c"(count));
 }
 
+// FIX: Tidy Security Warning (Buffer Overflow protection for strncpy)
+static void safe_strncpy(char* dest, const char* src, size_t max_len) {
+    if (!dest || !src || max_len == 0) return;
+    size_t i;
+    for (i = 0; i < max_len - 1 && src[i] != '\0'; i++) {
+        dest[i] = src[i];
+    }
+    dest[i] = '\0';
+}
+
 static void guess_microarchitecture() {
-    strncpy(cpu_info.codename, "Unknown", sizeof(cpu_info.codename)-1);
-    strncpy(cpu_info.socket, "Unknown", sizeof(cpu_info.socket)-1);
-    strncpy(cpu_info.lithography, "Unknown", sizeof(cpu_info.lithography)-1);
+    safe_strncpy(cpu_info.codename, "Unknown", sizeof(cpu_info.codename));
+    safe_strncpy(cpu_info.socket, "Unknown", sizeof(cpu_info.socket));
+    safe_strncpy(cpu_info.lithography, "Unknown", sizeof(cpu_info.lithography));
 
     if (cpu_info.vendor == VENDOR_INTEL) {
         if (cpu_info.family == 6) {
             switch (cpu_info.model) {
                 case 0x4E: case 0x5E:
-                    strncpy(cpu_info.codename, "Skylake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1151", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Skylake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1151", sizeof(cpu_info.socket));
                     break;
                 case 0x8E: case 0x9E:
-                    strncpy(cpu_info.codename, "Kaby/Coffee Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1151", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Kaby/Coffee Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1151", sizeof(cpu_info.socket));
                     break;
                 case 0xA5: case 0xA6:
-                    strncpy(cpu_info.codename, "Comet Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1200", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Comet Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1200", sizeof(cpu_info.socket));
                     break;
                 case 0x7D: case 0x7E: case 0x9D:
-                    strncpy(cpu_info.codename, "Ice Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "10 nm", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1200 / BGA", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Ice Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "10 nm", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1200 / BGA", sizeof(cpu_info.socket));
                     break;
                 case 0x8C: case 0x8D:
-                    strncpy(cpu_info.codename, "Tiger Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "10 nm (SuperFin)", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "BGA", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Tiger Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "10 nm (SuperFin)", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "BGA", sizeof(cpu_info.socket));
                     break;
                 case 0x97: case 0x9A:
-                    strncpy(cpu_info.codename, "Alder Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "Intel 7 (10 nm)", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1700", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Alder Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "Intel 7 (10 nm)", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1700", sizeof(cpu_info.socket));
                     break;
                 case 0xB7: case 0xBA:
-                    strncpy(cpu_info.codename, "Raptor Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "Intel 7 (10 nm)", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1700", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Raptor Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "Intel 7 (10 nm)", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1700", sizeof(cpu_info.socket));
                     break;
                 case 0xAA: case 0xAC:
-                    strncpy(cpu_info.codename, "Meteor Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "Intel 4 (7 nm)", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "BGA", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Meteor Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "Intel 4 (7 nm)", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "BGA", sizeof(cpu_info.socket));
                     break;
                 case 0x8F:
-                    strncpy(cpu_info.codename, "Sapphire Rapids", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "Intel 7", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 4677", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Sapphire Rapids", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "Intel 7", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 4677", sizeof(cpu_info.socket));
                     break;
                 default:
-                    strncpy(cpu_info.codename, "Intel Core (Unknown Model)", sizeof(cpu_info.codename)-1);
+                    safe_strncpy(cpu_info.codename, "Intel Core (Unknown Model)", sizeof(cpu_info.codename));
                     serial_printf("[CPUID] Notice: Unknown Intel Model %x detected.\n", cpu_info.model);
                     break;
             }
         } else {
-            strncpy(cpu_info.codename, "Intel (Unknown Family)", sizeof(cpu_info.codename)-1);
+            safe_strncpy(cpu_info.codename, "Intel (Unknown Family)", sizeof(cpu_info.codename));
             serial_printf("[CPUID] Notice: Unknown Intel Family %x detected.\n", cpu_info.family);
         }
     } else if (cpu_info.vendor == VENDOR_AMD) {
         if (cpu_info.family == 0x17) {
             if (cpu_info.model < 0x30) {
-                strncpy(cpu_info.codename, "Zen / Zen+", sizeof(cpu_info.codename)-1);
-                strncpy(cpu_info.lithography, "14/12 nm", sizeof(cpu_info.lithography)-1);
-                strncpy(cpu_info.socket, "AM4", sizeof(cpu_info.socket)-1);
+                safe_strncpy(cpu_info.codename, "Zen / Zen+", sizeof(cpu_info.codename));
+                safe_strncpy(cpu_info.lithography, "14/12 nm", sizeof(cpu_info.lithography));
+                safe_strncpy(cpu_info.socket, "AM4", sizeof(cpu_info.socket));
             } else {
-                strncpy(cpu_info.codename, "Zen 2", sizeof(cpu_info.codename)-1);
-                strncpy(cpu_info.lithography, "7 nm", sizeof(cpu_info.lithography)-1);
-                strncpy(cpu_info.socket, "AM4 / SP3", sizeof(cpu_info.socket)-1);
+                safe_strncpy(cpu_info.codename, "Zen 2", sizeof(cpu_info.codename));
+                safe_strncpy(cpu_info.lithography, "7 nm", sizeof(cpu_info.lithography));
+                safe_strncpy(cpu_info.socket, "AM4 / SP3", sizeof(cpu_info.socket));
             }
         } else if (cpu_info.family == 0x19) {
             if (cpu_info.model < 0x10) {
-                strncpy(cpu_info.codename, "Zen 3", sizeof(cpu_info.codename)-1);
-                strncpy(cpu_info.lithography, "7 nm", sizeof(cpu_info.lithography)-1);
-                strncpy(cpu_info.socket, "AM4 / SP3", sizeof(cpu_info.socket)-1);
+                safe_strncpy(cpu_info.codename, "Zen 3", sizeof(cpu_info.codename));
+                safe_strncpy(cpu_info.lithography, "7 nm", sizeof(cpu_info.lithography));
+                safe_strncpy(cpu_info.socket, "AM4 / SP3", sizeof(cpu_info.socket));
             } else if (cpu_info.model >= 0x60 && cpu_info.model < 0x70) {
-                strncpy(cpu_info.codename, "Zen 4", sizeof(cpu_info.codename)-1);
-                strncpy(cpu_info.lithography, "5 nm", sizeof(cpu_info.lithography)-1);
-                strncpy(cpu_info.socket, "AM5 (LGA1718) / SP5", sizeof(cpu_info.socket)-1);
+                safe_strncpy(cpu_info.codename, "Zen 4", sizeof(cpu_info.codename));
+                safe_strncpy(cpu_info.lithography, "5 nm", sizeof(cpu_info.lithography));
+                safe_strncpy(cpu_info.socket, "AM5 (LGA1718) / SP5", sizeof(cpu_info.socket));
             } else {
-                strncpy(cpu_info.codename, "Zen 4/5 (Unknown Model)", sizeof(cpu_info.codename)-1);
+                safe_strncpy(cpu_info.codename, "Zen 4/5 (Unknown Model)", sizeof(cpu_info.codename));
                 serial_printf("[CPUID] Notice: Unknown AMD Family 0x19 Model %x detected.\n", cpu_info.model);
             }
         } else if (cpu_info.family == 0x1A) {
-            strncpy(cpu_info.codename, "Zen 5", sizeof(cpu_info.codename)-1);
-            strncpy(cpu_info.lithography, "4 nm", sizeof(cpu_info.lithography)-1);
-            strncpy(cpu_info.socket, "AM5 / SP5", sizeof(cpu_info.socket)-1);
+            safe_strncpy(cpu_info.codename, "Zen 5", sizeof(cpu_info.codename));
+            safe_strncpy(cpu_info.lithography, "4 nm", sizeof(cpu_info.lithography));
+            safe_strncpy(cpu_info.socket, "AM5 / SP5", sizeof(cpu_info.socket));
         } else {
-            strncpy(cpu_info.codename, "AMD (Unknown Family)", sizeof(cpu_info.codename)-1);
+            safe_strncpy(cpu_info.codename, "AMD (Unknown Family)", sizeof(cpu_info.codename));
             serial_printf("[CPUID] Notice: Unknown AMD Family %x detected.\n", cpu_info.family);
         }
     } else {
-        strncpy(cpu_info.codename, "Generic Processor", sizeof(cpu_info.codename)-1);
+        safe_strncpy(cpu_info.codename, "Generic Processor", sizeof(cpu_info.codename));
     }
 
     if (cpu_info.is_hypervisor) {
-        strncpy(cpu_info.codename, "Virtual CPU", sizeof(cpu_info.codename)-1);
-        strncpy(cpu_info.socket, "Virtual Socket", sizeof(cpu_info.socket)-1);
-        strncpy(cpu_info.lithography, "N/A", sizeof(cpu_info.lithography)-1);
+        safe_strncpy(cpu_info.codename, "Virtual CPU", sizeof(cpu_info.codename));
+        safe_strncpy(cpu_info.socket, "Virtual Socket", sizeof(cpu_info.socket));
+        safe_strncpy(cpu_info.lithography, "N/A", sizeof(cpu_info.lithography));
     } else {
         // Physical Hardware mapping intact
     }
-    
-    cpu_info.codename[sizeof(cpu_info.codename)-1] = '\0';
-    cpu_info.socket[sizeof(cpu_info.socket)-1] = '\0';
-    cpu_info.lithography[sizeof(cpu_info.lithography)-1] = '\0';
 }
 
 static void detect_cache_topology() {
@@ -1557,10 +1566,12 @@ void detect_cpu() {
     cpuid(0, &eax, &ebx, &ecx, &edx);
     uint32_t max_std_func = eax;
 
-    memcpy(&cpu_info.vendor_string[0], &ebx, 4);
-    memcpy(&cpu_info.vendor_string[4], &edx, 4);
-    memcpy(&cpu_info.vendor_string[8], &ecx, 4);
-    cpu_info.vendor_string[12] = '\0';
+    // FIX: Replaced direct memcpy with safe bounds handling for vendor string
+    uint32_t vendor_buf[3];
+    vendor_buf[0] = ebx;
+    vendor_buf[1] = edx;
+    vendor_buf[2] = ecx;
+    safe_strncpy(cpu_info.vendor_string, (const char*)vendor_buf, 13);
 
     if (strcmp(cpu_info.vendor_string, "GenuineIntel") == 0) { cpu_info.vendor = VENDOR_INTEL; }
     else if (strcmp(cpu_info.vendor_string, "AuthenticAMD") == 0) { cpu_info.vendor = VENDOR_AMD; }
@@ -1574,15 +1585,14 @@ void detect_cpu() {
 
     if (max_std_func >= 7) {
         cpuid_count(7, 0, &eax, &ebx, &ecx, &edx);
-        cpu_info.has_smep = (ebx & (1 << 7));  
-        cpu_info.has_smap = (ebx & (1 << 20)); 
-        cpu_info.has_avx2   = (ebx & (1 << 5));
-        cpu_info.has_avx512 = (ebx & (1 << 16));
-        cpu_info.has_sha    = (ebx & (1 << 29));
-        cpu_info.has_cet_ss  = (ecx & (1 << 7));
-        cpu_info.has_cet_ibt = (edx & (1 << 20));
+        cpu_info.has_smep = (ebx & (1 << 7)) != 0;  
+        cpu_info.has_smap = (ebx & (1 << 20)) != 0; 
+        cpu_info.has_avx2   = (ebx & (1 << 5)) != 0;
+        cpu_info.has_avx512 = (ebx & (1 << 16)) != 0;
+        cpu_info.has_sha    = (ebx & (1 << 29)) != 0;
+        cpu_info.has_cet_ss  = (ecx & (1 << 7)) != 0;
+        cpu_info.has_cet_ibt = (edx & (1 << 20)) != 0;
         
-        // BUG-007 FIX: Unified feature struct mappings
         cpu_info.has_rdseed = (ebx & (1 << 18)) != 0;
     } else {
         // Pre-Haswell features only
@@ -1610,26 +1620,26 @@ void detect_cpu() {
         cpu_info.ext_family = (eax >> 20) & 0xFF;
         cpu_info.ext_model  = (eax >> 16) & 0xF;
 
-        cpu_info.has_fpu  = (edx & (1 << 0));
-        cpu_info.has_msr  = (edx & (1 << 5));
-        cpu_info.has_apic = (edx & (1 << 9));
-        cpu_info.has_mmx  = (edx & (1 << 23));
-        cpu_info.has_sse  = (edx & (1 << 25));
-        cpu_info.has_sse2 = (edx & (1 << 26));
-        cpu_info.has_ht   = (edx & (1 << 28));
+        cpu_info.has_fpu  = (edx & (1 << 0)) != 0;
+        cpu_info.has_msr  = (edx & (1 << 5)) != 0;
+        cpu_info.has_apic = (edx & (1 << 9)) != 0;
+        cpu_info.has_mmx  = (edx & (1 << 23)) != 0;
+        cpu_info.has_sse  = (edx & (1 << 25)) != 0;
+        cpu_info.has_sse2 = (edx & (1 << 26)) != 0;
+        cpu_info.has_ht   = (edx & (1 << 28)) != 0;
 
-        cpu_info.has_sse3   = (ecx & (1 << 0));
-        cpu_info.has_vmx    = (ecx & (1 << 5));
-        cpu_info.has_ssse3  = (ecx & (1 << 9));
-        cpu_info.has_fma3   = (ecx & (1 << 12));
-        cpu_info.has_sse4_1 = (ecx & (1 << 19));
-        cpu_info.has_sse4_2 = (ecx & (1 << 20));
-        cpu_info.has_aes    = (ecx & (1 << 25));
-        cpu_info.has_xsave  = (ecx & (1 << 26));
-        cpu_info.has_avx    = (ecx & (1 << 28));
-        cpu_info.has_rdrand = (ecx & (1 << 30));
+        cpu_info.has_sse3   = (ecx & (1 << 0)) != 0;
+        cpu_info.has_vmx    = (ecx & (1 << 5)) != 0;
+        cpu_info.has_ssse3  = (ecx & (1 << 9)) != 0;
+        cpu_info.has_fma3   = (ecx & (1 << 12)) != 0;
+        cpu_info.has_sse4_1 = (ecx & (1 << 19)) != 0;
+        cpu_info.has_sse4_2 = (ecx & (1 << 20)) != 0;
+        cpu_info.has_aes    = (ecx & (1 << 25)) != 0;
+        cpu_info.has_xsave  = (ecx & (1 << 26)) != 0;
+        cpu_info.has_avx    = (ecx & (1 << 28)) != 0;
+        cpu_info.has_rdrand = (ecx & (1 << 30)) != 0;
 
-        cpu_info.is_hypervisor = (ecx & (1U << 31));
+        cpu_info.is_hypervisor = (ecx & (1U << 31)) != 0;
     } else {
         // Obsolete processors
     }
@@ -1637,10 +1647,8 @@ void detect_cpu() {
     cpuid(0x40000000, &eax, &ebx, &ecx, &edx);
     if (eax >= 0x40000001) {
         char hv_sig[13];
-        memcpy(hv_sig + 0, &ebx, 4);
-        memcpy(hv_sig + 4, &ecx, 4);
-        memcpy(hv_sig + 8, &edx, 4);
-        hv_sig[12] = 0;
+        uint32_t hv_buf[3] = {ebx, ecx, edx};
+        safe_strncpy(hv_sig, (const char*)hv_buf, 13);
 
         if (strcmp(hv_sig, "VBoxVBoxVBox") == 0) {
             cpu_info.vendor = VENDOR_VIRTUALBOX;
@@ -1660,7 +1668,7 @@ void detect_cpu() {
 
     if (max_std_func >= 0xD) {
         cpuid_count(0xD, 1, &eax, &ebx, &ecx, &edx);
-        cpu_info.has_xsaveopt = (eax & (1 << 0));
+        cpu_info.has_xsaveopt = (eax & (1 << 0)) != 0;
     } else {
         // Safe drop
     }
@@ -1670,33 +1678,20 @@ void detect_cpu() {
 
     if (max_ext_func >= 0x80000001) {
         cpuid(0x80000001, &eax, &ebx, &ecx, &edx);
-        cpu_info.has_longmode = (edx & (1 << 29));
-        cpu_info.has_sse4a    = (ecx & (1 << 6));
-        if (cpu_info.vendor == VENDOR_AMD) { cpu_info.has_svm = (ecx & (1 << 2)); } else { /* Clean Intel */ }
+        cpu_info.has_longmode = (edx & (1 << 29)) != 0;
+        cpu_info.has_sse4a    = (ecx & (1 << 6)) != 0;
+        if (cpu_info.vendor == VENDOR_AMD) { cpu_info.has_svm = (ecx & (1 << 2)) != 0; } else { /* Clean Intel */ }
     } else {
         // Unmapped properties
     }
 
     if (max_ext_func >= 0x80000004) {
-        cpuid(0x80000002, &eax, &ebx, &ecx, &edx);
-        memcpy(&cpu_info.brand_string[0], &eax, 4);
-        memcpy(&cpu_info.brand_string[4], &ebx, 4);
-        memcpy(&cpu_info.brand_string[8], &ecx, 4);
-        memcpy(&cpu_info.brand_string[12], &edx, 4);
+        uint32_t brand_buf[12];
+        cpuid(0x80000002, &brand_buf[0], &brand_buf[1], &brand_buf[2], &brand_buf[3]);
+        cpuid(0x80000003, &brand_buf[4], &brand_buf[5], &brand_buf[6], &brand_buf[7]);
+        cpuid(0x80000004, &brand_buf[8], &brand_buf[9], &brand_buf[10], &brand_buf[11]);
         
-        cpuid(0x80000003, &eax, &ebx, &ecx, &edx);
-        memcpy(&cpu_info.brand_string[16], &eax, 4);
-        memcpy(&cpu_info.brand_string[20], &ebx, 4);
-        memcpy(&cpu_info.brand_string[24], &ecx, 4);
-        memcpy(&cpu_info.brand_string[28], &edx, 4);
-        
-        cpuid(0x80000004, &eax, &ebx, &ecx, &edx);
-        memcpy(&cpu_info.brand_string[32], &eax, 4);
-        memcpy(&cpu_info.brand_string[36], &ebx, 4);
-        memcpy(&cpu_info.brand_string[40], &ecx, 4);
-        memcpy(&cpu_info.brand_string[44], &edx, 4);
-        
-        cpu_info.brand_string[48] = '\0';
+        safe_strncpy(cpu_info.brand_string, (const char*)brand_buf, 49);
 
         int i = 0, j = 0;
         while(cpu_info.brand_string[i] == ' ') i++;
@@ -1707,8 +1702,7 @@ void detect_cpu() {
             // Perfect trimmed alignment
         }
     } else {
-        strncpy(cpu_info.brand_string, "Unknown CPU", sizeof(cpu_info.brand_string)-1);
-        cpu_info.brand_string[sizeof(cpu_info.brand_string)-1] = '\0';
+        safe_strncpy(cpu_info.brand_string, "Unknown CPU", sizeof(cpu_info.brand_string));
     }
 
     guess_microarchitecture();
@@ -5714,22 +5708,29 @@ bool ons_enumerate(const char* path, uint32_t index, char* out_name, uint8_t* ou
 #include "libc/string.h"
 #include "libc/stdio.h"
 #include "kernel/debug.h"
+
 void kobject_ref(KObject* obj) {
     if (obj) {
         __atomic_fetch_add(&obj->ref_count, 1, __ATOMIC_SEQ_CST);
-    }
+    } else { /* Ignored */ }
 }
 
+// Bulgu 2.1 FIX: Strict Refcount Underflow Protection
 void kobject_unref(KObject* obj) {
     if (obj) {
-        if (__atomic_fetch_sub(&obj->ref_count, 1, __ATOMIC_SEQ_CST) == 1) {
+        uint32_t old_val = __atomic_fetch_sub(&obj->ref_count, 1, __ATOMIC_SEQ_CST);
+        if (old_val == 1) {
             delete obj;
+        } else if (__builtin_expect(old_val == 0, 0)) {
+            panic_at("KOM", 0, KERR_HEAP_DOUBLE_FREE, "KObject Reference Count Underflow Detected!");
+        } else {
+            // Ref count still positive
         }
-    }
+    } else { /* Null skip */ }
 }
 
 extern "C" void kobject_unref_c(void* obj) {
-    if (obj) kobject_unref((KObject*)obj);
+    if (obj) { kobject_unref((KObject*)obj); } else { /* Null skip */ }
 }
 
 void HandleTable::init() {
@@ -5744,13 +5745,13 @@ void HandleTable::init() {
 }
 
 handle_t HandleTable::alloc(KObject* obj, uint16_t caps) {
-    if (!obj) return 0;
+    if (!obj) { return 0; } else { /* Valid */ }
 
     uint64_t flags = spinlock_acquire(&lock);
     if (freelist_top == 0) {
         spinlock_release(&lock, flags);
         return 0; 
-    }
+    } else { /* Slots available */ }
 
     uint32_t idx = freelist[--freelist_top];
     HandleEntry& entry = entries[idx];
@@ -5771,8 +5772,8 @@ KObject* HandleTable::resolve(handle_t h, uint16_t req_caps) {
     uint16_t gen = (h >> 32) & 0xFFFF;
     uint16_t provided_caps = (h >> 48) & 0xFFFF;
 
-    if ((provided_caps & req_caps) != req_caps) return nullptr;
-    if (idx == 0 || idx >= CAPACITY) return nullptr;
+    if ((provided_caps & req_caps) != req_caps) { return nullptr; } else { /* Authorized */ }
+    if (idx == 0 || idx >= CAPACITY) { return nullptr; } else { /* In bounds */ }
 
     uint64_t flags = spinlock_acquire(&lock);
     HandleEntry& entry = entries[idx];
@@ -5780,12 +5781,12 @@ KObject* HandleTable::resolve(handle_t h, uint16_t req_caps) {
     if (entry.generation != gen || entry.obj == nullptr) {
         spinlock_release(&lock, flags);
         return nullptr;
-    }
+    } else { /* Gen matched */ }
 
     if ((entry.caps & req_caps) != req_caps) {
         spinlock_release(&lock, flags);
         return nullptr;
-    }
+    } else { /* Caps matched */ }
 
     KObject* target = entry.obj;
     kobject_ref(target); 
@@ -5798,7 +5799,7 @@ handle_t HandleTable::dup(handle_t h, uint16_t new_caps) {
     uint32_t idx = h & 0xFFFFFFFF;
     uint16_t gen = (h >> 32) & 0xFFFF;
     
-    if (idx == 0 || idx >= CAPACITY) return 0;
+    if (idx == 0 || idx >= CAPACITY) { return 0; } else { /* Bound check pass */ }
 
     uint64_t flags = spinlock_acquire(&lock);
     HandleEntry& entry = entries[idx];
@@ -5806,12 +5807,12 @@ handle_t HandleTable::dup(handle_t h, uint16_t new_caps) {
     if (entry.generation != gen || entry.obj == nullptr) {
         spinlock_release(&lock, flags);
         return 0;
-    }
+    } else { /* OK */ }
 
     if ((entry.caps & new_caps) != new_caps) {
         spinlock_release(&lock, flags);
         return 0;
-    }
+    } else { /* OK */ }
 
     KObject* obj = entry.obj;
     spinlock_release(&lock, flags);
@@ -5823,7 +5824,7 @@ void HandleTable::close(handle_t h) {
     uint32_t idx = h & 0xFFFFFFFF;
     uint16_t gen = (h >> 32) & 0xFFFF;
 
-    if (idx == 0 || idx >= CAPACITY) return;
+    if (idx == 0 || idx >= CAPACITY) { return; } else { /* Bound check pass */ }
 
     uint64_t flags = spinlock_acquire(&lock);
     HandleEntry& entry = entries[idx];
@@ -5831,7 +5832,7 @@ void HandleTable::close(handle_t h) {
     if (entry.generation != gen || entry.obj == nullptr) {
         spinlock_release(&lock, flags);
         return;
-    }
+    } else { /* OK */ }
 
     KObject* obj = entry.obj;
     
@@ -5839,14 +5840,13 @@ void HandleTable::close(handle_t h) {
     entry.caps = 0;
     
     entry.generation++; 
-    if (entry.generation == 0) entry.generation = 1;
+    if (entry.generation == 0) { entry.generation = 1; } else { /* Carry */ }
 
     freelist[freelist_top++] = idx;
     spinlock_release(&lock, flags);
 
     kobject_unref(obj);
 }
-
 
 .../archs\kom\common\kblob.cpp:
 // archs/kom/common/kblob.cpp
@@ -5975,6 +5975,7 @@ error_t KDynamicBlob::write(uint64_t offset, const void* buf, size_t count, size
 #ifndef KBLOB_HPP
 #define KBLOB_HPP
 
+#ifdef __cplusplus
 #include "archs/kom/common/kobject.hpp"
 #include "system/sync/rwlock.h"
 #include "archs/kom/common/kiovec.h"
@@ -6014,7 +6015,6 @@ public:
     }
 };
 
-// VFS RAMFS YERİNE GEÇEN NESNE (Sıfır Overhead)
 class KVolatileBlob : public KBlob {
 private:
     uint8_t* buffer;
@@ -6029,7 +6029,6 @@ public:
     error_t resize(uint64_t new_size) override;
 };
 
-// VFS PROCFS YERİNE GEÇEN NESNE (Sıfır Overhead)
 typedef size_t (*DynamicReadCallback)(uint64_t offset, void* buffer, size_t count);
 class KDynamicBlob : public KBlob {
 private:
@@ -6042,6 +6041,7 @@ public:
     error_t write(uint64_t offset, const void* buf, size_t count, size_t* bytes_written) override;
 };
 
+#endif // __cplusplus
 #endif
 
 .../archs\kom\common\kcontainer.cpp:
@@ -6192,17 +6192,19 @@ error_t KContainer::create_child(const char* name, KObjectType type) {
 #ifndef KCONTAINER_HPP
 #define KCONTAINER_HPP
 
+#ifdef __cplusplus
 #include "archs/kom/common/kobject.hpp"
 #include "system/sync/rwlock.h"
+
 struct ONSBinding {
     char name[64];
     KObject* obj;
-    ONSBinding* next;
+    struct ONSBinding* next;
 };
 
 class KContainer : public KObject {
 protected:
-    ONSBinding* head;
+    struct ONSBinding* head;
     rwlock_t rw_lock;
 
 public:
@@ -6216,9 +6218,8 @@ public:
     
     virtual error_t create_child(const char* name, KObjectType type);
 };
-
+#endif // __cplusplus
 #endif
-
 
 .../archs\kom\common\kdevice.cpp:
 // archs/kom/common/kdevice.cpp
@@ -6256,6 +6257,7 @@ void KDevice::ons_unregister() {
 #ifndef KDEVICE_HPP
 #define KDEVICE_HPP
 
+#ifdef __cplusplus
 #include "archs/kom/common/kobject.hpp"
 #include "archs/kom/common/ons.hpp"
 typedef uint32_t error_t;
@@ -6299,9 +6301,8 @@ public:
     void ons_register(const char* path);
     void ons_unregister();
 };
-
+#endif // __cplusplus
 #endif
-
 
 .../archs\kom\common\kevent.cpp:
 // archs/kom/common/kevent.cpp
@@ -6558,10 +6559,14 @@ uint64_t kom_duplicate(uint64_t handle, uint16_t requested_caps);
 #include "archs/kom/common/kom.h"
 #include "libc/stdio.h"
 #include "kernel/debug.h"
+
 inline void* operator new(size_t, void* p) { return p; }
 
 static HandleTable* kernel_handle_table = nullptr;
-static uint8_t kom_memory_buffer[sizeof(HandleTable)];
+
+// TIDY FIX: Placement new requires the storage buffer to be strictly aligned
+// to the requirements of the instantiated object (HandleTable contains 64-byte aligned spinlocks).
+alignas(HandleTable) static uint8_t kom_memory_buffer[sizeof(HandleTable)];
 
 extern "C" {
 
@@ -6571,10 +6576,10 @@ void kom_init() {
 }
 
 uint64_t kom_open(const char* path, uint16_t requested_caps) {
-    if (!kernel_handle_table) return 0;
+    if (!kernel_handle_table) { return 0; } else { /* Valid */ }
     
     KObject* target = ons_resolve(path);
-    if (!target) return 0;
+    if (!target) { return 0; } else { /* Valid */ }
     
     handle_t h = kernel_handle_table->alloc(target, requested_caps);
     
@@ -6584,13 +6589,13 @@ uint64_t kom_open(const char* path, uint16_t requested_caps) {
 }
 
 int kom_close(uint64_t handle) {
-    if (!kernel_handle_table) return KOM_ERR_STALE_HANDLE;
+    if (!kernel_handle_table) { return KOM_ERR_STALE_HANDLE; } else { /* Valid */ }
     kernel_handle_table->close(handle);
     return KOM_OK;
 }
 
 uint64_t kom_duplicate(uint64_t handle, uint16_t requested_caps) {
-    if (!kernel_handle_table) return 0;
+    if (!kernel_handle_table) { return 0; } else { /* Valid */ }
     return kernel_handle_table->dup(handle, requested_caps);
 }
 
@@ -6856,6 +6861,9 @@ int ons_unbind(const char* path) {
 #ifndef ONS_HPP
 #define ONS_HPP
 
+#include <stdint.h>
+#include <stdbool.h>
+
 #ifdef __cplusplus
 #include "archs/kom/common/kcontainer.hpp"
 #endif
@@ -6888,7 +6896,7 @@ KObject* ons_resolve(const char* path);
 KObject* ons_resolve_parent(const char* path, char* out_filename);
 #endif
 
-#endif // FIX: Eksik olan endif eklendi
+#endif
 
 .../archs\kom\common\provider_glue.cpp:
 // archs/kom/common/provider_glue.cpp
@@ -6897,6 +6905,7 @@ KObject* ons_resolve_parent(const char* path, char* out_filename);
 #include "libc/string.h"
 #include "libc/stdio.h"
 #include "system/console/console.h"
+#include "memory/kheap.h" // YENİ: Kmalloc_contiguous için eklendi
 
 static char next_drive_letter = 'D';
 
@@ -7159,7 +7168,41 @@ uint64_t kom_probe_free_space(void* dev_ptr) {
                     if (free_clusters != 0xFFFFFFFF && free_clusters > 0) {
                         return static_cast<uint64_t>(free_clusters) * bpb->sectors_per_cluster * bpb->bytes_per_sector;
                     } else {
-                        // Stale info cluster mapping 
+                        // YENİ: FAT32 Stale FSINFO Fallback (FAT-Walking)
+                        uint32_t fat_start = bpb->reserved_sectors;
+                        uint32_t fat_sectors = bpb->sectors_per_fat_32;
+                        uint32_t counted_free = 0;
+                        
+                        // Performans için 4KB (8 sektör) bloklar halinde oku
+                        uint8_t* fat_buf = (uint8_t*)kmalloc_contiguous(4096);
+                        if (fat_buf) {
+                            uint32_t sectors_to_read = fat_sectors;
+                            uint32_t current_sector = fat_start;
+                            
+                            while (sectors_to_read > 0) {
+                                uint32_t chunk = (sectors_to_read > 8) ? 8 : sectors_to_read;
+                                if (dev->readBlock(current_sector, chunk, fat_buf)) {
+                                    uint32_t* entries = (uint32_t*)fat_buf;
+                                    uint32_t total_entries = (chunk * 512) / 4;
+                                    for (uint32_t j = 0; j < total_entries; j++) {
+                                        if ((entries[j] & 0x0FFFFFFF) == 0) {
+                                            counted_free++;
+                                        } else { /* Allocated */ }
+                                    }
+                                } else {
+                                    break; // Disk read error, abort walk
+                                }
+                                current_sector += chunk;
+                                sectors_to_read -= chunk;
+                            }
+                            kfree_contiguous(fat_buf, 4096);
+                            
+                            if (counted_free > 0) {
+                                return static_cast<uint64_t>(counted_free) * bpb->sectors_per_cluster * bpb->bytes_per_sector;
+                            } else { /* Disk is truly 100% full */ }
+                        } else {
+                            // OOM during fallback, return Unknown
+                        }
                     }
                 } else {
                     // Safe return out
@@ -7197,7 +7240,6 @@ uint64_t kom_probe_free_space(void* dev_ptr) {
 
 }
 
-
 .../archs\kom\common\provider_glue.hpp:
 // archs/kom/common/provider_glue.hpp
 #ifndef PROVIDER_GLUE_HPP
@@ -7206,6 +7248,7 @@ uint64_t kom_probe_free_space(void* dev_ptr) {
 #include "archs/kom/kom_aal.h"
 #include "system/device/device.h"
 
+#ifdef __cplusplus
 struct CDirent {
     char name[128];
     uint32_t inode;
@@ -7235,12 +7278,12 @@ public:
     bool enumerate(uint32_t index, char* out_name, KObjectType* out_type) override;
     error_t create_child(const char* name, KObjectType type) override;
 };
+#endif // __cplusplus
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// FIX: 'silent' bayrağı silindi
 void kom_mount_provider(const char* dev_name, const char* target_path, const char* provider_type);
 void kom_mkfs_provider(const char* dev_name, const char* provider_type, const char* label);
 uint64_t kom_probe_free_space(void* dev_ptr);
@@ -8593,8 +8636,16 @@ menuentry "Singularity OS (Safe Mode & Recovery)" {
 
 extern void rust_pcie_init_ecam(uint64_t mcfg_phys_base, uint8_t start_bus, uint8_t end_bus);
 extern void rust_pcie_enumerate(void);
-
 extern uint64_t get_uptime_ns();
+
+// RUST FFI BRIDGE
+typedef struct {
+    uint16_t slp_typ_a;
+    uint16_t slp_typ_b;
+    bool found;
+} acpi_sleep_data_t;
+
+extern void rust_acpi_parse_dsdt(const uint8_t* dsdt_ptr, uint32_t dsdt_len, acpi_sleep_data_t* s5_out, acpi_sleep_data_t* s3_out);
 
 #define MULTIBOOT_TAG_TYPE_ACPI_OLD 14
 #define MULTIBOOT_TAG_TYPE_ACPI_NEW 15
@@ -8614,10 +8665,8 @@ static struct madt* madt = NULL;
 static int acpi_version = 0;
 static bool use_xsdt = false;
 
-static uint16_t SLP_TYPa_S5, SLP_TYPb_S5;
-static uint16_t SLP_TYPa_S3, SLP_TYPb_S3; 
-static bool S5_FOUND = false;
-static bool S3_FOUND = false;
+static acpi_sleep_data_t s5_data = {0, 0, false};
+static acpi_sleep_data_t s3_data = {0, 0, false};
 
 uint32_t acpi_get_pm_timer_port() {
     if (fadt) {
@@ -8658,7 +8707,6 @@ static bool check_checksum(uint8_t* ptr, int len) {
 static void* map_and_check_table(uint64_t phys_addr, const char* signature) {
     if (phys_addr == 0) { return NULL; } else { /* Proceed */ }
 
-    // SEC-002 FIX: ACPI Tables must be strictly Non-Executable and Read-Only!
     acpi_header_t* header = (acpi_header_t*)ioremap(phys_addr, sizeof(acpi_header_t), PAGE_PRESENT | PAGE_NX);
     if (!header) { return NULL; } else { /* Proceed */ }
 
@@ -8703,7 +8751,6 @@ void* acpi_find_table(const char* signature) {
             // Invalid RSDT length
         }
     } else {
-        // DEF-002 FIX
         klog(LOG_ERROR, "[ACPI] FATAL: Neither XSDT nor RSDT are valid. Cannot parse tables!");
     }
     return NULL;
@@ -8776,88 +8823,6 @@ static int acpi_enable() {
     return 0;
 }
 
-static void parse_aml_package(uint8_t* ptr, uint16_t* typp_a, uint16_t* typp_b, bool* found_flag, uint32_t max_len) {
-    uint32_t offset = 0;
-    while (offset < max_len && ptr[offset] != 0x12) { offset++; }
-    
-    // BUG-002 FIX: Strict OOB boundaries for AML parser
-    if (offset >= max_len) { 
-        klog(LOG_ERROR, "[ACPI] AML Package parse reached end of buffer without finding 0x12 (OOB Protected)!");
-        return; 
-    } else {
-        // Valid pointer position
-    }
-    
-    ptr += offset;
-    max_len -= offset;
-    
-    if (max_len < 4) { return; } else { /* Valid */ }
-    
-    ptr++; 
-    max_len--;
-    
-    uint8_t lead = *ptr;
-    uint8_t bytes = (lead >> 6);
-    if (bytes == 0) {
-        ptr++; max_len--;
-    } else {
-        if (max_len < (uint32_t)(bytes + 1)) { return; } else { /* Valid */ }
-        ptr += (bytes + 1);
-        max_len -= (bytes + 1);
-    }
-    
-    if (max_len < 1) { return; } else { /* Valid */ }
-    uint8_t num_elements = *ptr;
-    ptr++; max_len--;
-    
-    int found_values = 0;
-    for (int k = 0; k < num_elements && found_values < 2 && max_len > 0; k++) {
-        uint8_t prefix = *ptr;
-        uint16_t val = 0;
-        bool is_val = false;
-        
-        if (prefix == 0x0A && max_len >= 2) { 
-            val = *(ptr + 1);
-            ptr += 2; max_len -= 2;
-            is_val = true;
-        } else if (prefix == 0x0B && max_len >= 3) { 
-            val = *(ptr + 1) | (*(ptr + 2) << 8);
-            ptr += 3; max_len -= 3;
-            is_val = true;
-        } else if (prefix == 0x00) { 
-            val = 0;
-            ptr++; max_len--;
-            is_val = true;
-        } else if (prefix == 0x01) { 
-            val = 1;
-            ptr++; max_len--;
-            is_val = true;
-        } else {
-            ptr++; max_len--;
-        }
-        
-        if (is_val) {
-            if (found_values == 0) { 
-                *typp_a = val << 10; 
-                found_values++; 
-            } else if (found_values == 1) { 
-                *typp_b = val << 10; 
-                found_values++; 
-            } else {
-                // Ignore extra values
-            }
-        } else {
-            // Unhandled object in package
-        }
-    }
-    
-    if (found_values >= 2) {
-        *found_flag = true; 
-    } else {
-        // Failed to find necessary values
-    }
-}
-
 static int init_dsdt() {
     if (!fadt) { return -1; } else { /* Proceed */ }
     
@@ -8880,15 +8845,8 @@ static int init_dsdt() {
     uint8_t* dsdt_data = (uint8_t*)ioremap(dsdt_phys, len, PAGE_PRESENT | PAGE_NX);
     if (!dsdt_data) { return -1; } else { /* Proceed */ }
 
-    for (uint32_t i = 0; i < len - 4; i++) {
-        if (memcmp(&dsdt_data[i], "_S5_", 4) == 0) {
-            parse_aml_package(&dsdt_data[i], &SLP_TYPa_S5, &SLP_TYPb_S5, &S5_FOUND, len - i);
-        } else if (memcmp(&dsdt_data[i], "_S3_", 4) == 0) {
-            parse_aml_package(&dsdt_data[i], &SLP_TYPa_S3, &SLP_TYPb_S3, &S3_FOUND, len - i);
-        } else {
-            // Keep scanning DSDT
-        }
-    }
+    // DSDT Parsing delegated to Memory-Safe Rust module
+    rust_acpi_parse_dsdt(dsdt_data, len, &s5_data, &s3_data);
     
     iounmap(dsdt_data, len);
     return 0;
@@ -9107,9 +9065,9 @@ void acpi_power_off() {
     uint16_t port = fadt->pm1a_cnt_blk;
     if (!port) { return; } else { /* Proceed */ }
     
-    uint16_t val = (SLP_TYPa_S5 | 0x2000);
-    if (!S5_FOUND) {
-        val = 0x3400; 
+    uint16_t val = (s5_data.slp_typ_a | 0x2000);
+    if (!s5_data.found) {
+        val = 0x3400; // QEMU Q35 Fallback
     } else {
         // Safe standard S5 off
     }
@@ -9117,8 +9075,8 @@ void acpi_power_off() {
     hal_io_outw(port, val);
     
     if (fadt->pm1b_cnt_blk) {
-        uint16_t val_b = (SLP_TYPb_S5 | 0x2000);
-        if (!S5_FOUND) {
+        uint16_t val_b = (s5_data.slp_typ_b | 0x2000);
+        if (!s5_data.found) {
             val_b = 0x3400; 
         } else {
             // Safe standard S5 off
@@ -9130,10 +9088,10 @@ void acpi_power_off() {
 }
 
 void acpi_suspend() {
-    if (!S3_FOUND || !fadt) { return; } else { /* Proceed */ }
-    hal_io_outw(fadt->pm1a_cnt_blk, SLP_TYPa_S3 | 0x2000); 
+    if (!s3_data.found || !fadt) { return; } else { /* Proceed */ }
+    hal_io_outw(fadt->pm1a_cnt_blk, s3_data.slp_typ_a | 0x2000); 
     if (fadt->pm1b_cnt_blk != 0) {
-        hal_io_outw(fadt->pm1b_cnt_blk, SLP_TYPb_S3 | 0x2000); 
+        hal_io_outw(fadt->pm1b_cnt_blk, s3_data.slp_typ_b | 0x2000); 
     } else {
         // No PM1B
     }
@@ -12121,12 +12079,12 @@ static volatile uint32_t ring_tail = 0;
 static bool serial_hardware_present = false;
 static bool async_mode = false;
 static KInterrupt* serial_irq_obj = nullptr;
+static SerialDriver* g_serial_driver = nullptr; // TIDY FIX: Memory Leak Prevention
 
 extern "C" void serial_irq_handler_wrapper(registers_t* regs) {
     (void)regs;
-    if (!serial_hardware_present) return;
+    if (!serial_hardware_present) { return; } else { /* Active */ }
 
-    // Wait-Free Consumer: IRQ geldiğinde tamponu boşalt
     while (ring_head != ring_tail) {
         if ((hal_io_inb(COM1 + 5) & 0x20)) {
             uint32_t next_tail = (ring_tail + 1) & RING_MASK;
@@ -12151,8 +12109,9 @@ int SerialDriver::init() {
     if (serial_hardware_present) {
         DeviceManager::registerDevice(this);
         return 1;
+    } else {
+        return 0;
     }
-    return 0;
 }
 
 int SerialDriver::write(const char* buffer, int size) {
@@ -12182,45 +12141,43 @@ extern "C" {
 
     void init_serial_late() {
         if (serial_hardware_present) {
-            SerialDriver* drv = new SerialDriver();
-            drv->init();
+            // TIDY FIX: Store pointer globally to prevent memory leak
+            g_serial_driver = new SerialDriver();
+            g_serial_driver->init();
 
             serial_irq_obj = new KInterrupt(36);
             async_mode = true;
             create_kernel_task_prio(serial_thread_fn, PRIO_REALTIME);
             
-            // Kesmeleri aktif et
             hal_io_outb(COM1 + 1, 0x01);
+        } else {
+            // Hardware missing
         }
     }
 
     void serial_putc(char c) {
-        if (!serial_hardware_present) return;
+        if (!serial_hardware_present) { return; } else { /* Valid */ }
 
         if (!async_mode) {
-            // Polling Mode (Early Boot / Panic)
-            while ((hal_io_inb(COM1 + 5) & 0x20) == 0) hal_cpu_relax();
+            while ((hal_io_inb(COM1 + 5) & 0x20) == 0) { hal_cpu_relax(); }
             hal_io_outb(COM1, c);
         } else {
-            // Wait-Free Producer: Tampona yaz, kilit bekleme
             uint32_t next_head = (ring_head + 1) & RING_MASK;
             if (next_head == ring_tail) {
-                // Buffer full: Skip or drop oldest? Enterprise standard: Drop oldest.
                 ring_tail = (ring_tail + 1) & RING_MASK;
-            }
+            } else { /* Buffer has space */ }
             serial_ring[ring_head] = c;
             ring_head = next_head;
             
-            // Eğer donanım boşsa manuel dürt
             if (hal_io_inb(COM1 + 5) & 0x20) {
                 serial_irq_handler_wrapper(nullptr);
-            }
+            } else { /* Hardware busy */ }
         }
     }
 
     void serial_write_atomic(const char* str) {
         while(*str) {
-            if (*str == '\n') serial_putc('\r');
+            if (*str == '\n') { serial_putc('\r'); } else { /* Pass */ }
             serial_putc(*str++);
         }
     }
@@ -12231,16 +12188,22 @@ extern "C" {
 
     void serial_enable_direct_mode() {
         async_mode = false;
-        hal_io_outb(COM1 + 1, 0x00); // Disable interrupts
+        hal_io_outb(COM1 + 1, 0x00); 
     }
 
+    // TIDY FIX: Explicitly separated va_list operations to prevent uninitialized usage warnings.
     void serial_printf(const char* format, ...) {
         char buf[1024]; 
         va_list args;
         va_start(args, format);
-        vsnprintf(buf, sizeof(buf), format, args);
+        int ret = vsnprintf(buf, sizeof(buf), format, args);
         va_end(args);
-        serial_write(buf);
+        
+        if (ret > 0) {
+            serial_write(buf);
+        } else {
+            // Formatting failed
+        }
     }
 }
 
@@ -15728,7 +15691,7 @@ section .note.GNU-stack noalloc noexec nowrite progbits
 #include "system/process/process.h"
 #include "archs/cpu/x86_64/core/cpuid.h"
 #include "archs/cpu/cpu_hal.h"
-#include "drivers/uefi/uefi.h" // LEG-002 FIX: UEFI Included
+#include "drivers/uefi/uefi.h" 
 
 extern "C" {
     void print_status(const char* prefix, const char* msg, const char* status);
@@ -15745,7 +15708,7 @@ static bool pm_timer_reliable_calibration() {
     if (!pm_port) { return false; } else { /* Proceed */ }
 
     uint32_t t1 = hal_io_inl(pm_port) & 0xFFFFFF;
-    uint32_t t2 = t1;
+    uint32_t t2 = 0; // TIDY FIX: Removed dead assignment 't2 = t1'
     
     while ((t2 = (hal_io_inl(pm_port) & 0xFFFFFF)) == t1) { hal_cpu_relax(); }
     
@@ -15836,7 +15799,6 @@ int TSCDriver::init() {
         }
     }
 
-    // LEG-002 FIX: UEFI Runtime Services Timer Fallback
     if (!freq_found || tsc_frequency < 1000000) {
         serial_write("[TSC] CPUID failed. Trying UEFI Runtime Services...\n");
         if (uefi_available()) {
@@ -15880,11 +15842,11 @@ int TSCDriver::init() {
     if (tsc_frequency < 100000000ULL) {
         tsc_frequency = 2000000000ULL;
         char msg[128];
-        sprintf(msg, "VM Timer Anomaly! Forced fallback to 2000 MHz");
+        snprintf(msg, sizeof(msg), "VM Timer Anomaly! Forced fallback to 2000 MHz");
         print_status("[ TSC  ]", msg, "WARN");
     } else {
         char msg[128];
-        sprintf(msg, "Clock synchronized at %lu MHz", tsc_frequency / 1000000);
+        snprintf(msg, sizeof(msg), "Clock synchronized at %lu MHz", tsc_frequency / 1000000);
         print_status("[ TSC  ]", msg, "INFO");
     }
 
@@ -17951,7 +17913,7 @@ void config_init(const char* cmdline) {
 #include <stdbool.h>
 
 #define SINGULARITY_SYS_NAME  "Singularity"
-#define SINGULARITY_SYS_VER   "v6.9.3"
+#define SINGULARITY_SYS_VER   "v6.9.4"
 #define SINGULARITY_SHELL_VER "v1.0.0"
 #define SINGULARITY_SYS_ARCH  "x86_64 SMP"
 
@@ -17983,6 +17945,7 @@ void config_init(const char* cmdline);
 #include <stddef.h>
 #include <stdint.h>
 #include "libc/stdio.h" 
+
 extern "C" {
     void* kmalloc(size_t size);
     void kfree(void* ptr);
@@ -17992,20 +17955,22 @@ extern "C" {
     
     extern void (*__init_array_start[])(void);
     extern void (*__init_array_end[])(void);
-}
-
-// FIX: Clang/LLVM, freestanding (std kütüphanesiz) ortamda std::align_val_t tipini bulamaz.
-namespace std {
-    enum class align_val_t : size_t {};
-}
-
-extern "C" void init_global_constructors() {
-    size_t count = __init_array_end - __init_array_start;
-    for (size_t i = 0; i < count; i++) {
-        if (__init_array_start[i]) {
-            __init_array_start[i]();
+    
+    void init_global_constructors() {
+        size_t count = __init_array_end - __init_array_start;
+        for (size_t i = 0; i < count; i++) {
+            if (__init_array_start[i]) {
+                __init_array_start[i]();
+            } else {
+                // Ignore null constructor
+            }
         }
     }
+}
+
+// FIX: C++23 Standart Kütüphanesiz (Freestanding) Ortam Uyumluluğu
+namespace std {
+    enum class align_val_t : size_t {};
 }
 
 void* operator new(size_t size) { return kmalloc(size); }
@@ -18017,10 +17982,10 @@ void operator delete[](void* ptr) noexcept { kfree(ptr); }
 void operator delete[](void* ptr, size_t size) noexcept { (void)size; kfree(ptr); }
 
 void* operator new(size_t size, std::align_val_t al) {
-    return kmalloc_aligned(size, (size_t)al);
+    return kmalloc_aligned(size, static_cast<size_t>(al));
 }
 void* operator new[](size_t size, std::align_val_t al) {
-    return kmalloc_aligned(size, (size_t)al);
+    return kmalloc_aligned(size, static_cast<size_t>(al));
 }
 void operator delete(void* ptr, std::align_val_t al) noexcept {
     (void)al; kfree_aligned(ptr);
@@ -18029,9 +17994,6 @@ void operator delete[](void* ptr, std::align_val_t al) noexcept {
     (void)al; kfree_aligned(ptr);
 }
 
-inline void* operator new(size_t, void* p) { return p; }
-inline void* operator new[](size_t, void* p) { return p; }
-
 extern "C" void __cxa_pure_virtual() {
     panic_at("CXX_RUNTIME", 0, 0x01, "Pure Virtual Function Call Detected! (VTable Corruption)");
 }
@@ -18039,7 +18001,6 @@ extern "C" void __cxa_pure_virtual() {
 extern "C" int __cxa_atexit(void (*)(void *), void *, void *) {
     return 0; 
 }
-
 
 .../kernel\debug.c:
 // kernel/debug.c
@@ -23968,6 +23929,7 @@ use alloc::format;
 use crate::arch::sync::IrqSpinlock;
 use core::ffi::{c_void, c_char, CStr};
 
+// QUAL-001 FIX: Color codes directly matched with C definitions
 const CONSOLE_COLOR_BLACK:       u8 = 0;
 const CONSOLE_COLOR_LIGHT_GREY:  u8 = 7;
 const CONSOLE_COLOR_DARK_GREY:   u8 = 8;
@@ -24064,7 +24026,6 @@ pub fn register_device_silent(name: &str, class: DeviceClass, block_size: u32, t
     token
 }
 
-// BUG-003 FIX: Size Formatting returns "Unknown" correctly instead of 0 B
 fn format_size_dec(bytes: u64) -> String {
     if bytes == u64::MAX {
         return String::from("Unknown");
@@ -24116,30 +24077,52 @@ pub unsafe extern "C" fn rust_device_detect_fs(dev: *mut c_void) -> u32 {
                 if tag_id == 2 {
                     let mut sum: u8 = 0;
                     for i in 0..16 {
-                        if i != 4 { sum = sum.wrapping_add(buf[i]); } else { /* Ignore */ }
+                        if i != 4 { 
+                            sum = sum.wrapping_add(buf[i]); 
+                        } else { 
+                            /* Escaped Checksum bit */ 
+                        }
                     }
                     if sum == buf[4] {
                         fs = 4; // udf
-                    } else { /* Checksum failed */ }
-                } else { /* Not AVDP */ }
-            } else { /* Block Read Error */ }
+                    } else {
+                        // Integrity lost
+                    }
+                } else {
+                    // Not AVDP
+                }
+            } else {
+                // I/O Fault
+            }
             
             if fs == 0 && bs == 2048 {
                 if unsafe { cpp_device_read_block(dev, 16, 1, buf.as_mut_ptr()) } == 1 {
                     if buf[1] == b'C' && buf[2] == b'D' && buf[3] == b'0' && buf[4] == b'0' && buf[5] == b'1' {
                         fs = 3; /* iso9660 */
-                    } else { /* Not ISO9660 */ }
-                } else { /* Block Read Error */ }
-            } else { /* Ignored */ }
-        } else { /* Out of bounds */ }
+                    } else {
+                        // Not ISO9660
+                    }
+                } else {
+                    // I/O Fault
+                }
+            } else {
+                // Bypass
+            }
+        } else {
+            // Not optical media bounds
+        }
 
         if fs == 0 && bs == 512 {
             if unsafe { cpp_device_read_block(dev, 2, 2, buf.as_mut_ptr()) } == 1 {
                 let ext_magic = u16::from_le_bytes([buf[56], buf[57]]); 
                 if ext_magic == 0xEF53 { 
                     fs = 2; /* ext4 */ 
-                } else { /* Not Ext4 */ }
-            } else { /* Block Read Error */ }
+                } else {
+                    // Not Ext4
+                }
+            } else {
+                // I/O Fault
+            }
             
             if fs == 0 {
                 let mut boot_buf =[0u8; 512];
@@ -24147,13 +24130,23 @@ pub unsafe extern "C" fn rust_device_detect_fs(dev: *mut c_void) -> u32 {
                     if boot_buf[510] == 0x55 && boot_buf[511] == 0xAA {
                         if &boot_buf[82..87] == b"FAT32" { 
                             fs = 1; /* fat32 */ 
-                        } else { /* Not FAT32 */ }
-                    } else { /* Missing Magic */ }
-                } else { /* Block Read Error */ }
-            } else { /* Found */ }
-        } else { /* Ignored */ }
+                        } else {
+                            // Not FAT32
+                        }
+                    } else {
+                        // Missing boot signature
+                    }
+                } else {
+                    // I/O Fault
+                }
+            } else {
+                // FS already found
+            }
+        } else {
+            // Not standard HDD block size
+        }
     } else {
-        fs = 5; // Unknown
+        fs = 5; // Unknown / Block size 0
     }
 
     fs
@@ -24172,7 +24165,7 @@ pub extern "C" fn rust_device_print_disks() {
 
     let path = c"/devices";
     let mut idx = 0u32;
-    let mut name_buf =[0i8; 64];
+    let mut name_buf = [0i8; 64];
     let mut obj_type = 0u8;
 
     while unsafe { ons_enumerate(path.as_ptr(), idx, name_buf.as_mut_ptr(), &mut obj_type) } {
@@ -24201,7 +24194,9 @@ pub extern "C" fn rust_device_print_disks() {
                     let p_name = unsafe { CStr::from_ptr(p_name_buf.as_ptr()).to_str().unwrap_or("") };
                     if p_name.starts_with(&prefix) { 
                         p_count += 1; 
-                    } else { /* Bypass */ }
+                    } else {
+                        // Unrelated element
+                    }
                 }
 
                 print_c(&pad_right(&format!(" {}", d_name), 15), CONSOLE_COLOR_LIGHT_GREEN);
@@ -24241,25 +24236,37 @@ pub extern "C" fn rust_device_print_parts() {
     let mut obj_type = 0u8;
 
     let mut disk_list = Vec::new();
+    let mut optical_list = Vec::new();
+
     while unsafe { ons_enumerate(path.as_ptr(), idx, name_buf.as_mut_ptr(), &mut obj_type) } {
         idx += 1;
         let dev_ptr = unsafe { device_get(name_buf.as_ptr()) };
         if !dev_ptr.is_null() && unsafe { cpp_device_get_type(dev_ptr) } == 4 { 
-            disk_list.push(dev_ptr);
+            let d_name = unsafe { CStr::from_ptr(cpp_device_get_name(dev_ptr)).to_str().unwrap_or("?") };
+            let fs_base_val = unsafe { rust_device_detect_fs(dev_ptr) };
+            
+            // BUG FIX: Lockdown modunda is_ro tüm diskler için true döner. 
+            // Bu yüzden Optik Medya ayrımını sadece Dosya Sistemi imzasına (3=ISO, 4=UDF)
+            // veya isimlendirme konvansiyonuna (cdrom) göre yapıyoruz.
+            if fs_base_val == 3 || fs_base_val == 4 || d_name.starts_with("cdrom") {
+                optical_list.push(dev_ptr);
+            } else {
+                disk_list.push(dev_ptr);
+            }
         } else if !dev_ptr.is_null() {
             unsafe { device_release(dev_ptr); }
-        } else { /* Passed */ }
+        } else {
+            // Null pointer handled
+        }
     }
 
     for &disk_ptr in disk_list.iter() {
         let d_name = unsafe { CStr::from_ptr(cpp_device_get_name(disk_ptr)).to_str().unwrap_or("?") };
         let d_total_cap = unsafe { cpp_device_get_capacity(disk_ptr) };
-        let is_ro = unsafe { cpp_device_is_read_only(disk_ptr) };
-        let fs_base_val = unsafe { rust_device_detect_fs(disk_ptr) };
         let mut d_used_cap = 0u64;
 
         let mut p_idx = 0u32;
-        let mut p_name_buf =[0i8; 64];
+        let mut p_name_buf = [0i8; 64];
         let mut p_type = 0u8;
         let prefix = format!("{}_p", d_name);
 
@@ -24288,30 +24295,66 @@ pub extern "C" fn rust_device_print_parts() {
                     print_c(&pad_right(&format!("| {}", fs_name), 15), CONSOLE_COLOR_WHITE);
                     print_c(&pad_right(&format!("| {}", format_size_dec(p_cap)), 15), CONSOLE_COLOR_YELLOW);
                     
-                    let free_str = if d_free == u64::MAX { "Unknown".to_string() } else { format_size_dec(d_free) };
+                    let free_str = if d_free == u64::MAX { 
+                        "Unknown".to_string() 
+                    } else { 
+                        let pct = if p_cap > 0 { (d_free * 100) / p_cap } else { 0 };
+                        format!("{} ({}%)", format_size_dec(d_free), pct)
+                    };
                     print_c(&format!("| {}\n", free_str), CONSOLE_COLOR_LIGHT_GREEN);
 
                     unsafe { device_release(part_ptr); }
-                } else { /* Passed */ }
-            } else { /* Passed */ }
+                } else {
+                    // Safe drop
+                }
+            } else {
+                // Not a partition of current disk
+            }
         }
 
-        // BUG-004 FIX: Do not calculate Unallocated Space for Optical / Read-Only media.
-        // Types: 3 (ISO9660) and 4 (UDF) are optical media profiles natively.
-        if !is_ro && fs_base_val != 3 && fs_base_val != 4 {
-            if d_total_cap > d_used_cap + (1024 * 1024) {
-                let unalloc = d_total_cap - d_used_cap;
-                print_c(&pad_right(" *Unallocated*", 15), CONSOLE_COLOR_DARK_GREY);
-                print_c(&pad_right(&format!("| {}", d_name), 15), CONSOLE_COLOR_DARK_GREY);
-                print_c(&pad_right("| None", 15), CONSOLE_COLOR_DARK_GREY);
-                print_c(&pad_right(&format!("| {}", format_size_dec(unalloc)), 15), CONSOLE_COLOR_DARK_GREY);
-                print_c("| Available for Use\n", CONSOLE_COLOR_DARK_GREY);
-            } else { /* Disk perfectly matched */ }
+        if d_total_cap > d_used_cap + (1024 * 1024) {
+            let unalloc = d_total_cap - d_used_cap;
+            print_c(&pad_right(" *Unallocated*", 15), CONSOLE_COLOR_DARK_GREY);
+            print_c(&pad_right(&format!("| {}", d_name), 15), CONSOLE_COLOR_DARK_GREY);
+            print_c(&pad_right("| None", 15), CONSOLE_COLOR_DARK_GREY);
+            print_c(&pad_right(&format!("| {}", format_size_dec(unalloc)), 15), CONSOLE_COLOR_DARK_GREY);
+            print_c("| Available for Use\n", CONSOLE_COLOR_DARK_GREY);
         } else {
-            // Read-Only disc media bypasses unallocated reporting
+            // Disk space fully claimed
         }
         unsafe { device_release(disk_ptr); }
     }
+    
+    if !optical_list.is_empty() {
+        print_c("------------------------------------------------------------------------------------------------------------------------\n", CONSOLE_COLOR_DARK_GREY);
+        print_c(" OPTICAL MEDIA & READ-ONLY VOLUMES\n", CONSOLE_COLOR_LIGHT_CYAN);
+        print_c("------------------------------------------------------------------------------------------------------------------------\n", CONSOLE_COLOR_DARK_GREY);
+        
+        for &opt_ptr in optical_list.iter() {
+            let d_name = unsafe { CStr::from_ptr(cpp_device_get_name(opt_ptr)).to_str().unwrap_or("?") };
+            let d_total_cap = unsafe { cpp_device_get_capacity(opt_ptr) };
+            
+            let fs_val = unsafe { rust_device_detect_fs(opt_ptr) };
+            let fs_name = match fs_val {
+                1 => "fat32",
+                2 => "ext4",
+                3 => "iso9660",
+                4 => "udf",
+                _ => "raw",
+            };
+            
+            print_c(&pad_right(&format!(" {}", d_name), 15), CONSOLE_COLOR_LIGHT_CYAN);
+            print_c(&pad_right(&format!("| {}", d_name), 15), CONSOLE_COLOR_WHITE);
+            print_c(&pad_right(&format!("| {}", fs_name), 15), CONSOLE_COLOR_WHITE);
+            print_c(&pad_right(&format!("| {}", format_size_dec(d_total_cap)), 15), CONSOLE_COLOR_YELLOW);
+            print_c("| 0 B (0%) [Read-Only]\n", CONSOLE_COLOR_LIGHT_RED);
+            
+            unsafe { device_release(opt_ptr); }
+        }
+    } else {
+        // No optical media
+    }
+
     print_c("========================================================================================================================\n", CONSOLE_COLOR_LIGHT_CYAN);
 }
 
@@ -26030,6 +26073,166 @@ pub unsafe extern "C" fn rust_gpt_delete_partition(part_name: *const c_char) -> 
 pub mod gpt;
 
 
+.../rust_core\src\sys\acpi.rs:
+// rust_core/src/sys/acpi.rs
+
+use core::slice;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct AcpiSleepData {
+    pub slp_typ_a: u16,
+    pub slp_typ_b: u16,
+    pub found: bool,
+}
+
+// Memory-Safe AML (ACPI Machine Language) Package Parser
+fn parse_aml_package(data: &[u8]) -> Option<(u16, u16)> {
+    let mut offset = 0;
+    
+    // Scan for 0x12 (PackageOp)
+    while offset < data.len() && data[offset] != 0x12 {
+        offset += 1;
+    }
+    
+    if offset >= data.len() { 
+        return None; 
+    } else {
+        // Opcode found
+    }
+    
+    let mut ptr = offset + 1; 
+    
+    if ptr >= data.len() { 
+        return None; 
+    } else {
+        // Valid bounds
+    }
+    
+    let lead = data[ptr];
+    let bytes = lead >> 6;
+    
+    if bytes == 0 {
+        ptr += 1;
+    } else {
+        ptr += (bytes + 1) as usize;
+    }
+    
+    if ptr >= data.len() { 
+        return None; 
+    } else {
+        // Valid bounds
+    }
+    
+    let num_elements = data[ptr];
+    ptr += 1;
+    
+    let mut found_values = 0;
+    let mut typ_a = 0;
+    let mut typ_b = 0;
+    
+    for _ in 0..num_elements {
+        if ptr >= data.len() || found_values >= 2 { 
+            break; 
+        } else {
+            // Keep parsing
+        }
+        
+        let prefix = data[ptr];
+        let mut val = 0;
+        let mut is_val = false;
+        
+        if prefix == 0x0A && ptr + 1 < data.len() { 
+            // BytePrefix
+            val = data[ptr + 1] as u16;
+            ptr += 2;
+            is_val = true;
+        } else if prefix == 0x0B && ptr + 2 < data.len() { 
+            // WordPrefix
+            val = (data[ptr + 1] as u16) | ((data[ptr + 2] as u16) << 8);
+            ptr += 3;
+            is_val = true;
+        } else if prefix == 0x00 { 
+            // ZeroOp
+            val = 0;
+            ptr += 1;
+            is_val = true;
+        } else if prefix == 0x01 { 
+            // OneOp
+            val = 1;
+            ptr += 1;
+            is_val = true;
+        } else {
+            // Unknown opcode, skip 1 byte
+            ptr += 1; 
+        }
+        
+        if is_val {
+            if found_values == 0 {
+                typ_a = val << 10;
+                found_values += 1;
+            } else if found_values == 1 {
+                typ_b = val << 10;
+                found_values += 1;
+            } else {
+                // Ignore extra values
+            }
+        } else {
+            // Not a value type
+        }
+    }
+    
+    if found_values >= 2 {
+        Some((typ_a, typ_b))
+    } else {
+        None
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_acpi_parse_dsdt(dsdt_ptr: *const u8, dsdt_len: u32, s5_out: *mut AcpiSleepData, s3_out: *mut AcpiSleepData) {
+    if dsdt_ptr.is_null() || s5_out.is_null() || s3_out.is_null() || dsdt_len < 4 {
+        return;
+    } else {
+        // Valid pointers
+    }
+
+    // Convert raw firmware pointer to safe Rust slice (Bounds Checking Enabled)
+    let dsdt_data = unsafe { slice::from_raw_parts(dsdt_ptr, dsdt_len as usize) };
+    
+    unsafe {
+        *s5_out = AcpiSleepData::default();
+        *s3_out = AcpiSleepData::default();
+    }
+
+    // Safely search for _S5_ and _S3_ packages
+    for i in 0..(dsdt_data.len() - 4) {
+        if &dsdt_data[i..i+4] == b"_S5_" {
+            if let Some((a, b)) = parse_aml_package(&dsdt_data[i..]) {
+                unsafe {
+                    (*s5_out).slp_typ_a = a;
+                    (*s5_out).slp_typ_b = b;
+                    (*s5_out).found = true;
+                }
+            } else {
+                // Invalid package
+            }
+        } else if &dsdt_data[i..i+4] == b"_S3_" {
+            if let Some((a, b)) = parse_aml_package(&dsdt_data[i..]) {
+                unsafe {
+                    (*s3_out).slp_typ_a = a;
+                    (*s3_out).slp_typ_b = b;
+                    (*s3_out).found = true;
+                }
+            } else {
+                // Invalid package
+            }
+        } else {
+            // Keep scanning
+        }
+    }
+}
+
 .../rust_core\src\sys\error.rs:
 // rust_core/src/sys/error.rs
 
@@ -26055,6 +26258,7 @@ pub enum KernelError {
 pub mod crypto;
 pub mod error;
 pub mod topology;
+pub mod acpi; // YENİ EKLENDİ
 
 .../rust_core\src\sys\topology.rs:
 // rust_core/src/sys/topology.rs
@@ -26548,10 +26752,13 @@ pci:
 	$(Q)python3 update_pci_db.py $(PCI_DB)
 	@echo "$(GREEN)[OK]$(RESET) $(PCI_DB) updated. Run 'make all' to embed."
 
+# BUG FIX: Tidy now respects C++ and C files separately to avoid false-positive syntax errors
 tidy:
 	@echo "$(BLUE)[TIDY]$(RESET) Running Clang-Tidy static analysis..."
-	@echo "Checking files..."
-	$(Q)clang-tidy $(C_SOURCES) $(CXX_SOURCES) -- $(CFLAGS) -m64 -ffreestanding
+	@echo "Checking C files..."
+	$(Q)clang-tidy $(C_SOURCES) -- $(CFLAGS) -m64 -ffreestanding
+	@echo "Checking C++ files..."
+	$(Q)clang-tidy $(CXX_SOURCES) -- $(CXXFLAGS) -m64 -ffreestanding
 
 help:
 	@echo ""
@@ -30021,16 +30228,19 @@ void ffi_logger_flush_sync(void);
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+
 struct FFIStats {
     uint64_t call_count;
     uint64_t total_cycles;
 };
 
+extern FFIStats ffi_stat_pmm_alloc;
+extern FFIStats ffi_stat_pmm_free;
+
 namespace SingularityFFI {
 
-    // FIX: Üretim Modunda (Release) FFI maliyetini fiziksel olarak sıfırlamak için
-    // profil alma işlemleri log_level'a bağlandı.
-    #if 0 // İstenirse kconfig.log_level > 2 gibi bir şarta bağlanabilir
+    #if 0 
         #define PROFILE_FFI(stat_obj, func_call) \
             uint64_t start_tsc = rdtsc_ordered(); \
             auto ret = func_call; \
@@ -30051,6 +30261,7 @@ namespace SingularityFFI {
     void print_ffi_stats();
 }
 
+#endif // __cplusplus
 #endif
 
 .../system\ffi\ffi_logger.cpp:
@@ -34273,6 +34484,10 @@ extern "C" {
 
 static Shell* global_shell = nullptr;
 
+// Bulgu 4.2 FIX: Use constexpr instead of magic numbers
+static constexpr int MAX_PATH_LEN = 256;
+static constexpr uint64_t MAX_SCRIPT_SIZE = 65536;
+
 Shell::Shell() {
     cmdLen = 0;
     for (int i = 0; i < CMD_BUF_SIZE; i++) { cmdBuffer[i] = 0; }
@@ -34345,22 +34560,47 @@ void Shell::logStartup(const char* msg, int status) {
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 }
 
+// Bulgu 5.2 FIX: Added kfree() in error paths to prevent memory leaks during script failures
 void Shell::executeScript(const char* path) {
     KObject* obj = ons_resolve(path);
-    if (!obj) { return; } else { /* Valid */ }
-    if (obj->type != KObjectType::BLOB) { kobject_unref(obj); return; } else { /* Read Stream Activated */ }
+    if (!obj) {
+        return; 
+    } else {
+        // Proceed with file object
+    }
+
+    if (obj->type != KObjectType::BLOB) { 
+        kobject_unref(obj); 
+        return; 
+    } else {
+        // Correct object type
+    }
 
     KBlob* blob = (KBlob*)obj;
     uint64_t size = blob->getSize();
 
-    if (size == 0 || size > 65536) { kobject_unref(obj); return; } else { /* Size validated */ }
+    if (size == 0 || size > MAX_SCRIPT_SIZE) { 
+        kobject_unref(obj); 
+        return; 
+    } else {
+        // Size validated
+    }
 
     char* buf = (char*)kmalloc((size_t)size + 1);
-    if (!buf) { kobject_unref(obj); return; } else { /* Allocation secure */ }
+    if (!buf) { 
+        kobject_unref(obj); 
+        return; 
+    } else {
+        // Allocated script buffer
+    }
 
     isScriptMode = true;
     size_t read_bytes = 0;
-    if (blob->read(0, buf, size, &read_bytes) == KOM_OK && read_bytes > 0) {
+    if (blob->read(0, buf, size, &read_bytes) != KOM_OK || read_bytes == 0) {
+        kfree(buf); // Bulgu 5.2 FIX: Memory leak prevented
+        kobject_unref(obj);
+        return;
+    } else {
         buf[read_bytes] = '\0';
         char* line = buf;
         char* next_line = nullptr;
@@ -34372,7 +34612,7 @@ void Shell::executeScript(const char* path) {
                 next_line++;
                 while (*next_line == '\r' || *next_line == '\n') { next_line++; }
             } else {
-                // Break naturally
+                // Last line of script
             }
 
             char* trim_start = line;
@@ -34403,7 +34643,7 @@ void Shell::executeScript(const char* path) {
                                         arg = &cmdTemp[i + 1];
                                         break;
                                     } else {
-                                        // Still searching parameters
+                                        // Continue tokenizing
                                     }
                                 }
                                 
@@ -34414,7 +34654,7 @@ void Shell::executeScript(const char* path) {
                                 if (totally_silent && curr) {
                                     curr->flags |= PROC_FLAG_SILENT;
                                 } else {
-                                    // Raw process flags retained
+                                    // Keep default logging
                                 }
 
                                 int ret = dispatchCommand(cmd, arg);
@@ -34422,34 +34662,32 @@ void Shell::executeScript(const char* path) {
                                 if (totally_silent && curr) {
                                     curr->flags = old_flags; 
                                 } else {
-                                    // Flags natively retained
+                                    // State maintained
                                 }
                                 
                                 if (!totally_silent) {
                                     ffi_logger_flush_sync(); 
                                     logStartup(desc_start, ret == 0 ? 1 : 2);
                                 } else {
-                                    // Silence upheld
+                                    // Silent execution
                                 }
                             } else {
-                                // No command given
+                                // No executable command
                             }
                         } else {
-                            // Syntax error
+                            // Syntax error: missing end quote
                         }
                     } else {
-                        // Syntax error
+                        // Syntax error: missing start quote
                     }
                 } else {
                     processCommand(trim_start);
                 }
             } else {
-                // Empty string
+                // Whitespace line
             }
             line = next_line;
         }
-    } else {
-        // I/O read failure on initial target
     }
     isScriptMode = false;
     kfree(buf);
@@ -34466,53 +34704,65 @@ void Shell::printPrompt() {
     stdio_flush();
 }
 
+// Bulgu 1.3 FIX: Prevent root directory path deletion when calling "cd .." at C:\\ root
 void Shell::resolveAbsolutePath(const char* input, char* output) {
     if (!input || input[0] == '\0' || strcmp(input, ".") == 0 || strcmp(input, ".\\") == 0) {
-        strncpy(output, currentPath, 255);
-        output[255] = '\0';
+        strncpy(output, currentPath, MAX_PATH_LEN - 1);
+        output[MAX_PATH_LEN - 1] = '\0';
         return;
     } else {
-        // Path needs deeper checks
+        // Non-trivial path
     }
 
     if (strcmp(input, "..") == 0 || strcmp(input, "..\\") == 0) {
-        strncpy(output, currentPath, 255);
-        output[255] = '\0';
+        // Bulgu 1.3 FIX: Check if we are already at the drive root
+        if (strcmp(currentPath, "C:\\") == 0) {
+            strncpy(output, "C:\\", MAX_PATH_LEN - 1);
+            output[MAX_PATH_LEN - 1] = '\0';
+            return;
+        } else {
+            // We are deeper than root, safe to go back
+        }
+
+        strncpy(output, currentPath, MAX_PATH_LEN - 1);
+        output[MAX_PATH_LEN - 1] = '\0';
+        
         char* last_slash = strrchr(output, '\\');
         if (last_slash && last_slash != output) {
             if (last_slash == &output[2]) {
-                *(last_slash + 1) = '\0'; 
+                *(last_slash + 1) = '\0'; // Clamp at C:\\ drive root
             } else {
-                *last_slash = '\0';
+                *last_slash = '\0'; // Remove child component
             }
         } else {
-            // Reached top level
+            // Unlikely case for absolute paths
         }
         return;
     } else {
-        // Normal evaluation bounds
+        // Proceeding with standard path resolution
     }
 
     if (((input[0] >= 'A' && input[0] <= 'Z') || (input[0] >= 'a' && input[0] <= 'z')) && input[1] == ':') {
-        strncpy(output, input, 255);
-        output[255] = '\0';
+        strncpy(output, input, MAX_PATH_LEN - 1);
+        output[MAX_PATH_LEN - 1] = '\0';
         for(int i=0; output[i]; i++) { if(output[i] == '/') output[i] = '\\'; }
-        if (strlen(output) == 2) { strncat(output, "\\", 2); } else { /* Valid */ }
+        if (strlen(output) == 2) { strncat(output, "\\", 2); } else { /* Validated */ }
     } else if (input[0] == '/' || input[0] == '\\') { 
-        strncpy(output, input, 255);
-        output[255] = '\0';
+        strncpy(output, input, MAX_PATH_LEN - 1);
+        output[MAX_PATH_LEN - 1] = '\0';
         for(int i=0; output[i]; i++) { if(output[i] == '/') output[i] = '\\'; }
     } else {
         size_t curLen = strlen(currentPath);
-        strncpy(output, currentPath, 255);
-        output[255] = '\0';
+        strncpy(output, currentPath, MAX_PATH_LEN - 1);
+        output[MAX_PATH_LEN - 1] = '\0';
 
         if (curLen > 0 && output[curLen - 1] != '\\') {
-            strncat(output, "\\", 255 - strlen(output));
+            strncat(output, "\\", MAX_PATH_LEN - strlen(output) - 1);
         } else {
-            // Properly formatted ending
+            // Separator already present
         }
-        strncat(output, input, 255 - strlen(output));
+        
+        strncat(output, input, MAX_PATH_LEN - strlen(output) - 1);
         for(int i=0; output[i]; i++) { if(output[i] == '/') output[i] = '\\'; }
     }
 }
@@ -34521,7 +34771,7 @@ void Shell::processCommand() {
     if (cmdLen > 0 && cmdLen < CMD_BUF_SIZE) {
         processCommand(cmdBuffer);
     } else {
-        // Void command sequence
+        // Command buffer is empty
     }
 }
 
@@ -34539,7 +34789,7 @@ void Shell::processCommand(const char* cmdStr) {
             arg = &tempBuf[i + 1];
             break;
         } else {
-            // Keep looping bounds
+            // Keep scanning for first argument space
         }
     }
 
@@ -34565,7 +34815,7 @@ void Shell::onKeyDown(char c) {
             printf("\b \b");
             stdio_flush();
         } else {
-            // Cannot delete beyond zero point
+            // Blocked by command start
         }
     } else {
         if (cmdLen < CMD_BUF_SIZE - 1) {
@@ -34587,7 +34837,7 @@ void Shell::update() {
             onKeyDown(c);
             console_blink_cursor(true);
         } else {
-            // Empty char
+            // Empty char received
         }
     }
 
@@ -34600,7 +34850,7 @@ void Shell::update() {
         console_blink_cursor(blink_state);
         last_blink = now;
     } else {
-        // Await cycle
+        // Awaiting next blink tick
     }
 }
 
@@ -34616,7 +34866,11 @@ extern "C" {
     }
 
     void shell_run_startup_c() {
-        if (global_shell) { global_shell->runStartup(); } else { /* Dropped */ }
+        if (global_shell) {
+            global_shell->runStartup();
+        } else {
+            // Shell unit unmapped
+        }
     }
 
     void shell_update_c() {
@@ -34626,15 +34880,14 @@ extern "C" {
                 global_shell->showWelcome();
                 first_run = false;
             } else {
-                // Proceed directly
+                // Subsequent run
             }
             global_shell->update();
         } else {
-            // Null drop
+            // Shell node inactive
         }
     }
 }
-
 
 .../system\shell\shell.hpp:
 // system/shell/shell.hpp
@@ -34782,9 +35035,7 @@ static void print_size(const char* label, uint64_t bytes, console_color_t val_co
     console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     if (label && label[0]) {
         printf("%-16s: ", label);
-    } else {
-        // Space mapped natively
-    }
+    } else { /* Alignment space */ }
     console_set_color(val_color, CONSOLE_COLOR_BLACK);
 
     if (bytes >= 1024ULL * 1024ULL) {
@@ -34804,16 +35055,22 @@ static void print_kv(const char* key, const char* val_fmt, ...) {
     console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("%-14s: ", key);
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    
+    // TIDY FIX: Resolved uninitialized va_list warning by passing args to vsnprintf properly
+    char buf[256];
     va_list args;
     va_start(args, val_fmt);
-    vprintf(val_fmt, args);
+    int ret = vsnprintf(buf, sizeof(buf), val_fmt, args);
     va_end(args);
-    printf("\n");
+    
+    if (ret > 0) {
+        printf("%s\n", buf);
+    } else {
+        printf("Error\n");
+    }
 }
 
 void show_memory_map() {
-    pmm_flush_magazines();
-
     uint64_t pmm_total  = pmm_get_total_memory();
     uint64_t pmm_used   = pmm_get_used_memory();
     uint64_t pmm_free   = pmm_get_free_memory();
@@ -34822,9 +35079,7 @@ void show_memory_map() {
     uint64_t dynamic       = 0;
     if (pmm_used > kernel_static) {
         dynamic = pmm_used - kernel_static;
-    } else {
-        // Avoid calculation bounds underflow
-    }
+    } else { /* All RAM consumed by Kernel static */ }
 
     uint64_t heap_reserved = kheap_get_reserved_size();
     uint64_t heap_payload  = kheap_get_payload_size();
@@ -34833,9 +35088,7 @@ void show_memory_map() {
     uint64_t other = 0;
     if (dynamic > heap_reserved) {
         other = dynamic - heap_reserved;
-    } else {
-        // Free bounds matched perfectly
-    }
+    } else { /* Saturated */ }
 
     uint64_t disk_cached       = disk_cache_get_size();
     uint64_t total_reclaimable = heap_cached + disk_cached;
@@ -34844,9 +35097,7 @@ void show_memory_map() {
 
     if (active_used > pmm_used) {
         active_used = pmm_used;
-    } else {
-        // Values coherent
-    }
+    } else { /* OK */ }
 
     uint64_t available = pmm_free;
 
@@ -34964,9 +35215,7 @@ void show_task_manager() {
     for (int i = 0; i < num_cpus; i++) {
         if (per_cpu_data[i]) {
             start_idle_ticks[i] = per_cpu_data[i]->idle_ticks;
-        } else {
-            // Null Struct
-        }
+        } else { /* Null node skip */ }
     }
 
     timer_sleep(25);
@@ -34988,16 +35237,12 @@ void show_task_manager() {
     for (int i = 0; i < num_cpus; i++) {
         if (per_cpu_data[i]) {
             end_idle_ticks[i] = per_cpu_data[i]->idle_ticks;
-        } else {
-            // Node mapping disabled
-        }
+        } else { /* Node unmapped */ }
 
         uint64_t delta_idle = 0;
         if (end_idle_ticks[i] >= start_idle_ticks[i]) {
             delta_idle = end_idle_ticks[i] - start_idle_ticks[i];
-        } else {
-            // Tick wraparound
-        }
+        } else { /* TSC Wrap encountered */ }
 
         if (delta_idle > delta_total) { delta_idle = delta_total; } else { /* Underflow Guard */ }
 
@@ -35103,32 +35348,30 @@ extern "C" {
         if (sys_dir_obj && sys_dir_obj->type == KObjectType::CONTAINER) {
             KContainer* sys_dir = (KContainer*)sys_dir_obj;
             KContainer* info_dir = new KContainer();
-            sys_dir->bind("info", info_dir);
             
-            KDynamicBlob* b_up = new KDynamicBlob("uptime", uptime_read_cb);
-            info_dir->bind("uptime", b_up);
-            kobject_unref(b_up);
-            
-            KDynamicBlob* b_mem = new KDynamicBlob("meminfo", meminfo_read_cb);
-            info_dir->bind("meminfo", b_mem);
-            kobject_unref(b_mem);
+            if (sys_dir->bind("info", info_dir) == KOM_OK) {
+                KDynamicBlob* b_up = new KDynamicBlob("uptime", uptime_read_cb);
+                info_dir->bind("uptime", b_up);
+                kobject_unref(b_up);
+                
+                KDynamicBlob* b_mem = new KDynamicBlob("meminfo", meminfo_read_cb);
+                info_dir->bind("meminfo", b_mem);
+                kobject_unref(b_mem);
 
-            KDynamicBlob* b_ver = new KDynamicBlob("version", version_read_cb);
-            info_dir->bind("version", b_ver);
-            kobject_unref(b_ver);
-
-            kobject_unref(info_dir);
-        } else {
-            // Unbound logic tree
-        }
+                KDynamicBlob* b_ver = new KDynamicBlob("version", version_read_cb);
+                info_dir->bind("version", b_ver);
+                kobject_unref(b_ver);
+            } else {
+                // Binding failed, info_dir will be destroyed by the unref below.
+            }
+            kobject_unref(info_dir); 
+        } else { /* Node mapping lost */ }
+        
         if (sys_dir_obj) {
             kobject_unref(sys_dir_obj);
-        } else {
-            // Free operation mapped
-        }
+        } else { /* Null bypass */ }
     }
 }
-
 
 .../system\shell\utils\sysinfo.hpp:
 // system/shell/utils/sysinfo.hpp
@@ -35585,7 +35828,7 @@ void rcu_read_lock(void) {
     if (per_cpu_data[cpu]) {
         __atomic_fetch_add(&per_cpu_data[cpu]->preempt_count, 1, __ATOMIC_ACQUIRE);
     } else {
-        // CPU not fully initialized, tracking skipped.
+        // Early boot: Assume single core, no preemption yet.
     }
     __asm__ volatile("" ::: "memory");
 }
@@ -35596,17 +35839,18 @@ void rcu_read_unlock(void) {
     if (per_cpu_data[cpu]) {
         __atomic_fetch_sub(&per_cpu_data[cpu]->preempt_count, 1, __ATOMIC_RELEASE);
     } else {
-        // CPU not fully initialized.
+        // Safe to ignore in early boot.
     }
 }
 
+// Bulgu 1.2 FIX: Added explicit validation for uninitialized CPU structures
 void synchronize_rcu(void) {
     uint64_t rflags;
     __asm__ volatile("pushfq; pop %0" : "=r"(rflags));
     if (!(rflags & 0x200)) {
         panic_at("RCU", 0, KERR_DEADLOCK_DETECTED,
                  "synchronize_rcu() called with Interrupts Disabled (CLI)!");
-    }
+    } else { /* OK */ }
 
     uint64_t snap[MAX_CPUS] = {0};
     for (int i = 0; i < num_cpus; i++) {
@@ -35619,19 +35863,25 @@ void synchronize_rcu(void) {
         while (true) {
             uint64_t current = __atomic_load_n(&cpu_tick_counts[i], __ATOMIC_ACQUIRE);
             
-            // Eğer tick arttıysa çekirdek aktiftir ve güvenli bölgeden geçmiştir
             if (current > snap[i]) {
                 break;
-            } 
+            } else { /* Keep waiting */ }
             
-            // GÜVENLİK YAMASI: Çekirdek "Idle" (Boşta) durumundaysa tick artmasa bile güvenlidir!
-            if (per_cpu_data[i] && current_process[i] && current_process[i] == idle_tasks[i]) {
+            // Bulgu 1.2 FIX: Safety check for uninitialized APs and Idle Tasks
+            if (per_cpu_data[i] == nullptr) {
+                // AP not yet initialized, cannot be in an RCU critical section.
+                break;
+            } else if (current_process[i] && current_process[i] == idle_tasks[i]) {
+                // CPU is idle, cannot be in an RCU critical section.
                 break; 
+            } else {
+                // Active task on target CPU
             }
             
             if (timer_get_ticks() > timeout_target) {
-                break; // Timeout fallback to prevent complete system freeze
-            }
+                klog(LOG_WARN, "[RCU] Grace period timeout on CPU %d. Forcing sync.\n", i);
+                break;
+            } else { /* Try again */ }
             
             hal_cpu_relax();
             yield();
@@ -35723,7 +35973,7 @@ void rwlock_acquire_read(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_acquire_read: called with NULL lock");
         return;
-    } else { /* Valid */ }
+    } else { /* Valid pointer */ }
     
     while (true) {
         uint64_t rflags;
@@ -35737,7 +35987,7 @@ void rwlock_acquire_read(rwlock_t lock) {
         {
             lock->readers++;
             spinlock_release(&lock->lock, flags);
-            if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* Maintain CLI */ }
+            if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
             return;
         } else {
             process_t* proc = (process_t*)get_current_thread_fast();
@@ -35746,16 +35996,17 @@ void rwlock_acquire_read(rwlock_t lock) {
                 wait_queue_push(&lock->read_q, proc);
                 spinlock_release(&lock->lock, flags);
                 schedule();
-                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* Maintain */ }
+                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
             } else {
                 spinlock_release(&lock->lock, flags);
-                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* Maintain */ }
+                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
                 hal_cpu_relax();
             }
         }
     }
 }
 
+// Bulgu 1.1 & 3.2 FIX: Atomic write_waiters adjustment and consolidated release
 void rwlock_release_read(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_read: called with NULL lock");
@@ -35768,7 +36019,7 @@ void rwlock_release_read(rwlock_t lock) {
         lock->readers--;
     } else {
         spinlock_release(&lock->lock, flags);
-        panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_read: underflow -- more releases than acquires");
+        panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_read: reader count underflow");
         return;
     }
 
@@ -35776,43 +36027,21 @@ void rwlock_release_read(rwlock_t lock) {
         uint32_t skipped = 0;
         process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &skipped);
         
-        if (lock->write_waiters >= (int)skipped) {
-            lock->write_waiters -= skipped;
+        // Accurate counter synchronization
+        int total_removed = (next_writer ? 1 : 0) + (int)skipped;
+        if (lock->write_waiters >= total_removed) {
+            lock->write_waiters -= total_removed;
         } else {
             lock->write_waiters = 0;
         }
 
-        if (next_writer) {
-            // BUG-001 FIX: Single decrement for the actual writer popped
-            if (lock->write_waiters > 0) {
-                lock->write_waiters--;
-            } else {
-                // Safeguard against integer underflow 
-            }
-            spinlock_release(&lock->lock, flags);
-            sched_wake_task(next_writer);
-            return;
-        } else {
-            // No valid writers left in queue despite counter
-            lock->write_waiters = 0;
-        }
-    } else {
-        // Readers still active or no writers waiting
-    }
-    
-    if (lock->write_waiters == 0) {
         spinlock_release(&lock->lock, flags);
-        while (true) {
-            process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
-            if (!r) { break; } else { /* Valid reader */ }
-            sched_wake_task(r);
-        }
-        return;
+        if (next_writer) {
+            sched_wake_task(next_writer);
+        } else { /* All waiters were zombies */ }
     } else {
-        // Writers waiting, keep lock sealed
+        spinlock_release(&lock->lock, flags);
     }
-
-    spinlock_release(&lock->lock, flags);
 }
 
 void rwlock_acquire_write(rwlock_t lock) {
@@ -35830,21 +36059,21 @@ void rwlock_acquire_write(rwlock_t lock) {
         if (!lock->writer_active && lock->readers == 0) {
             lock->writer_active = true;
             spinlock_release(&lock->lock, flags);
-            if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* Maintain */ }
+            if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
             return;
         } else {
-            lock->write_waiters++; // BUG NOTE: Incremented here during spinlock
+            lock->write_waiters++;
             process_t* proc = (process_t*)get_current_thread_fast();
             if (proc) {
                 proc->state = PROCESS_BLOCKED;
                 wait_queue_push(&lock->write_q, proc);
                 spinlock_release(&lock->lock, flags);
                 schedule();
-                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* Maintain */ }
+                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
             } else {
-                lock->write_waiters--; // Reverted if thread is invalid (Early Boot)
+                lock->write_waiters--;
                 spinlock_release(&lock->lock, flags);
-                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* Maintain */ }
+                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
                 hal_cpu_relax();
             }
         }
@@ -35864,34 +36093,25 @@ void rwlock_release_write(rwlock_t lock) {
         uint32_t skipped = 0;
         process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &skipped);
         
-        if (lock->write_waiters >= (int)skipped) {
-            lock->write_waiters -= skipped;
+        int total_removed = (next_writer ? 1 : 0) + (int)skipped;
+        if (lock->write_waiters >= total_removed) {
+            lock->write_waiters -= total_removed;
         } else {
             lock->write_waiters = 0;
         }
 
+        spinlock_release(&lock->lock, flags);
         if (next_writer) {
-            // BUG-001 FIX: Single decrement for the actual writer popped
-            if (lock->write_waiters > 0) {
-                lock->write_waiters--;
-            } else {
-                // Safeguard against integer underflow
-            }
-            spinlock_release(&lock->lock, flags);
             sched_wake_task(next_writer);
-            return;
-        } else {
-            lock->write_waiters = 0;
-        }
+        } else { /* No valid writer found */ }
     } else {
-        // No writers waiting
-    }
-    
-    spinlock_release(&lock->lock, flags);
-    while (true) {
-        process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
-        if (!r) { break; } else { /* Valid reader */ }
-        sched_wake_task(r);
+        // No writers waiting, wake all readers
+        spinlock_release(&lock->lock, flags);
+        while (true) {
+            process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
+            if (!r) break;
+            else { sched_wake_task(r); }
+        }
     }
 }
 

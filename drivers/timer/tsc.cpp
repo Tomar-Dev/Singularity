@@ -6,7 +6,7 @@
 #include "system/process/process.h"
 #include "archs/cpu/x86_64/core/cpuid.h"
 #include "archs/cpu/cpu_hal.h"
-#include "drivers/uefi/uefi.h" // LEG-002 FIX: UEFI Included
+#include "drivers/uefi/uefi.h" 
 
 extern "C" {
     void print_status(const char* prefix, const char* msg, const char* status);
@@ -23,7 +23,7 @@ static bool pm_timer_reliable_calibration() {
     if (!pm_port) { return false; } else { /* Proceed */ }
 
     uint32_t t1 = hal_io_inl(pm_port) & 0xFFFFFF;
-    uint32_t t2 = t1;
+    uint32_t t2 = 0; // TIDY FIX: Removed dead assignment 't2 = t1'
     
     while ((t2 = (hal_io_inl(pm_port) & 0xFFFFFF)) == t1) { hal_cpu_relax(); }
     
@@ -114,7 +114,6 @@ int TSCDriver::init() {
         }
     }
 
-    // LEG-002 FIX: UEFI Runtime Services Timer Fallback
     if (!freq_found || tsc_frequency < 1000000) {
         serial_write("[TSC] CPUID failed. Trying UEFI Runtime Services...\n");
         if (uefi_available()) {
@@ -158,11 +157,11 @@ int TSCDriver::init() {
     if (tsc_frequency < 100000000ULL) {
         tsc_frequency = 2000000000ULL;
         char msg[128];
-        sprintf(msg, "VM Timer Anomaly! Forced fallback to 2000 MHz");
+        snprintf(msg, sizeof(msg), "VM Timer Anomaly! Forced fallback to 2000 MHz");
         print_status("[ TSC  ]", msg, "WARN");
     } else {
         char msg[128];
-        sprintf(msg, "Clock synchronized at %lu MHz", tsc_frequency / 1000000);
+        snprintf(msg, sizeof(msg), "Clock synchronized at %lu MHz", tsc_frequency / 1000000);
         print_status("[ TSC  ]", msg, "INFO");
     }
 

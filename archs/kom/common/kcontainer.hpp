@@ -2,17 +2,19 @@
 #ifndef KCONTAINER_HPP
 #define KCONTAINER_HPP
 
+#ifdef __cplusplus
 #include "archs/kom/common/kobject.hpp"
 #include "system/sync/rwlock.h"
+
 struct ONSBinding {
     char name[64];
     KObject* obj;
-    ONSBinding* next;
+    struct ONSBinding* next;
 };
 
 class KContainer : public KObject {
 protected:
-    ONSBinding* head;
+    struct ONSBinding* head;
     rwlock_t rw_lock;
 
 public:
@@ -26,5 +28,5 @@ public:
     
     virtual error_t create_child(const char* name, KObjectType type);
 };
-
+#endif // __cplusplus
 #endif

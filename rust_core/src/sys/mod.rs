@@ -2,3 +2,4 @@
 pub mod crypto;
 pub mod error;
 pub mod topology;
+pub mod acpi; // YENİ EKLENDİ

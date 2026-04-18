@@ -23,115 +23,121 @@ static inline void cpuid_count(uint32_t code, uint32_t count, uint32_t *a, uint3
     __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(code), "c"(count));
 }
 
+// FIX: Tidy Security Warning (Buffer Overflow protection for strncpy)
+static void safe_strncpy(char* dest, const char* src, size_t max_len) {
+    if (!dest || !src || max_len == 0) return;
+    size_t i;
+    for (i = 0; i < max_len - 1 && src[i] != '\0'; i++) {
+        dest[i] = src[i];
+    }
+    dest[i] = '\0';
+}
+
 static void guess_microarchitecture() {
-    strncpy(cpu_info.codename, "Unknown", sizeof(cpu_info.codename)-1);
-    strncpy(cpu_info.socket, "Unknown", sizeof(cpu_info.socket)-1);
-    strncpy(cpu_info.lithography, "Unknown", sizeof(cpu_info.lithography)-1);
+    safe_strncpy(cpu_info.codename, "Unknown", sizeof(cpu_info.codename));
+    safe_strncpy(cpu_info.socket, "Unknown", sizeof(cpu_info.socket));
+    safe_strncpy(cpu_info.lithography, "Unknown", sizeof(cpu_info.lithography));
 
     if (cpu_info.vendor == VENDOR_INTEL) {
         if (cpu_info.family == 6) {
             switch (cpu_info.model) {
                 case 0x4E: case 0x5E:
-                    strncpy(cpu_info.codename, "Skylake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1151", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Skylake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1151", sizeof(cpu_info.socket));
                     break;
                 case 0x8E: case 0x9E:
-                    strncpy(cpu_info.codename, "Kaby/Coffee Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1151", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Kaby/Coffee Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1151", sizeof(cpu_info.socket));
                     break;
                 case 0xA5: case 0xA6:
-                    strncpy(cpu_info.codename, "Comet Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1200", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Comet Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "14 nm", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1200", sizeof(cpu_info.socket));
                     break;
                 case 0x7D: case 0x7E: case 0x9D:
-                    strncpy(cpu_info.codename, "Ice Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "10 nm", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1200 / BGA", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Ice Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "10 nm", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1200 / BGA", sizeof(cpu_info.socket));
                     break;
                 case 0x8C: case 0x8D:
-                    strncpy(cpu_info.codename, "Tiger Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "10 nm (SuperFin)", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "BGA", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Tiger Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "10 nm (SuperFin)", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "BGA", sizeof(cpu_info.socket));
                     break;
                 case 0x97: case 0x9A:
-                    strncpy(cpu_info.codename, "Alder Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "Intel 7 (10 nm)", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1700", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Alder Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "Intel 7 (10 nm)", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1700", sizeof(cpu_info.socket));
                     break;
                 case 0xB7: case 0xBA:
-                    strncpy(cpu_info.codename, "Raptor Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "Intel 7 (10 nm)", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 1700", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Raptor Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "Intel 7 (10 nm)", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 1700", sizeof(cpu_info.socket));
                     break;
                 case 0xAA: case 0xAC:
-                    strncpy(cpu_info.codename, "Meteor Lake", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "Intel 4 (7 nm)", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "BGA", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Meteor Lake", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "Intel 4 (7 nm)", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "BGA", sizeof(cpu_info.socket));
                     break;
                 case 0x8F:
-                    strncpy(cpu_info.codename, "Sapphire Rapids", sizeof(cpu_info.codename)-1);
-                    strncpy(cpu_info.lithography, "Intel 7", sizeof(cpu_info.lithography)-1);
-                    strncpy(cpu_info.socket, "LGA 4677", sizeof(cpu_info.socket)-1);
+                    safe_strncpy(cpu_info.codename, "Sapphire Rapids", sizeof(cpu_info.codename));
+                    safe_strncpy(cpu_info.lithography, "Intel 7", sizeof(cpu_info.lithography));
+                    safe_strncpy(cpu_info.socket, "LGA 4677", sizeof(cpu_info.socket));
                     break;
                 default:
-                    strncpy(cpu_info.codename, "Intel Core (Unknown Model)", sizeof(cpu_info.codename)-1);
+                    safe_strncpy(cpu_info.codename, "Intel Core (Unknown Model)", sizeof(cpu_info.codename));
                     serial_printf("[CPUID] Notice: Unknown Intel Model %x detected.\n", cpu_info.model);
                     break;
             }
         } else {
-            strncpy(cpu_info.codename, "Intel (Unknown Family)", sizeof(cpu_info.codename)-1);
+            safe_strncpy(cpu_info.codename, "Intel (Unknown Family)", sizeof(cpu_info.codename));
             serial_printf("[CPUID] Notice: Unknown Intel Family %x detected.\n", cpu_info.family);
         }
     } else if (cpu_info.vendor == VENDOR_AMD) {
         if (cpu_info.family == 0x17) {
             if (cpu_info.model < 0x30) {
-                strncpy(cpu_info.codename, "Zen / Zen+", sizeof(cpu_info.codename)-1);
-                strncpy(cpu_info.lithography, "14/12 nm", sizeof(cpu_info.lithography)-1);
-                strncpy(cpu_info.socket, "AM4", sizeof(cpu_info.socket)-1);
+                safe_strncpy(cpu_info.codename, "Zen / Zen+", sizeof(cpu_info.codename));
+                safe_strncpy(cpu_info.lithography, "14/12 nm", sizeof(cpu_info.lithography));
+                safe_strncpy(cpu_info.socket, "AM4", sizeof(cpu_info.socket));
             } else {
-                strncpy(cpu_info.codename, "Zen 2", sizeof(cpu_info.codename)-1);
-                strncpy(cpu_info.lithography, "7 nm", sizeof(cpu_info.lithography)-1);
-                strncpy(cpu_info.socket, "AM4 / SP3", sizeof(cpu_info.socket)-1);
+                safe_strncpy(cpu_info.codename, "Zen 2", sizeof(cpu_info.codename));
+                safe_strncpy(cpu_info.lithography, "7 nm", sizeof(cpu_info.lithography));
+                safe_strncpy(cpu_info.socket, "AM4 / SP3", sizeof(cpu_info.socket));
             }
         } else if (cpu_info.family == 0x19) {
             if (cpu_info.model < 0x10) {
-                strncpy(cpu_info.codename, "Zen 3", sizeof(cpu_info.codename)-1);
-                strncpy(cpu_info.lithography, "7 nm", sizeof(cpu_info.lithography)-1);
-                strncpy(cpu_info.socket, "AM4 / SP3", sizeof(cpu_info.socket)-1);
+                safe_strncpy(cpu_info.codename, "Zen 3", sizeof(cpu_info.codename));
+                safe_strncpy(cpu_info.lithography, "7 nm", sizeof(cpu_info.lithography));
+                safe_strncpy(cpu_info.socket, "AM4 / SP3", sizeof(cpu_info.socket));
             } else if (cpu_info.model >= 0x60 && cpu_info.model < 0x70) {
-                strncpy(cpu_info.codename, "Zen 4", sizeof(cpu_info.codename)-1);
-                strncpy(cpu_info.lithography, "5 nm", sizeof(cpu_info.lithography)-1);
-                strncpy(cpu_info.socket, "AM5 (LGA1718) / SP5", sizeof(cpu_info.socket)-1);
+                safe_strncpy(cpu_info.codename, "Zen 4", sizeof(cpu_info.codename));
+                safe_strncpy(cpu_info.lithography, "5 nm", sizeof(cpu_info.lithography));
+                safe_strncpy(cpu_info.socket, "AM5 (LGA1718) / SP5", sizeof(cpu_info.socket));
             } else {
-                strncpy(cpu_info.codename, "Zen 4/5 (Unknown Model)", sizeof(cpu_info.codename)-1);
+                safe_strncpy(cpu_info.codename, "Zen 4/5 (Unknown Model)", sizeof(cpu_info.codename));
                 serial_printf("[CPUID] Notice: Unknown AMD Family 0x19 Model %x detected.\n", cpu_info.model);
             }
         } else if (cpu_info.family == 0x1A) {
-            strncpy(cpu_info.codename, "Zen 5", sizeof(cpu_info.codename)-1);
-            strncpy(cpu_info.lithography, "4 nm", sizeof(cpu_info.lithography)-1);
-            strncpy(cpu_info.socket, "AM5 / SP5", sizeof(cpu_info.socket)-1);
+            safe_strncpy(cpu_info.codename, "Zen 5", sizeof(cpu_info.codename));
+            safe_strncpy(cpu_info.lithography, "4 nm", sizeof(cpu_info.lithography));
+            safe_strncpy(cpu_info.socket, "AM5 / SP5", sizeof(cpu_info.socket));
         } else {
-            strncpy(cpu_info.codename, "AMD (Unknown Family)", sizeof(cpu_info.codename)-1);
+            safe_strncpy(cpu_info.codename, "AMD (Unknown Family)", sizeof(cpu_info.codename));
             serial_printf("[CPUID] Notice: Unknown AMD Family %x detected.\n", cpu_info.family);
         }
     } else {
-        strncpy(cpu_info.codename, "Generic Processor", sizeof(cpu_info.codename)-1);
+        safe_strncpy(cpu_info.codename, "Generic Processor", sizeof(cpu_info.codename));
     }
 
     if (cpu_info.is_hypervisor) {
-        strncpy(cpu_info.codename, "Virtual CPU", sizeof(cpu_info.codename)-1);
-        strncpy(cpu_info.socket, "Virtual Socket", sizeof(cpu_info.socket)-1);
-        strncpy(cpu_info.lithography, "N/A", sizeof(cpu_info.lithography)-1);
+        safe_strncpy(cpu_info.codename, "Virtual CPU", sizeof(cpu_info.codename));
+        safe_strncpy(cpu_info.socket, "Virtual Socket", sizeof(cpu_info.socket));
+        safe_strncpy(cpu_info.lithography, "N/A", sizeof(cpu_info.lithography));
     } else {
         // Physical Hardware mapping intact
     }
-    
-    cpu_info.codename[sizeof(cpu_info.codename)-1] = '\0';
-    cpu_info.socket[sizeof(cpu_info.socket)-1] = '\0';
-    cpu_info.lithography[sizeof(cpu_info.lithography)-1] = '\0';
 }
 
 static void detect_cache_topology() {
@@ -250,10 +256,12 @@ void detect_cpu() {
     cpuid(0, &eax, &ebx, &ecx, &edx);
     uint32_t max_std_func = eax;
 
-    memcpy(&cpu_info.vendor_string[0], &ebx, 4);
-    memcpy(&cpu_info.vendor_string[4], &edx, 4);
-    memcpy(&cpu_info.vendor_string[8], &ecx, 4);
-    cpu_info.vendor_string[12] = '\0';
+    // FIX: Replaced direct memcpy with safe bounds handling for vendor string
+    uint32_t vendor_buf[3];
+    vendor_buf[0] = ebx;
+    vendor_buf[1] = edx;
+    vendor_buf[2] = ecx;
+    safe_strncpy(cpu_info.vendor_string, (const char*)vendor_buf, 13);
 
     if (strcmp(cpu_info.vendor_string, "GenuineIntel") == 0) { cpu_info.vendor = VENDOR_INTEL; }
     else if (strcmp(cpu_info.vendor_string, "AuthenticAMD") == 0) { cpu_info.vendor = VENDOR_AMD; }
@@ -267,15 +275,14 @@ void detect_cpu() {
 
     if (max_std_func >= 7) {
         cpuid_count(7, 0, &eax, &ebx, &ecx, &edx);
-        cpu_info.has_smep = (ebx & (1 << 7));  
-        cpu_info.has_smap = (ebx & (1 << 20)); 
-        cpu_info.has_avx2   = (ebx & (1 << 5));
-        cpu_info.has_avx512 = (ebx & (1 << 16));
-        cpu_info.has_sha    = (ebx & (1 << 29));
-        cpu_info.has_cet_ss  = (ecx & (1 << 7));
-        cpu_info.has_cet_ibt = (edx & (1 << 20));
+        cpu_info.has_smep = (ebx & (1 << 7)) != 0;  
+        cpu_info.has_smap = (ebx & (1 << 20)) != 0; 
+        cpu_info.has_avx2   = (ebx & (1 << 5)) != 0;
+        cpu_info.has_avx512 = (ebx & (1 << 16)) != 0;
+        cpu_info.has_sha    = (ebx & (1 << 29)) != 0;
+        cpu_info.has_cet_ss  = (ecx & (1 << 7)) != 0;
+        cpu_info.has_cet_ibt = (edx & (1 << 20)) != 0;
         
-        // BUG-007 FIX: Unified feature struct mappings
         cpu_info.has_rdseed = (ebx & (1 << 18)) != 0;
     } else {
         // Pre-Haswell features only
@@ -303,26 +310,26 @@ void detect_cpu() {
         cpu_info.ext_family = (eax >> 20) & 0xFF;
         cpu_info.ext_model  = (eax >> 16) & 0xF;
 
-        cpu_info.has_fpu  = (edx & (1 << 0));
-        cpu_info.has_msr  = (edx & (1 << 5));
-        cpu_info.has_apic = (edx & (1 << 9));
-        cpu_info.has_mmx  = (edx & (1 << 23));
-        cpu_info.has_sse  = (edx & (1 << 25));
-        cpu_info.has_sse2 = (edx & (1 << 26));
-        cpu_info.has_ht   = (edx & (1 << 28));
+        cpu_info.has_fpu  = (edx & (1 << 0)) != 0;
+        cpu_info.has_msr  = (edx & (1 << 5)) != 0;
+        cpu_info.has_apic = (edx & (1 << 9)) != 0;
+        cpu_info.has_mmx  = (edx & (1 << 23)) != 0;
+        cpu_info.has_sse  = (edx & (1 << 25)) != 0;
+        cpu_info.has_sse2 = (edx & (1 << 26)) != 0;
+        cpu_info.has_ht   = (edx & (1 << 28)) != 0;
 
-        cpu_info.has_sse3   = (ecx & (1 << 0));
-        cpu_info.has_vmx    = (ecx & (1 << 5));
-        cpu_info.has_ssse3  = (ecx & (1 << 9));
-        cpu_info.has_fma3   = (ecx & (1 << 12));
-        cpu_info.has_sse4_1 = (ecx & (1 << 19));
-        cpu_info.has_sse4_2 = (ecx & (1 << 20));
-        cpu_info.has_aes    = (ecx & (1 << 25));
-        cpu_info.has_xsave  = (ecx & (1 << 26));
-        cpu_info.has_avx    = (ecx & (1 << 28));
-        cpu_info.has_rdrand = (ecx & (1 << 30));
+        cpu_info.has_sse3   = (ecx & (1 << 0)) != 0;
+        cpu_info.has_vmx    = (ecx & (1 << 5)) != 0;
+        cpu_info.has_ssse3  = (ecx & (1 << 9)) != 0;
+        cpu_info.has_fma3   = (ecx & (1 << 12)) != 0;
+        cpu_info.has_sse4_1 = (ecx & (1 << 19)) != 0;
+        cpu_info.has_sse4_2 = (ecx & (1 << 20)) != 0;
+        cpu_info.has_aes    = (ecx & (1 << 25)) != 0;
+        cpu_info.has_xsave  = (ecx & (1 << 26)) != 0;
+        cpu_info.has_avx    = (ecx & (1 << 28)) != 0;
+        cpu_info.has_rdrand = (ecx & (1 << 30)) != 0;
 
-        cpu_info.is_hypervisor = (ecx & (1U << 31));
+        cpu_info.is_hypervisor = (ecx & (1U << 31)) != 0;
     } else {
         // Obsolete processors
     }
@@ -330,10 +337,8 @@ void detect_cpu() {
     cpuid(0x40000000, &eax, &ebx, &ecx, &edx);
     if (eax >= 0x40000001) {
         char hv_sig[13];
-        memcpy(hv_sig + 0, &ebx, 4);
-        memcpy(hv_sig + 4, &ecx, 4);
-        memcpy(hv_sig + 8, &edx, 4);
-        hv_sig[12] = 0;
+        uint32_t hv_buf[3] = {ebx, ecx, edx};
+        safe_strncpy(hv_sig, (const char*)hv_buf, 13);
 
         if (strcmp(hv_sig, "VBoxVBoxVBox") == 0) {
             cpu_info.vendor = VENDOR_VIRTUALBOX;
@@ -353,7 +358,7 @@ void detect_cpu() {
 
     if (max_std_func >= 0xD) {
         cpuid_count(0xD, 1, &eax, &ebx, &ecx, &edx);
-        cpu_info.has_xsaveopt = (eax & (1 << 0));
+        cpu_info.has_xsaveopt = (eax & (1 << 0)) != 0;
     } else {
         // Safe drop
     }
@@ -363,33 +368,20 @@ void detect_cpu() {
 
     if (max_ext_func >= 0x80000001) {
         cpuid(0x80000001, &eax, &ebx, &ecx, &edx);
-        cpu_info.has_longmode = (edx & (1 << 29));
-        cpu_info.has_sse4a    = (ecx & (1 << 6));
-        if (cpu_info.vendor == VENDOR_AMD) { cpu_info.has_svm = (ecx & (1 << 2)); } else { /* Clean Intel */ }
+        cpu_info.has_longmode = (edx & (1 << 29)) != 0;
+        cpu_info.has_sse4a    = (ecx & (1 << 6)) != 0;
+        if (cpu_info.vendor == VENDOR_AMD) { cpu_info.has_svm = (ecx & (1 << 2)) != 0; } else { /* Clean Intel */ }
     } else {
         // Unmapped properties
     }
 
     if (max_ext_func >= 0x80000004) {
-        cpuid(0x80000002, &eax, &ebx, &ecx, &edx);
-        memcpy(&cpu_info.brand_string[0], &eax, 4);
-        memcpy(&cpu_info.brand_string[4], &ebx, 4);
-        memcpy(&cpu_info.brand_string[8], &ecx, 4);
-        memcpy(&cpu_info.brand_string[12], &edx, 4);
+        uint32_t brand_buf[12];
+        cpuid(0x80000002, &brand_buf[0], &brand_buf[1], &brand_buf[2], &brand_buf[3]);
+        cpuid(0x80000003, &brand_buf[4], &brand_buf[5], &brand_buf[6], &brand_buf[7]);
+        cpuid(0x80000004, &brand_buf[8], &brand_buf[9], &brand_buf[10], &brand_buf[11]);
         
-        cpuid(0x80000003, &eax, &ebx, &ecx, &edx);
-        memcpy(&cpu_info.brand_string[16], &eax, 4);
-        memcpy(&cpu_info.brand_string[20], &ebx, 4);
-        memcpy(&cpu_info.brand_string[24], &ecx, 4);
-        memcpy(&cpu_info.brand_string[28], &edx, 4);
-        
-        cpuid(0x80000004, &eax, &ebx, &ecx, &edx);
-        memcpy(&cpu_info.brand_string[32], &eax, 4);
-        memcpy(&cpu_info.brand_string[36], &ebx, 4);
-        memcpy(&cpu_info.brand_string[40], &ecx, 4);
-        memcpy(&cpu_info.brand_string[44], &edx, 4);
-        
-        cpu_info.brand_string[48] = '\0';
+        safe_strncpy(cpu_info.brand_string, (const char*)brand_buf, 49);
 
         int i = 0, j = 0;
         while(cpu_info.brand_string[i] == ' ') i++;
@@ -400,8 +392,7 @@ void detect_cpu() {
             // Perfect trimmed alignment
         }
     } else {
-        strncpy(cpu_info.brand_string, "Unknown CPU", sizeof(cpu_info.brand_string)-1);
-        cpu_info.brand_string[sizeof(cpu_info.brand_string)-1] = '\0';
+        safe_strncpy(cpu_info.brand_string, "Unknown CPU", sizeof(cpu_info.brand_string));
     }
 
     guess_microarchitecture();

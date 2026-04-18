@@ -14,8 +14,16 @@
 
 extern void rust_pcie_init_ecam(uint64_t mcfg_phys_base, uint8_t start_bus, uint8_t end_bus);
 extern void rust_pcie_enumerate(void);
-
 extern uint64_t get_uptime_ns();
+
+// RUST FFI BRIDGE
+typedef struct {
+    uint16_t slp_typ_a;
+    uint16_t slp_typ_b;
+    bool found;
+} acpi_sleep_data_t;
+
+extern void rust_acpi_parse_dsdt(const uint8_t* dsdt_ptr, uint32_t dsdt_len, acpi_sleep_data_t* s5_out, acpi_sleep_data_t* s3_out);
 
 #define MULTIBOOT_TAG_TYPE_ACPI_OLD 14
 #define MULTIBOOT_TAG_TYPE_ACPI_NEW 15
@@ -35,10 +43,8 @@ static struct madt* madt = NULL;
 static int acpi_version = 0;
 static bool use_xsdt = false;
 
-static uint16_t SLP_TYPa_S5, SLP_TYPb_S5;
-static uint16_t SLP_TYPa_S3, SLP_TYPb_S3; 
-static bool S5_FOUND = false;
-static bool S3_FOUND = false;
+static acpi_sleep_data_t s5_data = {0, 0, false};
+static acpi_sleep_data_t s3_data = {0, 0, false};
 
 uint32_t acpi_get_pm_timer_port() {
     if (fadt) {
@@ -79,7 +85,6 @@ static bool check_checksum(uint8_t* ptr, int len) {
 static void* map_and_check_table(uint64_t phys_addr, const char* signature) {
     if (phys_addr == 0) { return NULL; } else { /* Proceed */ }
 
-    // SEC-002 FIX: ACPI Tables must be strictly Non-Executable and Read-Only!
     acpi_header_t* header = (acpi_header_t*)ioremap(phys_addr, sizeof(acpi_header_t), PAGE_PRESENT | PAGE_NX);
     if (!header) { return NULL; } else { /* Proceed */ }
 
@@ -124,7 +129,6 @@ void* acpi_find_table(const char* signature) {
             // Invalid RSDT length
         }
     } else {
-        // DEF-002 FIX
         klog(LOG_ERROR, "[ACPI] FATAL: Neither XSDT nor RSDT are valid. Cannot parse tables!");
     }
     return NULL;
@@ -197,88 +201,6 @@ static int acpi_enable() {
     return 0;
 }
 
-static void parse_aml_package(uint8_t* ptr, uint16_t* typp_a, uint16_t* typp_b, bool* found_flag, uint32_t max_len) {
-    uint32_t offset = 0;
-    while (offset < max_len && ptr[offset] != 0x12) { offset++; }
-    
-    // BUG-002 FIX: Strict OOB boundaries for AML parser
-    if (offset >= max_len) { 
-        klog(LOG_ERROR, "[ACPI] AML Package parse reached end of buffer without finding 0x12 (OOB Protected)!");
-        return; 
-    } else {
-        // Valid pointer position
-    }
-    
-    ptr += offset;
-    max_len -= offset;
-    
-    if (max_len < 4) { return; } else { /* Valid */ }
-    
-    ptr++; 
-    max_len--;
-    
-    uint8_t lead = *ptr;
-    uint8_t bytes = (lead >> 6);
-    if (bytes == 0) {
-        ptr++; max_len--;
-    } else {
-        if (max_len < (uint32_t)(bytes + 1)) { return; } else { /* Valid */ }
-        ptr += (bytes + 1);
-        max_len -= (bytes + 1);
-    }
-    
-    if (max_len < 1) { return; } else { /* Valid */ }
-    uint8_t num_elements = *ptr;
-    ptr++; max_len--;
-    
-    int found_values = 0;
-    for (int k = 0; k < num_elements && found_values < 2 && max_len > 0; k++) {
-        uint8_t prefix = *ptr;
-        uint16_t val = 0;
-        bool is_val = false;
-        
-        if (prefix == 0x0A && max_len >= 2) { 
-            val = *(ptr + 1);
-            ptr += 2; max_len -= 2;
-            is_val = true;
-        } else if (prefix == 0x0B && max_len >= 3) { 
-            val = *(ptr + 1) | (*(ptr + 2) << 8);
-            ptr += 3; max_len -= 3;
-            is_val = true;
-        } else if (prefix == 0x00) { 
-            val = 0;
-            ptr++; max_len--;
-            is_val = true;
-        } else if (prefix == 0x01) { 
-            val = 1;
-            ptr++; max_len--;
-            is_val = true;
-        } else {
-            ptr++; max_len--;
-        }
-        
-        if (is_val) {
-            if (found_values == 0) { 
-                *typp_a = val << 10; 
-                found_values++; 
-            } else if (found_values == 1) { 
-                *typp_b = val << 10; 
-                found_values++; 
-            } else {
-                // Ignore extra values
-            }
-        } else {
-            // Unhandled object in package
-        }
-    }
-    
-    if (found_values >= 2) {
-        *found_flag = true; 
-    } else {
-        // Failed to find necessary values
-    }
-}
-
 static int init_dsdt() {
     if (!fadt) { return -1; } else { /* Proceed */ }
     
@@ -301,15 +223,8 @@ static int init_dsdt() {
     uint8_t* dsdt_data = (uint8_t*)ioremap(dsdt_phys, len, PAGE_PRESENT | PAGE_NX);
     if (!dsdt_data) { return -1; } else { /* Proceed */ }
 
-    for (uint32_t i = 0; i < len - 4; i++) {
-        if (memcmp(&dsdt_data[i], "_S5_", 4) == 0) {
-            parse_aml_package(&dsdt_data[i], &SLP_TYPa_S5, &SLP_TYPb_S5, &S5_FOUND, len - i);
-        } else if (memcmp(&dsdt_data[i], "_S3_", 4) == 0) {
-            parse_aml_package(&dsdt_data[i], &SLP_TYPa_S3, &SLP_TYPb_S3, &S3_FOUND, len - i);
-        } else {
-            // Keep scanning DSDT
-        }
-    }
+    // DSDT Parsing delegated to Memory-Safe Rust module
+    rust_acpi_parse_dsdt(dsdt_data, len, &s5_data, &s3_data);
     
     iounmap(dsdt_data, len);
     return 0;
@@ -528,9 +443,9 @@ void acpi_power_off() {
     uint16_t port = fadt->pm1a_cnt_blk;
     if (!port) { return; } else { /* Proceed */ }
     
-    uint16_t val = (SLP_TYPa_S5 | 0x2000);
-    if (!S5_FOUND) {
-        val = 0x3400; 
+    uint16_t val = (s5_data.slp_typ_a | 0x2000);
+    if (!s5_data.found) {
+        val = 0x3400; // QEMU Q35 Fallback
     } else {
         // Safe standard S5 off
     }
@@ -538,8 +453,8 @@ void acpi_power_off() {
     hal_io_outw(port, val);
     
     if (fadt->pm1b_cnt_blk) {
-        uint16_t val_b = (SLP_TYPb_S5 | 0x2000);
-        if (!S5_FOUND) {
+        uint16_t val_b = (s5_data.slp_typ_b | 0x2000);
+        if (!s5_data.found) {
             val_b = 0x3400; 
         } else {
             // Safe standard S5 off
@@ -551,10 +466,10 @@ void acpi_power_off() {
 }
 
 void acpi_suspend() {
-    if (!S3_FOUND || !fadt) { return; } else { /* Proceed */ }
-    hal_io_outw(fadt->pm1a_cnt_blk, SLP_TYPa_S3 | 0x2000); 
+    if (!s3_data.found || !fadt) { return; } else { /* Proceed */ }
+    hal_io_outw(fadt->pm1a_cnt_blk, s3_data.slp_typ_a | 0x2000); 
     if (fadt->pm1b_cnt_blk != 0) {
-        hal_io_outw(fadt->pm1b_cnt_blk, SLP_TYPb_S3 | 0x2000); 
+        hal_io_outw(fadt->pm1b_cnt_blk, s3_data.slp_typ_b | 0x2000); 
     } else {
         // No PM1B
     }
