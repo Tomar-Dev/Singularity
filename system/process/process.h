@@ -23,7 +23,12 @@ extern "C" {
 #define PROC_FLAG_USER      (1 << 1) 
 #define PROC_FLAG_CRITICAL  (1 << 2) 
 #define PROC_FLAG_SILENT    (1 << 3) 
-#define PROC_FLAG_TAINTED   (1 << 4) // GÜVENLİK YAMASI: Process Tainting Flag
+#define PROC_FLAG_TAINTED   (1 << 4) 
+
+#define OOM_PENALTY_IDLE    1000
+#define OOM_PENALTY_LOW     500
+#define OOM_PENALTY_YOUNG   200
+#define OOM_YOUNG_TICKS     500
 
 typedef enum {
     PROCESS_READY,
@@ -45,6 +50,7 @@ typedef struct process {
     uint8_t cpu_id;
     
     kernel_prio_t priority;
+    kernel_prio_t base_priority; 
     int16_t affinity;
     
     uint32_t flags; 
@@ -56,6 +62,8 @@ typedef struct process {
     uint64_t vruntime;
     uint64_t last_queued;
     bool is_queued;
+    
+    uint64_t stack_canary; 
     
     void* stack_base;
     void (*thread_fn)(void);
@@ -106,7 +114,6 @@ void task_sleep(uint64_t ticks);
 
 void wait_queue_init(wait_queue_t* q);
 void wait_queue_push(wait_queue_t* q, process_t* task);
-// FIX: Counter pointer'ı yerine atlanan zombi sayısını döndüren yapıya geçildi
 process_t* wait_queue_pop_safe(wait_queue_t* q, uint32_t* skipped_count);
 
 void sched_enqueue(uint8_t cpu_id, process_t* task, kernel_prio_t prio, int16_t affinity);

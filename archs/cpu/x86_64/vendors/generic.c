@@ -1,7 +1,7 @@
 // archs/cpu/x86_64/vendors/generic.c
 #include "archs/cpu/x86_64/core/cpuid.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 static int generic_get_temp() {
     return 0; 
 }

@@ -2,7 +2,7 @@
 #include "archs/cpu/x86_64/core/cpuid.h"
 #include "archs/cpu/x86_64/core/msr.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 static int via_get_temp() {
     if (!cpu_info.has_msr) return -1;
     uint64_t msr = rdmsr(0x19C);

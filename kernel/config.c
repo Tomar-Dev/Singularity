@@ -2,7 +2,7 @@
 #include "kernel/config.h"
 #include "libc/string.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 
 kernel_config_t kconfig = {
     .timezone = 3,

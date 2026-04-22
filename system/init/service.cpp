@@ -3,7 +3,7 @@
 #include "libc/string.h"
 #include "libc/stdio.h"
 #include "system/process/process.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 
 extern "C" {
     void print_status(const char* prefix, const char* msg, const char* status);

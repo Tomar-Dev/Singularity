@@ -4,7 +4,7 @@
 #include "memory/kheap.h"
 #include "libc/stdio.h"
 #include "libc/string.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 extern "C" void yield(); 
 extern "C" uint64_t get_physical_address(uint64_t v);
 

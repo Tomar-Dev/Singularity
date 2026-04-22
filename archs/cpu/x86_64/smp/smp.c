@@ -1,24 +1,22 @@
 // archs/cpu/x86_64/smp/smp.c
 #include "archs/cpu/x86_64/smp/smp.h"
-#include "drivers/acpi/acpi.h"
-#include "drivers/apic/apic.h"
+#include "archs/cpu/cpu_hal.h"
 #include "memory/pmm.h"
-#include "memory/paging.h"
+#include "archs/cpu/x86_64/memory/paging.h"
 #include "memory/kheap.h"
 #include "libc/string.h"
 #include "libc/stdio.h"
 #include "archs/cpu/x86_64/gdt/gdt.h"
 #include "archs/cpu/x86_64/idt/idt.h"
-#include "drivers/serial/serial.h"
 #include "archs/cpu/x86_64/core/msr.h"
 #include "kernel/config.h"
 #include "system/process/process.h"
-#include "archs/cpu/cpu_hal.h"
 #include "archs/cpu/x86_64/context/tss.h"
 #include "archs/cpu/x86_64/core/fpu.h"
 #include "archs/cpu/x86_64/syscall/syscall.h"
-#include "drivers/timer/tsc.h"
 #include "kernel/debug.h"
+#include "archs/cpu/x86_64/timer/tsc.h" 
+
 extern void print_status(const char* prefix, const char* msg, const char* status);
 
 extern uint8_t trampoline_start[];
@@ -49,8 +47,10 @@ void prepare_cpu_data(uint8_t cpu_id, uint32_t lapic_id) {
         if (!per_cpu_data[cpu_id]) {
             per_cpu_t* cpu_data = (per_cpu_t*)kmalloc_aligned(sizeof(per_cpu_t), 64);
             if (!cpu_data) {
-                serial_write("SMP OOM - Using Fallback!\n");
+                serial_write("[SMP] OOM - Using Fallback CPU Data!\n");
                 cpu_data = &fallback_cpu_data[cpu_id];
+            } else {
+                // Memory allocated successfully
             }
             
             memset(cpu_data, 0, sizeof(per_cpu_t));
@@ -67,12 +67,11 @@ void prepare_cpu_data(uint8_t cpu_id, uint32_t lapic_id) {
                 if (kstack) {
                     cpu_data->kernel_stack = (uint64_t)kstack + SMP_STACK_SIZE;
                 } else {
-                    serial_write("SMP Stack OOM! Halting AP initialization.\n");
+                    serial_write("[SMP] Stack OOM! Halting AP initialization.\n");
                     panic_at(__FILE__, __LINE__, KERR_MEM_OOM, "AP Stack Allocation Failed! Cannot boot CPU safely.");
                 }
             }
 
-            // GÜVENLİK YAMASI: Syscall Stack Allocation (8KB)
             void* sys_stack = vmm_alloc_stack(2); 
             if (sys_stack) {
                 cpu_data->syscall_stack = (uint64_t)sys_stack + 8192;
@@ -81,6 +80,8 @@ void prepare_cpu_data(uint8_t cpu_id, uint32_t lapic_id) {
             }
 
             per_cpu_data[cpu_id] = cpu_data;
+        } else {
+            // CPU data already prepared
         }
     }
 }
@@ -101,10 +102,14 @@ void smp_load_gs(uint8_t cpu_id) {
 }
 
 static void microdelay(int us) {
+    // FIX: Zamanlama uyuşmazlığı (Infinite Loop) engellendi.
+    // hal_timer_get_ticks (4ms) yerine doğrudan donanım TSC döngüleri kullanılıyor.
     uint64_t start = tsc_read_asm();
     uint64_t freq = get_tsc_freq();
     if (freq == 0) {
-        freq = 2000000000ULL; 
+        freq = SMP_FALLBACK_FREQ; 
+    } else {
+        // Frequency is valid
     }
     
     uint64_t target = start + (freq / 1000000) * us;
@@ -117,14 +122,14 @@ __attribute__((no_stack_protector))
 void init_smp() {
     hal_interrupts_disable();
 
-    prepare_cpu_data(0, get_apic_id());
+    prepare_cpu_data(0, hal_cpu_get_id());
     smp_load_gs(0);
 
-    uint64_t trampoline_base = 0x8000;
+    uint64_t trampoline_base = SMP_TRAMPOLINE_BASE;
     uint32_t trampoline_size = (uint32_t)(trampoline_end - trampoline_start);
 
-    map_page(0x8000, 0x8000, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
-    map_page(0x7000, 0x7000, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+    map_page(SMP_TRAMPOLINE_BASE, SMP_TRAMPOLINE_BASE, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+    map_page(SMP_TRAMPOLINE_PT, SMP_TRAMPOLINE_PT, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 
     memcpy((void*)trampoline_base, trampoline_start, trampoline_size);
 
@@ -142,15 +147,24 @@ void init_smp() {
     *target_p4    = cr3;
     *target_entry = (uint64_t)&ap_startup;
 
-    cpus[0].lapic_id = get_apic_id();
+    cpus[0].lapic_id = (uint8_t)hal_cpu_get_id();
     cpus[0].status   = 2;
     num_cpus = 1;
 
     int limit;
+    extern uint8_t acpi_cpu_count;
+    extern uint8_t acpi_cpu_ids[32];
+
     if (acpi_cpu_count > 0) {
         limit = acpi_cpu_count;
     } else {
         limit = 8;
+    }
+
+    if (limit > MAX_CPUS) {
+        limit = MAX_CPUS;
+    } else {
+        // Safe limit
     }
     
     int logical_id_counter = 1;
@@ -158,25 +172,41 @@ void init_smp() {
     serial_write("[SMP] Booting APs sequentially...\n");
 
     uint64_t freq = get_tsc_freq();
-    if (freq == 0) freq = 2000000000; 
+    if (freq == 0) {
+        freq = SMP_FALLBACK_FREQ; 
+    } else {
+        // Frequency is valid
+    }
 
     for (int i = 0; i < limit; i++) {
         uint8_t apic_id;
-        if (acpi_cpu_count > 0) apic_id = acpi_cpu_ids[i];
-        else apic_id = i;
+        if (acpi_cpu_count > 0) {
+            apic_id = acpi_cpu_ids[i];
+        } else {
+            apic_id = i;
+        }
         
-        if (apic_id == cpus[0].lapic_id) continue;
+        if (apic_id == cpus[0].lapic_id) {
+            continue;
+        } else {
+            // Proceed with AP boot
+        }
         
         prepare_cpu_data(logical_id_counter, apic_id);
 
         void* ap_stack = kmalloc_aligned(SMP_STACK_SIZE, 4096);
-        if (!ap_stack) continue;
+        if (!ap_stack) {
+            continue;
+        } else {
+            // Stack allocated
+        }
         
         *target_stack = (uint64_t)ap_stack + SMP_STACK_SIZE;
         
         __atomic_store_n(&ap_boot_flag, 0, __ATOMIC_SEQ_CST);
         __asm__ volatile("mfence" ::: "memory");
 
+        extern void apic_send_ipi(uint8_t apic_id, uint32_t vector);
         apic_send_ipi(apic_id, 0x00004500); 
         microdelay(100);
         apic_send_ipi(apic_id, 0x00004608); 
@@ -191,8 +221,9 @@ void init_smp() {
             if (__atomic_load_n(&ap_boot_flag, __ATOMIC_SEQ_CST) == apic_id) {
                 booted = true;
                 break;
+            } else {
+                hal_cpu_relax();
             }
-            hal_cpu_relax();
         }
         
         if (booted) {
@@ -212,12 +243,13 @@ static int ap_init_lock = 0;
 
 __attribute__((no_stack_protector))
 void ap_startup() {
-    uint8_t my_apic = get_apic_id();
+    uint8_t my_apic = (uint8_t)hal_cpu_get_id();
     
     while (__atomic_test_and_set(&ap_init_lock, __ATOMIC_ACQUIRE)) {
         hal_cpu_relax();
     }
 
+    extern void apic_enable_local();
     apic_enable_local();
 
     int my_logical_id = -1;
@@ -226,7 +258,11 @@ void ap_startup() {
             if (per_cpu_data[i]->lapic_id == my_apic) {
                 my_logical_id = i;
                 break;
+            } else {
+                // Not this CPU
             }
+        } else {
+            // Uninitialized slot
         }
     }
 
@@ -256,17 +292,20 @@ void ap_startup() {
     init_syscalls(); 
 
     hal_interrupts_disable();
+    extern void apic_timer_init(uint32_t frequency);
     apic_timer_init(250);
     hal_interrupts_enable();
 
     init_multitasking_ap();
 
     while (1) {
+        extern void yield();
         yield();
         hal_cpu_halt();
     }
 }
 
 uint8_t get_current_cpu_id() {
+    extern uint8_t get_apic_id();
     return get_apic_id();
 }

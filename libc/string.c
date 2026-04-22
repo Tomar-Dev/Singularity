@@ -4,7 +4,7 @@
 #include "libc/string.h"
 #include <stdint.h>
 #include "archs/cpu/x86_64/core/cpuid.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 extern uint32_t g_fpu_mode;
 extern uint64_t g_xsave_mask;
 

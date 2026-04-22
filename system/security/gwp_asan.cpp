@@ -6,7 +6,7 @@
 #include "kernel/debug.h"
 #include "libc/string.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "archs/cpu/x86_64/sync/spinlock.h"
 #define GWP_VIRT_BASE   0xFFFFB00000000000ULL
 #define GWP_VIRT_LIMIT  (GWP_VIRT_BASE + (GWP_ASAN_SLOTS * 4ULL * PAGE_SIZE))

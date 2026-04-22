@@ -6,11 +6,10 @@
 #include "memory/kheap.h" 
 #include "libc/stdio.h"
 #include "libc/string.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "system/disk/gpt.h"
 #include "system/power/power.h"
 #include "archs/storage/storage_hal.h"
-#include "archs/cpu/cpu_hal.h"
 
 extern "C" void yield();
 extern "C" void print_status(const char* prefix, const char* msg, const char* status);

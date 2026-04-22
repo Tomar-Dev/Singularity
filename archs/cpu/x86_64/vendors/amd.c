@@ -2,7 +2,7 @@
 #include "archs/cpu/x86_64/core/cpuid.h"
 #include "archs/cpu/x86_64/core/msr.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 static bool has_cppc = false;
 static bool boost_supported = false;
 

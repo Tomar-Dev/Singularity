@@ -3,7 +3,7 @@
 #include "archs/cpu/x86_64/smp/smp.h"
 #include "libc/stdio.h"
 #include "libc/string.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 TEST(smp_fpu_consistency) {
     uint8_t cpu_id = get_current_cpu_id();
     serial_printf("   [TEST-SMP] CPU %d FPU Check... ", cpu_id);

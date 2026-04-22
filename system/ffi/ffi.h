@@ -11,10 +11,7 @@ extern "C" {
 #endif
 
 void rust_device_print_disks(void);
-void rust_device_print_parts(void);
 
-// OPTİMİZASYON YAMASI: FFI üzerinden string (char*) gönderimi durduruldu!
-// Artık direkt O(1) integer dönüyor (1=FAT32, 2=EXT4, 3=ISO9660, 4=UDF)
 uint32_t rust_device_detect_fs(void* dev);
 
 void* rust_udf_mount(void* dev);

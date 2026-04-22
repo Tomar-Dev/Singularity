@@ -17,6 +17,7 @@ static inline uint8_t inb(uint16_t port) {
 static inline void outw(uint16_t port, uint16_t data) {
     __asm__ volatile("outw %0, %1" : : "a"(data), "Nd"(port));
 }
+
 static inline uint16_t inw(uint16_t port) {
     uint16_t ret;
     __asm__ volatile("inw %1, %0" : "=a"(ret) : "Nd"(port));
@@ -26,6 +27,7 @@ static inline uint16_t inw(uint16_t port) {
 static inline void outl(uint16_t port, uint32_t data) {
     __asm__ volatile("outl %0, %1" : : "a"(data), "Nd"(port));
 }
+
 static inline uint32_t inl(uint16_t port) {
     uint32_t ret;
     __asm__ volatile("inl %1, %0" : "=a"(ret) : "Nd"(port));
@@ -46,9 +48,12 @@ static inline void outsw(uint16_t port, const void* buffer, uint32_t count) {
                      : "memory");
 }
 
-// FIX: Port 0x80 (POST Diagnostic) spamming causes LPC bus congestion 
 static inline void io_wait() {
     __asm__ volatile("pause" ::: "memory");
+}
+
+static inline void io_wait_legacy() {
+    outb(0x80, 0);
 }
 
 #endif

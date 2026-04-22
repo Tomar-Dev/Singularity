@@ -3,11 +3,10 @@
 #include "memory/pmm.h"
 #include "libc/string.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "archs/cpu/x86_64/core/cpuid.h"
 #include "archs/cpu/x86_64/core/msr.h"
 #include "archs/cpu/x86_64/sync/spinlock.h"
-#include "drivers/apic/apic.h"
 #include "archs/cpu/x86_64/smp/smp.h"
 #include "archs/cpu/x86_64/interrupts/isr.h"
 

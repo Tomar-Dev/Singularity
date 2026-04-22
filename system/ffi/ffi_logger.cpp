@@ -1,7 +1,7 @@
 // system/ffi/ffi_logger.cpp
 #include "system/ffi/ffi.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "system/process/process.h"
 #include "system/console/console.h"
 #define FFI_RING_SIZE 16384

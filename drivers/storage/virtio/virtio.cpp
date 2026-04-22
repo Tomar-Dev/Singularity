@@ -6,10 +6,9 @@
 #include "memory/pmm.h"
 #include "libc/string.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "system/disk/gpt.h"
 #include "archs/storage/storage_hal.h" 
-#include "drivers/timer/tsc.h"
 
 extern "C" void print_status(const char* prefix, const char* msg, const char* status);
 extern "C" void yield();

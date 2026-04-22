@@ -2,7 +2,7 @@
 #include "archs/cpu/x86_64/core/cpuid.h"
 #include "archs/cpu/x86_64/core/msr.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #define MSR_EFER 0xC0000080
 
 static int hygon_get_temp() {

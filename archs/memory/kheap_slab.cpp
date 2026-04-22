@@ -3,7 +3,7 @@
 #include "memory/paging.h"
 #include "memory/pmm.h"
 #include "libc/string.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "kernel/ksyms.h"
 #include "kernel/fastops.h"
 

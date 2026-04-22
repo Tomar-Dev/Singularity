@@ -121,7 +121,6 @@ typedef device_handle_t device_t;
 
 void device_manager_init(void);
 void device_print_disks(void); 
-void device_print_parts(void); 
 void device_manager_shutdown(void);
 
 device_t device_get(const char* name);

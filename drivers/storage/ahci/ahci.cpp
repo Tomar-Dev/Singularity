@@ -6,7 +6,7 @@
 #include "memory/kheap.h"
 #include "libc/stdio.h"
 #include "libc/string.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "system/disk/gpt.h"
 #include "kernel/debug.h"
 #include "system/power/power.h"

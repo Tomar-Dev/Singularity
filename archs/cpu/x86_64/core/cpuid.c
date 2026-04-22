@@ -4,6 +4,7 @@
 #include "libc/string.h"
 #include "drivers/serial/serial.h"
 #include "archs/cpu/x86_64/core/msr.h"
+
 extern uint64_t timer_get_ticks();
 
 extern cpu_driver_t cpu_driver_intel;
@@ -23,14 +24,16 @@ static inline void cpuid_count(uint32_t code, uint32_t count, uint32_t *a, uint3
     __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(code), "c"(count));
 }
 
-// FIX: Tidy Security Warning (Buffer Overflow protection for strncpy)
 static void safe_strncpy(char* dest, const char* src, size_t max_len) {
-    if (!dest || !src || max_len == 0) return;
-    size_t i;
-    for (i = 0; i < max_len - 1 && src[i] != '\0'; i++) {
-        dest[i] = src[i];
+    if (!dest || !src || max_len == 0) {
+        return;
+    } else {
+        size_t i;
+        for (i = 0; i < max_len - 1 && src[i] != '\0'; i++) {
+            dest[i] = src[i];
+        }
+        dest[i] = '\0';
     }
-    dest[i] = '\0';
 }
 
 static void guess_microarchitecture() {
@@ -147,31 +150,43 @@ static void detect_cache_topology() {
     cpu_info.l3_cache_size = 0;
 
     if (cpu_info.vendor == VENDOR_INTEL) {
-        for (int i = 0; i < 10; i++) {
-            cpuid_count(4, i, &a, &b, &c, &d);
-            int type = a & 0x1F;
-            if (type == 0) { break; } else { /* Valid */ }
+        if (cpu_info.max_std_func >= 4) {
+            for (int i = 0; i < 10; i++) {
+                cpuid_count(4, i, &a, &b, &c, &d);
+                int type = a & 0x1F;
+                if (type == 0) { 
+                    break; 
+                } else { 
+                    // Valid cache level
+                }
 
-            int level = (a >> 5) & 0x7;
-            int sets = c + 1;
-            int partitions = ((b >> 12) & 0x3FF) + 1;
-            int ways = ((b >> 22) & 0x3FF) + 1;
-            int line_size = (b & 0xFFF) + 1;
+                int level = (a >> 5) & 0x7;
+                int sets = c + 1;
+                int partitions = ((b >> 12) & 0x3FF) + 1;
+                int ways = ((b >> 22) & 0x3FF) + 1;
+                int line_size = (b & 0xFFF) + 1;
 
-            uint32_t size_kb = (sets * partitions * ways * line_size) / 1024;
+                uint32_t size_kb = (sets * partitions * ways * line_size) / 1024;
 
-            if (level == 1) { cpu_info.l1_cache_size += size_kb; }
-            else if (level == 2) { cpu_info.l2_cache_size = size_kb; }
-            else if (level == 3) { cpu_info.l3_cache_size = size_kb; }
-            else { /* Extraneous */ }
+                if (level == 1) { cpu_info.l1_cache_size += size_kb; }
+                else if (level == 2) { cpu_info.l2_cache_size = size_kb; }
+                else if (level == 3) { cpu_info.l3_cache_size = size_kb; }
+                else { /* Extraneous cache level */ }
+            }
+        } else {
+            // Cache topology not supported by this Intel CPU
         }
     } else if (cpu_info.vendor == VENDOR_AMD) {
-        cpuid(0x80000005, &a, &b, &c, &d);
-        cpu_info.l1_cache_size = ((c >> 24) & 0xFF) + ((d >> 24) & 0xFF);
+        if (cpu_info.max_ext_func >= 0x80000006) {
+            cpuid(0x80000005, &a, &b, &c, &d);
+            cpu_info.l1_cache_size = ((c >> 24) & 0xFF) + ((d >> 24) & 0xFF);
 
-        cpuid(0x80000006, &a, &b, &c, &d);
-        cpu_info.l2_cache_size = (c >> 16) & 0xFFFF;
-        cpu_info.l3_cache_size = (d >> 18) * 512;
+            cpuid(0x80000006, &a, &b, &c, &d);
+            cpu_info.l2_cache_size = (c >> 16) & 0xFFFF;
+            cpu_info.l3_cache_size = (d >> 18) * 512;
+        } else {
+            // Cache topology not supported by this AMD CPU
+        }
     } else {
         // Unknown Architecture Topologies
     }
@@ -184,10 +199,7 @@ static void detect_core_topology() {
     cpu_info.logical_cores  = 1;
 
     if (cpu_info.vendor == VENDOR_INTEL) {
-        uint32_t max_leaf;
-        cpuid(0, &max_leaf, &b, &c, &d);
-
-        if (max_leaf >= 0xB) {
+        if (cpu_info.max_std_func >= 0xB) {
             uint32_t logical_per_core = 0;
             uint32_t logical_total    = 0;
 
@@ -208,42 +220,69 @@ static void detect_core_topology() {
             if (logical_per_core > 0 && logical_total > 0) {
                 cpu_info.logical_cores  = logical_total;
                 cpu_info.physical_cores = logical_total / logical_per_core;
-                if (cpu_info.physical_cores == 0) { cpu_info.physical_cores = 1; } else { /* Valid */ }
+                if (cpu_info.physical_cores == 0) { 
+                    cpu_info.physical_cores = 1; 
+                } else { 
+                    // Valid physical core count
+                }
             } else {
                 cpuid(1, &a, &b, &c, &d);
                 uint32_t max_logical = (b >> 16) & 0xFF;
-                if (max_logical > 0) { cpu_info.logical_cores = max_logical; } else { cpu_info.logical_cores = 1; }
-                if (cpu_info.has_ht) { cpu_info.physical_cores = (cpu_info.logical_cores / 2); } else { cpu_info.physical_cores = cpu_info.logical_cores; }
-                if (cpu_info.physical_cores == 0) { cpu_info.physical_cores = 1; } else { /* Valid */ }
+                if (max_logical > 0) { 
+                    cpu_info.logical_cores = max_logical; 
+                } else { 
+                    cpu_info.logical_cores = 1; 
+                }
+                if (cpu_info.has_ht) { 
+                    cpu_info.physical_cores = (cpu_info.logical_cores / 2); 
+                } else { 
+                    cpu_info.physical_cores = cpu_info.logical_cores; 
+                }
+                if (cpu_info.physical_cores == 0) { 
+                    cpu_info.physical_cores = 1; 
+                } else { 
+                    // Valid fallback core count
+                }
             }
         } else {
             cpuid(1, &a, &b, &c, &d);
             uint32_t max_logical = (b >> 16) & 0xFF;
-            if (max_logical > 0) { cpu_info.logical_cores = max_logical; } else { cpu_info.logical_cores = 1; }
-            if (cpu_info.has_ht) { cpu_info.physical_cores = (cpu_info.logical_cores / 2); } else { cpu_info.physical_cores = cpu_info.logical_cores; }
-            if (cpu_info.physical_cores == 0) { cpu_info.physical_cores = 1; } else { /* Valid */ }
+            if (max_logical > 0) { 
+                cpu_info.logical_cores = max_logical; 
+            } else { 
+                cpu_info.logical_cores = 1; 
+            }
+            if (cpu_info.has_ht) { 
+                cpu_info.physical_cores = (cpu_info.logical_cores / 2); 
+            } else { 
+                cpu_info.physical_cores = cpu_info.logical_cores; 
+            }
+            if (cpu_info.physical_cores == 0) { 
+                cpu_info.physical_cores = 1; 
+            } else { 
+                // Valid fallback core count
+            }
         }
 
     } else if (cpu_info.vendor == VENDOR_AMD || cpu_info.vendor == VENDOR_HYGON) {
-        uint32_t max_ext;
-        cpuid(0x80000000, &max_ext, &b, &c, &d);
-
-        if (max_ext >= 0x80000008) {
+        if (cpu_info.max_ext_func >= 0x80000008) {
             cpuid(0x80000008, &a, &b, &c, &d);
             uint32_t nc = (c & 0xFF) + 1; 
 
             uint32_t threads_per_core = 1;
-            if (max_ext >= 0x8000001E) {
+            if (cpu_info.max_ext_func >= 0x8000001E) {
                 cpuid(0x8000001E, &a, &b, &c, &d);
                 threads_per_core = ((b >> 8) & 0xFF) + 1;
             } else {
-                // Single Threading Only
+                // Single Threading Only or older AMD architecture
             }
 
             cpu_info.physical_cores = nc;
             cpu_info.logical_cores  = nc * threads_per_core;
         } else {
-            // Missing Topology Leaf
+            // Missing Topology Leaf, fallback to basic assumptions
+            cpu_info.physical_cores = 1;
+            cpu_info.logical_cores = 1;
         }
     } else {
         // Unknown Architecture Core Count
@@ -254,9 +293,8 @@ void detect_cpu() {
     uint32_t eax, ebx, ecx, edx;
 
     cpuid(0, &eax, &ebx, &ecx, &edx);
-    uint32_t max_std_func = eax;
+    cpu_info.max_std_func = eax;
 
-    // FIX: Replaced direct memcpy with safe bounds handling for vendor string
     uint32_t vendor_buf[3];
     vendor_buf[0] = ebx;
     vendor_buf[1] = edx;
@@ -273,7 +311,10 @@ void detect_cpu() {
     else if (strcmp(cpu_info.vendor_string, "VBoxVBoxVBox") == 0) { cpu_info.vendor = VENDOR_VIRTUALBOX; }
     else { cpu_info.vendor = VENDOR_UNKNOWN; }
 
-    if (max_std_func >= 7) {
+    cpuid(0x80000000, &eax, &ebx, &ecx, &edx);
+    cpu_info.max_ext_func = eax;
+
+    if (cpu_info.max_std_func >= 7) {
         cpuid_count(7, 0, &eax, &ebx, &ecx, &edx);
         cpu_info.has_smep = (ebx & (1 << 7)) != 0;  
         cpu_info.has_smap = (ebx & (1 << 20)) != 0; 
@@ -282,13 +323,12 @@ void detect_cpu() {
         cpu_info.has_sha    = (ebx & (1 << 29)) != 0;
         cpu_info.has_cet_ss  = (ecx & (1 << 7)) != 0;
         cpu_info.has_cet_ibt = (edx & (1 << 20)) != 0;
-        
         cpu_info.has_rdseed = (ebx & (1 << 18)) != 0;
     } else {
         // Pre-Haswell features only
     }
 
-    if (max_std_func >= 1) {
+    if (cpu_info.max_std_func >= 1) {
         cpuid(1, &eax, &ebx, &ecx, &edx);
 
         uint32_t stepping = eax & 0xF;
@@ -356,26 +396,27 @@ void detect_cpu() {
         // Native Hardware 
     }
 
-    if (max_std_func >= 0xD) {
+    if (cpu_info.max_std_func >= 0xD) {
         cpuid_count(0xD, 1, &eax, &ebx, &ecx, &edx);
         cpu_info.has_xsaveopt = (eax & (1 << 0)) != 0;
     } else {
         // Safe drop
     }
 
-    uint32_t max_ext_func;
-    cpuid(0x80000000, &max_ext_func, &ebx, &ecx, &edx);
-
-    if (max_ext_func >= 0x80000001) {
+    if (cpu_info.max_ext_func >= 0x80000001) {
         cpuid(0x80000001, &eax, &ebx, &ecx, &edx);
         cpu_info.has_longmode = (edx & (1 << 29)) != 0;
         cpu_info.has_sse4a    = (ecx & (1 << 6)) != 0;
-        if (cpu_info.vendor == VENDOR_AMD) { cpu_info.has_svm = (ecx & (1 << 2)) != 0; } else { /* Clean Intel */ }
+        if (cpu_info.vendor == VENDOR_AMD) { 
+            cpu_info.has_svm = (ecx & (1 << 2)) != 0; 
+        } else { 
+            // Clean Intel 
+        }
     } else {
         // Unmapped properties
     }
 
-    if (max_ext_func >= 0x80000004) {
+    if (cpu_info.max_ext_func >= 0x80000004) {
         uint32_t brand_buf[12];
         cpuid(0x80000002, &brand_buf[0], &brand_buf[1], &brand_buf[2], &brand_buf[3]);
         cpuid(0x80000003, &brand_buf[4], &brand_buf[5], &brand_buf[6], &brand_buf[7]);
@@ -386,7 +427,9 @@ void detect_cpu() {
         int i = 0, j = 0;
         while(cpu_info.brand_string[i] == ' ') i++;
         if(i > 0) {
-            while(cpu_info.brand_string[i]) { cpu_info.brand_string[j++] = cpu_info.brand_string[i++]; }
+            while(cpu_info.brand_string[i]) { 
+                cpu_info.brand_string[j++] = cpu_info.brand_string[i++]; 
+            }
             cpu_info.brand_string[j] = '\0';
         } else {
             // Perfect trimmed alignment

@@ -279,7 +279,6 @@ extern "C" {
     const char* device_get_model(device_t dev)  { return static_cast<Device*>(dev)->getModel(); }
 
     void device_print_disks() { rust_device_print_disks(); }
-    void device_print_parts() { rust_device_print_parts(); }
 
     void device_manager_shutdown() {
         char name[64];

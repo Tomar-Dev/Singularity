@@ -7,13 +7,13 @@ use alloc::format;
 use crate::arch::sync::IrqSpinlock;
 use core::ffi::{c_void, c_char, CStr};
 
-// QUAL-001 FIX: Color codes directly matched with C definitions
 const CONSOLE_COLOR_BLACK:       u8 = 0;
 const CONSOLE_COLOR_LIGHT_GREY:  u8 = 7;
 const CONSOLE_COLOR_DARK_GREY:   u8 = 8;
 const CONSOLE_COLOR_LIGHT_GREEN: u8 = 10;
 const CONSOLE_COLOR_LIGHT_CYAN:  u8 = 11;
 const CONSOLE_COLOR_LIGHT_RED:   u8 = 12;
+const CONSOLE_COLOR_LIGHT_MAGENTA: u8 = 13;
 const CONSOLE_COLOR_YELLOW:      u8 = 14;
 const CONSOLE_COLOR_WHITE:       u8 = 15;
 
@@ -141,6 +141,16 @@ fn pad_right(s: &str, width: usize) -> String {
     }
 }
 
+fn print_tree_prefix(is_last: bool) {
+    let prefix = if is_last { " \\- " } else { " |- " };
+    unsafe {
+        console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK);
+        let c_msg = format!("{}\0", prefix);
+        kprintf_string(c_msg.as_ptr() as *const i8);
+        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_device_detect_fs(dev: *mut c_void) -> u32 {
     let bs = unsafe { cpp_device_get_block_size(dev) } as usize;
@@ -157,49 +167,29 @@ pub unsafe extern "C" fn rust_device_detect_fs(dev: *mut c_void) -> u32 {
                     for i in 0..16 {
                         if i != 4 { 
                             sum = sum.wrapping_add(buf[i]); 
-                        } else { 
-                            /* Escaped Checksum bit */ 
                         }
                     }
                     if sum == buf[4] {
-                        fs = 4; // udf
-                    } else {
-                        // Integrity lost
+                        fs = 4; 
                     }
-                } else {
-                    // Not AVDP
                 }
-            } else {
-                // I/O Fault
             }
             
             if fs == 0 && bs == 2048 {
                 if unsafe { cpp_device_read_block(dev, 16, 1, buf.as_mut_ptr()) } == 1 {
                     if buf[1] == b'C' && buf[2] == b'D' && buf[3] == b'0' && buf[4] == b'0' && buf[5] == b'1' {
-                        fs = 3; /* iso9660 */
-                    } else {
-                        // Not ISO9660
+                        fs = 3; 
                     }
-                } else {
-                    // I/O Fault
                 }
-            } else {
-                // Bypass
             }
-        } else {
-            // Not optical media bounds
         }
 
         if fs == 0 && bs == 512 {
             if unsafe { cpp_device_read_block(dev, 2, 2, buf.as_mut_ptr()) } == 1 {
                 let ext_magic = u16::from_le_bytes([buf[56], buf[57]]); 
                 if ext_magic == 0xEF53 { 
-                    fs = 2; /* ext4 */ 
-                } else {
-                    // Not Ext4
+                    fs = 2; 
                 }
-            } else {
-                // I/O Fault
             }
             
             if fs == 0 {
@@ -207,230 +197,193 @@ pub unsafe extern "C" fn rust_device_detect_fs(dev: *mut c_void) -> u32 {
                 if unsafe { cpp_device_read_block(dev, 0, 1, boot_buf.as_mut_ptr()) } == 1 {
                     if boot_buf[510] == 0x55 && boot_buf[511] == 0xAA {
                         if &boot_buf[82..87] == b"FAT32" { 
-                            fs = 1; /* fat32 */ 
-                        } else {
-                            // Not FAT32
+                            fs = 1; 
                         }
-                    } else {
-                        // Missing boot signature
                     }
-                } else {
-                    // I/O Fault
                 }
-            } else {
-                // FS already found
             }
-        } else {
-            // Not standard HDD block size
         }
     } else {
-        fs = 5; // Unknown / Block size 0
+        fs = 5; 
     }
 
     fs
 }
 
+struct DiskInfo {
+    name: String,
+    capacity: u64,
+    model: String,
+    is_ro: bool,
+    is_optical: bool,
+}
+
+struct PartInfo {
+    name: String,
+    capacity: u64,
+    fs_val: u32,
+    free_space: u64,
+    is_ro: bool,
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_device_print_disks() {
     print_c("========================================================================================================================\n", CONSOLE_COLOR_LIGHT_CYAN);
-    print_c(&pad_right(" DISK NAME", 15), CONSOLE_COLOR_WHITE);
-    print_c(&pad_right("| TYPE", 20), CONSOLE_COLOR_WHITE);
-    print_c(&pad_right("| CAPACITY", 15), CONSOLE_COLOR_WHITE);
+    print_c(&pad_right(" NAME", 20), CONSOLE_COLOR_WHITE);
+    print_c(&pad_right("| TYPE / FS", 15), CONSOLE_COLOR_WHITE);
+    print_c(&pad_right("| CAPACITY", 20), CONSOLE_COLOR_WHITE);
+    print_c(&pad_right("| FREE SPACE", 20), CONSOLE_COLOR_WHITE);
     print_c(&pad_right("| R/W", 8), CONSOLE_COLOR_WHITE);
-    print_c(&pad_right("| PARTS", 10), CONSOLE_COLOR_WHITE);
     print_c("| MODEL\n", CONSOLE_COLOR_WHITE);
     print_c("------------------------------------------------------------------------------------------------------------------------\n", CONSOLE_COLOR_DARK_GREY);
 
     let path = c"/devices";
     let mut idx = 0u32;
-    let mut name_buf = [0i8; 64];
+    let mut name_buf =[0i8; 64];
     let mut obj_type = 0u8;
 
-    while unsafe { ons_enumerate(path.as_ptr(), idx, name_buf.as_mut_ptr(), &mut obj_type) } {
-        idx += 1;
-        let dev_ptr = unsafe { device_get(name_buf.as_ptr()) };
-        if dev_ptr.is_null() { 
-            continue; 
-        } else {
-            if unsafe { cpp_device_get_type(dev_ptr) } != 4 { 
-                unsafe { device_release(dev_ptr); }
-                continue; 
-            } else {
-                let d_name = unsafe { CStr::from_ptr(cpp_device_get_name(dev_ptr)).to_str().unwrap_or("?") };
-                let d_cap = unsafe { cpp_device_get_capacity(dev_ptr) };
-                let d_model = unsafe { CStr::from_ptr(cpp_device_get_model(dev_ptr)).to_str().unwrap_or("Generic") };
-                let is_ro = unsafe { cpp_device_is_read_only(dev_ptr) };
+    let mut base_disks = Vec::new();
 
-                let mut p_count = 0;
-                let mut p_idx = 0u32;
-                let mut p_name_buf =[0i8; 64];
-                let mut p_type = 0u8;
-                let prefix = format!("{}_p", d_name);
-                
-                while unsafe { ons_enumerate(path.as_ptr(), p_idx, p_name_buf.as_mut_ptr(), &mut p_type) } {
-                    p_idx += 1;
-                    let p_name = unsafe { CStr::from_ptr(p_name_buf.as_ptr()).to_str().unwrap_or("") };
-                    if p_name.starts_with(&prefix) { 
-                        p_count += 1; 
-                    } else {
-                        // Unrelated element
-                    }
-                }
-
-                print_c(&pad_right(&format!(" {}", d_name), 15), CONSOLE_COLOR_LIGHT_GREEN);
-                print_c(&pad_right("| Block Storage", 20), CONSOLE_COLOR_WHITE);
-                print_c(&pad_right(&format!("| {}", format_size_dec(d_cap)), 15), CONSOLE_COLOR_YELLOW);
-                print_c("| ", CONSOLE_COLOR_WHITE);
-                
-                if is_ro { 
-                    print_c(&pad_right("R/O", 6), CONSOLE_COLOR_LIGHT_RED); 
-                } else { 
-                    print_c(&pad_right("R/W", 6), CONSOLE_COLOR_LIGHT_GREEN); 
-                }
-                
-                print_c(&pad_right(&format!("| {}", p_count), 10), CONSOLE_COLOR_LIGHT_CYAN);
-                print_c(&format!("| {}\n", d_model), CONSOLE_COLOR_LIGHT_GREY);
-                
-                unsafe { device_release(dev_ptr); }
-            }
-        }
-    }
-    print_c("========================================================================================================================\n", CONSOLE_COLOR_LIGHT_CYAN);
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn rust_device_print_parts() {
-    print_c("========================================================================================================================\n", CONSOLE_COLOR_LIGHT_CYAN);
-    print_c(&pad_right(" PARTITION", 15), CONSOLE_COLOR_WHITE);
-    print_c(&pad_right("| DISK", 15), CONSOLE_COLOR_WHITE);
-    print_c(&pad_right("| FILE SYSTEM", 15), CONSOLE_COLOR_WHITE);
-    print_c(&pad_right("| CAPACITY", 15), CONSOLE_COLOR_WHITE);
-    print_c("| FREE SPACE\n", CONSOLE_COLOR_WHITE);
-    print_c("------------------------------------------------------------------------------------------------------------------------\n", CONSOLE_COLOR_DARK_GREY);
-
-    let path = c"/devices";
-    let mut idx = 0u32;
-    let mut name_buf = [0i8; 64];
-    let mut obj_type = 0u8;
-
-    let mut disk_list = Vec::new();
-    let mut optical_list = Vec::new();
-
+    // 1. Collect all base disks (non-partitions)
     while unsafe { ons_enumerate(path.as_ptr(), idx, name_buf.as_mut_ptr(), &mut obj_type) } {
         idx += 1;
         let dev_ptr = unsafe { device_get(name_buf.as_ptr()) };
         if !dev_ptr.is_null() && unsafe { cpp_device_get_type(dev_ptr) } == 4 { 
-            let d_name = unsafe { CStr::from_ptr(cpp_device_get_name(dev_ptr)).to_str().unwrap_or("?") };
-            let fs_base_val = unsafe { rust_device_detect_fs(dev_ptr) };
+            let d_name = unsafe { CStr::from_ptr(cpp_device_get_name(dev_ptr)).to_str().unwrap_or("?") }.to_string();
             
-            // BUG FIX: Lockdown modunda is_ro tüm diskler için true döner. 
-            // Bu yüzden Optik Medya ayrımını sadece Dosya Sistemi imzasına (3=ISO, 4=UDF)
-            // veya isimlendirme konvansiyonuna (cdrom) göre yapıyoruz.
-            if fs_base_val == 3 || fs_base_val == 4 || d_name.starts_with("cdrom") {
-                optical_list.push(dev_ptr);
-            } else {
-                disk_list.push(dev_ptr);
+            // If the name contains "_p", it is a partition, not a base disk.
+            if !d_name.contains("_p") {
+                let d_cap = unsafe { cpp_device_get_capacity(dev_ptr) };
+                let d_model = unsafe { CStr::from_ptr(cpp_device_get_model(dev_ptr)).to_str().unwrap_or("Generic") }.to_string();
+                let is_ro = unsafe { cpp_device_is_read_only(dev_ptr) };
+                let fs_val = unsafe { rust_device_detect_fs(dev_ptr) };
+                
+                let is_optical = fs_val == 3 || fs_val == 4 || d_name.starts_with("cdrom");
+                
+                base_disks.push(DiskInfo {
+                    name: d_name,
+                    capacity: d_cap,
+                    model: d_model,
+                    is_ro,
+                    is_optical,
+                });
             }
-        } else if !dev_ptr.is_null() {
+        }
+        if !dev_ptr.is_null() {
             unsafe { device_release(dev_ptr); }
-        } else {
-            // Null pointer handled
         }
     }
 
-    for &disk_ptr in disk_list.iter() {
-        let d_name = unsafe { CStr::from_ptr(cpp_device_get_name(disk_ptr)).to_str().unwrap_or("?") };
-        let d_total_cap = unsafe { cpp_device_get_capacity(disk_ptr) };
-        let mut d_used_cap = 0u64;
+    // Sort by name (cdrom0, disk0, nvme0, etc.)
+    base_disks.sort_by(|a, b| a.name.cmp(&b.name));
 
-        let mut p_idx = 0u32;
-        let mut p_name_buf = [0i8; 64];
-        let mut p_type = 0u8;
-        let prefix = format!("{}_p", d_name);
-
-        while unsafe { ons_enumerate(path.as_ptr(), p_idx, p_name_buf.as_mut_ptr(), &mut p_type) } {
-            p_idx += 1;
-            let p_name = unsafe { CStr::from_ptr(p_name_buf.as_ptr()).to_str().unwrap_or("") };
-            if p_name.starts_with(&prefix) {
-                let part_ptr = unsafe { device_get(p_name_buf.as_ptr()) };
-                if !part_ptr.is_null() {
-                    let p_cap = unsafe { cpp_device_get_capacity(part_ptr) };
-                    d_used_cap += p_cap;
-
-                    let fs_val = unsafe { rust_device_detect_fs(part_ptr) };
-                    let fs_name = match fs_val {
-                        1 => "fat32",
-                        2 => "ext4",
-                        3 => "iso9660",
-                        4 => "udf",
-                        _ => "raw",
-                    };
-                    
-                    let d_free = unsafe { cpp_device_get_free_space(part_ptr) };
-
-                    print_c(&pad_right(&format!(" {}", p_name), 15), CONSOLE_COLOR_LIGHT_CYAN);
-                    print_c(&pad_right(&format!("| {}", d_name), 15), CONSOLE_COLOR_WHITE);
-                    print_c(&pad_right(&format!("| {}", fs_name), 15), CONSOLE_COLOR_WHITE);
-                    print_c(&pad_right(&format!("| {}", format_size_dec(p_cap)), 15), CONSOLE_COLOR_YELLOW);
-                    
-                    let free_str = if d_free == u64::MAX { 
-                        "Unknown".to_string() 
-                    } else { 
-                        let pct = if p_cap > 0 { (d_free * 100) / p_cap } else { 0 };
-                        format!("{} ({}%)", format_size_dec(d_free), pct)
-                    };
-                    print_c(&format!("| {}\n", free_str), CONSOLE_COLOR_LIGHT_GREEN);
-
-                    unsafe { device_release(part_ptr); }
-                } else {
-                    // Safe drop
-                }
-            } else {
-                // Not a partition of current disk
-            }
-        }
-
-        if d_total_cap > d_used_cap + (1024 * 1024) {
-            let unalloc = d_total_cap - d_used_cap;
-            print_c(&pad_right(" *Unallocated*", 15), CONSOLE_COLOR_DARK_GREY);
-            print_c(&pad_right(&format!("| {}", d_name), 15), CONSOLE_COLOR_DARK_GREY);
-            print_c(&pad_right("| None", 15), CONSOLE_COLOR_DARK_GREY);
-            print_c(&pad_right(&format!("| {}", format_size_dec(unalloc)), 15), CONSOLE_COLOR_DARK_GREY);
-            print_c("| Available for Use\n", CONSOLE_COLOR_DARK_GREY);
-        } else {
-            // Disk space fully claimed
-        }
-        unsafe { device_release(disk_ptr); }
-    }
-    
-    if !optical_list.is_empty() {
-        print_c("------------------------------------------------------------------------------------------------------------------------\n", CONSOLE_COLOR_DARK_GREY);
-        print_c(" OPTICAL MEDIA & READ-ONLY VOLUMES\n", CONSOLE_COLOR_LIGHT_CYAN);
-        print_c("------------------------------------------------------------------------------------------------------------------------\n", CONSOLE_COLOR_DARK_GREY);
+    // 2. Find partitions for each base disk and print in Tree format
+    for disk in base_disks.iter() {
+        let mut partitions = Vec::new();
         
-        for &opt_ptr in optical_list.iter() {
-            let d_name = unsafe { CStr::from_ptr(cpp_device_get_name(opt_ptr)).to_str().unwrap_or("?") };
-            let d_total_cap = unsafe { cpp_device_get_capacity(opt_ptr) };
+        // Optical media do not have partitions, skip.
+        if !disk.is_optical {
+            let mut p_idx = 0u32;
+            let mut p_name_buf =[0i8; 64];
+            let mut p_type = 0u8;
+            let prefix = format!("{}_p", disk.name);
+
+            while unsafe { ons_enumerate(path.as_ptr(), p_idx, p_name_buf.as_mut_ptr(), &mut p_type) } {
+                p_idx += 1;
+                let p_name = unsafe { CStr::from_ptr(p_name_buf.as_ptr()).to_str().unwrap_or("") };
+                if p_name.starts_with(&prefix) {
+                    let part_ptr = unsafe { device_get(p_name_buf.as_ptr()) };
+                    if !part_ptr.is_null() {
+                        let p_cap = unsafe { cpp_device_get_capacity(part_ptr) };
+                        let fs_val = unsafe { rust_device_detect_fs(part_ptr) };
+                        let d_free = unsafe { cpp_device_get_free_space(part_ptr) };
+                        let is_ro = unsafe { cpp_device_is_read_only(part_ptr) };
+
+                        partitions.push(PartInfo {
+                            name: p_name.to_string(),
+                            capacity: p_cap,
+                            fs_val,
+                            free_space: d_free,
+                            is_ro,
+                        });
+                        unsafe { device_release(part_ptr); }
+                    }
+                }
+            }
+            partitions.sort_by(|a, b| a.name.cmp(&b.name));
+        }
+
+        // Calculate base disk free space (Capacity - Sum of Partitions)
+        let mut used_capacity = 0u64;
+        for p in partitions.iter() {
+            used_capacity += p.capacity;
+        }
+        
+        let disk_free = if disk.is_optical { 0 } else { disk.capacity.saturating_sub(used_capacity) };
+        let disk_free_pct_x10 = if disk.capacity > 0 { (disk_free * 1000) / disk.capacity } else { 0 };
+        let disk_free_str = if disk.is_optical { 
+            "0 B (0.0%)".to_string() 
+        } else { 
+            format!("{} ({}.{}%)", format_size_dec(disk_free), disk_free_pct_x10 / 10, disk_free_pct_x10 % 10) 
+        };
+
+        // Base Disk Row
+        let name_color = if disk.is_optical { CONSOLE_COLOR_LIGHT_MAGENTA } else { CONSOLE_COLOR_LIGHT_GREEN };
+        let type_str = if disk.is_optical { "Optical" } else { "Disk" };
+        
+        print_c(&pad_right(&format!(" {}", disk.name), 20), name_color);
+        print_c(&pad_right(&format!("| {}", type_str), 15), CONSOLE_COLOR_WHITE);
+        print_c(&pad_right(&format!("| {}", format_size_dec(disk.capacity)), 20), CONSOLE_COLOR_YELLOW);
+        print_c(&pad_right(&format!("| {}", disk_free_str), 20), CONSOLE_COLOR_LIGHT_GREEN);
+        
+        print_c("| ", CONSOLE_COLOR_WHITE);
+        if disk.is_ro { 
+            print_c(&pad_right("R/O", 6), CONSOLE_COLOR_LIGHT_RED); 
+        } else { 
+            print_c(&pad_right("R/W", 6), CONSOLE_COLOR_LIGHT_GREEN); 
+        }
+        
+        print_c(&format!("| {}\n", disk.model), CONSOLE_COLOR_LIGHT_GREY);
+
+        // Print partitions
+        let total_children = partitions.len();
+        for (i, part) in partitions.iter().enumerate() {
+            let is_last = i == total_children - 1;
             
-            let fs_val = unsafe { rust_device_detect_fs(opt_ptr) };
-            let fs_name = match fs_val {
+            let fs_name = match part.fs_val {
                 1 => "fat32",
                 2 => "ext4",
                 3 => "iso9660",
                 4 => "udf",
                 _ => "raw",
             };
-            
-            print_c(&pad_right(&format!(" {}", d_name), 15), CONSOLE_COLOR_LIGHT_CYAN);
-            print_c(&pad_right(&format!("| {}", d_name), 15), CONSOLE_COLOR_WHITE);
+
+            print_tree_prefix(is_last);
+            print_c(&pad_right(&format!("{}", part.name), 16), CONSOLE_COLOR_LIGHT_CYAN);
             print_c(&pad_right(&format!("| {}", fs_name), 15), CONSOLE_COLOR_WHITE);
-            print_c(&pad_right(&format!("| {}", format_size_dec(d_total_cap)), 15), CONSOLE_COLOR_YELLOW);
-            print_c("| 0 B (0%) [Read-Only]\n", CONSOLE_COLOR_LIGHT_RED);
             
-            unsafe { device_release(opt_ptr); }
+            // Partition to disk ratio
+            let part_cap_pct_x10 = if disk.capacity > 0 { (part.capacity * 1000) / disk.capacity } else { 0 };
+            let part_cap_str = format!("{} ({}.{}%)", format_size_dec(part.capacity), part_cap_pct_x10 / 10, part_cap_pct_x10 % 10);
+            print_c(&pad_right(&format!("| {}", part_cap_str), 20), CONSOLE_COLOR_YELLOW);
+            
+            // Partition's internal free space
+            let free_str = if part.free_space == u64::MAX { 
+                "Unknown".to_string() 
+            } else { 
+                let pct_x10 = if part.capacity > 0 { (part.free_space * 1000) / part.capacity } else { 0 };
+                format!("{} ({}.{}%)", format_size_dec(part.free_space), pct_x10 / 10, pct_x10 % 10)
+            };
+            print_c(&pad_right(&format!("| {}", free_str), 20), CONSOLE_COLOR_LIGHT_GREEN);
+            
+            print_c("| ", CONSOLE_COLOR_WHITE);
+            if part.is_ro { 
+                print_c(&pad_right("R/O", 6), CONSOLE_COLOR_LIGHT_RED); 
+            } else { 
+                print_c(&pad_right("R/W", 6), CONSOLE_COLOR_LIGHT_GREEN); 
+            }
+            print_c("| -\n", CONSOLE_COLOR_DARK_GREY);
         }
-    } else {
-        // No optical media
     }
 
     print_c("========================================================================================================================\n", CONSOLE_COLOR_LIGHT_CYAN);

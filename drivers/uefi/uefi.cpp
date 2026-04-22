@@ -4,7 +4,7 @@
 #include "memory/kheap.h" // YENİ: Kmalloc için
 #include "libc/stdio.h"
 #include "libc/string.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "archs/cpu/x86_64/core/multiboot.h"
 #include "kernel/debug.h"
 

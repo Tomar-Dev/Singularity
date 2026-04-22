@@ -3,7 +3,6 @@
 #define ISR_H
 
 #include <stdint.h>
-#include "archs/cpu/cpu_hal.h" // HAL MIGRATION: Added for HAL macros
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,7 +49,16 @@ extern void irq253();
 extern void irq254();
 extern void irq255();
 
-// HAL MIGRATION: Direct ASM replaced with HAL abstraction
+#ifdef __cplusplus
+}
+#endif
+
+#include "archs/cpu/cpu_hal.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 static inline void disable_interrupts() { hal_interrupts_disable(); }
 static inline void enable_interrupts() { hal_interrupts_enable(); }
 static inline void halt_cpu() { hal_cpu_halt(); }

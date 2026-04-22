@@ -67,8 +67,8 @@ C_SOURCES   := $(filter-out $(ROOT_DIR)/kernel/kdb.c, $(C_SOURCES))
 C_SOURCES   := $(filter-out $(ROOT_DIR)/drivers/vga/%,                 $(C_SOURCES))
 C_SOURCES   := $(filter-out $(ROOT_DIR)/kernel/ksyms.c,                $(C_SOURCES))
 CXX_SOURCES := $(filter-out $(ROOT_DIR)/system/disk/gpt.cpp,           $(CXX_SOURCES))
-CXX_SOURCES := $(filter-out $(ROOT_DIR)/drivers/timer/hpet.cpp,        $(CXX_SOURCES))
-CXX_SOURCES := $(filter-out $(ROOT_DIR)/drivers/timer/pit.cpp,         $(CXX_SOURCES))
+CXX_SOURCES := $(filter-out $(ROOT_DIR)/archs/cpu/x86_64/timer/hpet.cpp,        $(CXX_SOURCES))
+CXX_SOURCES := $(filter-out $(ROOT_DIR)/archs/cpu/x86_64/timer/pit.cpp,         $(CXX_SOURCES))
 CXX_SOURCES := $(filter-out $(ROOT_DIR)/system/shell/utils.cpp,        $(CXX_SOURCES))
 CXX_SOURCES := $(filter-out $(ROOT_DIR)/system/fs/%,                   $(CXX_SOURCES))
 CXX_SOURCES := $(filter-out $(ROOT_DIR)/archs/fs/%,                    $(CXX_SOURCES))
@@ -85,7 +85,7 @@ ASM_SOURCES := $(filter-out $(ROOT_DIR)/system/fs/udf/udf_utils.asm,            
 ASM_SOURCES := $(filter-out $(ROOT_DIR)/system/shell/torture_asm.asm,           $(ASM_SOURCES))
 ASM_SOURCES := $(filter-out $(ROOT_DIR)/system/device/device_asm.asm,           $(ASM_SOURCES))
 ASM_SOURCES := $(filter-out $(ROOT_DIR)/system/process/math_helper.asm,         $(ASM_SOURCES))
-ASM_SOURCES := $(filter-out $(ROOT_DIR)/drivers/smbios/smbios_search.asm,       $(ASM_SOURCES))
+ASM_SOURCES := $(filter-out $(ROOT_DIR)/archs/cpu/x86_64/smbios/smbios_search.asm,       $(ASM_SOURCES))
 
 C_OBJECTS   := $(patsubst $(ROOT_DIR)/%.c,   $(BUILD_DIR)/%.o, $(C_SOURCES))
 CXX_OBJECTS := $(patsubst $(ROOT_DIR)/%.cpp, $(BUILD_DIR)/%.o, $(CXX_SOURCES))
@@ -130,7 +130,7 @@ CRITICAL_FILES := \
     drivers/storage/ahci/ahci_port.o \
     system/sync/mutex.o \
     system/sync/rwlock.o \
-    drivers/watchdog/wdt.o \
+    archs/cpu/x86_64/drivers/watchdog/wdt.o \
     system/debug/system_check.o \
     system/init/service.o \
     system/ffi/ffi_stats.o \

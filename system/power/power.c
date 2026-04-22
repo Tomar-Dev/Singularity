@@ -2,20 +2,19 @@
 #include "system/power/power.h"
 #include "archs/cpu/cpu_hal.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
-#include "drivers/acpi/acpi.h"
-#include "archs/cpu/x86_64/interrupts/isr.h"
-#include "drivers/video/framebuffer.h"
 #include "system/console/console.h"
-#include "drivers/uefi/uefi.h"
 #include "system/process/process.h"
-#include "drivers/timer/tsc.h" 
 
 extern void disk_cache_flush_all();
 extern void device_manager_shutdown();
 extern void print_status(const char* prefix, const char* msg, const char* status);
 extern void stdio_set_buffering(bool enabled);
 extern void stdio_flush();
+extern void serial_enable_direct_mode();
+extern void framebuffer_flush();
+extern bool uefi_available();
+extern void uefi_reset_system(int type);
+extern void acpi_power_off();
 
 void print_shutdown(const char* msg) {
     console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK); 
@@ -44,7 +43,7 @@ void system_reboot() {
     print_shutdown("Interrupts disabled");
 
     print_shutdown("System will reboot in 1 second...");
-    tsc_delay_ms(1000); 
+    hal_timer_delay_ms(1000); 
     
     uint8_t good = 0x02;
     while (good & 0x02) { good = hal_io_inb(0x64); }
@@ -56,7 +55,7 @@ void system_reboot() {
     
     __asm__ volatile ("lidt (%0); int3" : : "r" (0));
     
-    for(;;) hal_cpu_halt();
+    for(;;) { hal_cpu_halt(); }
 }
 
 void system_shutdown(const char* reason) {
@@ -81,7 +80,7 @@ void system_shutdown(const char* reason) {
     print_shutdown("Interrupts disabled");
 
     print_shutdown("System will power off in 1 second...");
-    tsc_delay_ms(1000); 
+    hal_timer_delay_ms(1000); 
     
     acpi_power_off();
     
@@ -95,5 +94,5 @@ void system_shutdown(const char* reason) {
 
     printf("\n Shutdown failed. It is safe to turn off manually.\n");
     stdio_flush();
-    for(;;) hal_cpu_halt();
+    for(;;) { hal_cpu_halt(); }
 }

@@ -6,8 +6,8 @@
 #include "archs/cpu/x86_64/sync/spinlock.h"
 #include "archs/cpu/x86_64/smp/smp.h"
 #include "archs/cpu/x86_64/interrupts/isr.h"
-#include "drivers/serial/serial.h"
-#include "memory/paging.h"
+#include "archs/cpu/cpu_hal.h"
+#include "archs/cpu/x86_64/memory/paging.h"
 #include "kernel/fastops.h"
 #include "kernel/profiler.h"
 #include "archs/cpu/x86_64/context/tss.h"
@@ -15,14 +15,15 @@
 #include "archs/cpu/x86_64/core/topology.h"
 #include "kernel/debug.h"
 #include "system/process/reaper.hpp"
+#include "system/security/rng.h" 
 
 #define KERNEL_STACK_PAGES (KERNEL_STACK_SIZE / PAGE_SIZE)
 #define PROCESS_T_ALIGN 64
 
-extern uint64_t timer_get_ticks();
 extern void print_status(const char* prefix, const char* msg, const char* status);
 extern uint8_t num_cpus;
 extern void prefetch_stack(void* ptr);
+extern uintptr_t __stack_chk_guard; 
 
 process_t*        process_list_head          = NULL;
 process_t*        process_list_tail          = NULL;
@@ -67,7 +68,12 @@ void wait_queue_push(wait_queue_t* q, process_t* task) {
 }
 
 process_t* wait_queue_pop_safe(wait_queue_t* q, uint32_t* skipped_count) {
-    if (!q) { return NULL; } else { /* Execute */ }
+    if (!q) { 
+        return NULL; 
+    } else { 
+        // Execute 
+    }
+    
     uint64_t flags = spinlock_acquire(&q->lock);
     uint32_t skipped = 0;
     
@@ -78,7 +84,7 @@ process_t* wait_queue_pop_safe(wait_queue_t* q, uint32_t* skipped_count) {
         if (!q->head) {
             q->tail = NULL;
         } else {
-            // Moving queue sequence...
+            // Moving queue sequence
         }
         
         task->wait_next = NULL;
@@ -88,13 +94,21 @@ process_t* wait_queue_pop_safe(wait_queue_t* q, uint32_t* skipped_count) {
             continue;
         } else {
             spinlock_release(&q->lock, flags);
-            if (skipped_count) { *skipped_count = skipped; } else { /* Skipped parameter is NULL */ }
+            if (skipped_count) { 
+                *skipped_count = skipped; 
+            } else { 
+                // Skipped parameter is NULL 
+            }
             return task;
         }
     }
     
     spinlock_release(&q->lock, flags);
-    if (skipped_count) { *skipped_count = skipped; } else { /* Parameter ignored */ }
+    if (skipped_count) { 
+        *skipped_count = skipped; 
+    } else { 
+        // Parameter ignored 
+    }
     return NULL;
 }
 
@@ -113,7 +127,12 @@ static void* alloc_kernel_stack() {
 }
 
 void free_kernel_stack(void* stack) {
-    if (!stack) { return; } else { /* Valid memory area */ }
+    if (!stack) { 
+        return; 
+    } else { 
+        // Valid memory area 
+    }
+    
     uint64_t flags = spinlock_acquire(&stack_pool_lock);
     if (stack_pool_top < MAX_STACK_POOL_SIZE) {
         stack_pool[stack_pool_top] = stack;
@@ -142,7 +161,12 @@ void init_process_manager() {
 void oom_reaper_scan() {
     serial_write("[OOM] Reaper Scanning... Looking for safe victims.\n");
     
-    if (task_list_lock) { rwlock_acquire_write(task_list_lock); } else { /* Lock not init'ed */ }
+    if (task_list_lock) { 
+        rwlock_acquire_write(task_list_lock); 
+    } else { 
+        // Lock not init'ed 
+    }
+    
     process_t* victim = NULL;
     uint64_t max_badness = 0;
     process_t* curr = process_list_head;
@@ -150,16 +174,36 @@ void oom_reaper_scan() {
     if (curr) {
         do {
             if (curr->pid > 10 && curr->state != PROCESS_ZOMBIE && curr->state != PROCESS_DEAD) {
-                if (curr->flags & PROC_FLAG_CRITICAL) { curr = curr->next; continue; } else { /* Safe victim candidate */ }
-                if (curr->priority >= PRIO_HIGH) { curr = curr->next; continue; } else { /* Priority checks out */ }
+                if (curr->flags & PROC_FLAG_CRITICAL) { 
+                    curr = curr->next; 
+                    continue; 
+                } else { 
+                    // Safe victim candidate 
+                }
+                
+                if (curr->priority >= PRIO_HIGH) { 
+                    curr = curr->next; 
+                    continue; 
+                } else { 
+                    // Priority checks out 
+                }
 
                 uint64_t badness = curr->used_pages * 10;
                 
-                if (curr->priority == PRIO_IDLE) { badness += 1000; }
-                else if (curr->priority == PRIO_LOW) { badness += 500; } else { /* Minimal badness added */ }
+                if (curr->priority == PRIO_IDLE) { 
+                    badness += OOM_PENALTY_IDLE; 
+                } else if (curr->priority == PRIO_LOW) { 
+                    badness += OOM_PENALTY_LOW; 
+                } else { 
+                    // Minimal badness added 
+                }
                 
-                uint64_t age = timer_get_ticks() - curr->start_tick;
-                if (age < 500) { badness += 200; } else { /* Stable aged task */ }
+                uint64_t age = hal_timer_get_ticks() - curr->start_tick;
+                if (age < OOM_YOUNG_TICKS) { 
+                    badness += OOM_PENALTY_YOUNG; 
+                } else { 
+                    // Stable aged task 
+                }
                 
                 if (badness > max_badness) {
                     max_badness = badness;
@@ -175,7 +219,12 @@ void oom_reaper_scan() {
     } else {
         // Head structure missing
     }
-    if (task_list_lock) { rwlock_release_write(task_list_lock); } else { /* Lock missing */ }
+    
+    if (task_list_lock) { 
+        rwlock_release_write(task_list_lock); 
+    } else { 
+        // Lock missing 
+    }
     
     if (victim) {
         char buf[128];
@@ -214,12 +263,19 @@ void kthread_starter() {
 }
 
 static void idle_task_fn() {
-    while (1) { __asm__ volatile("sti; hlt"); yield(); }
+    while (1) { 
+        __asm__ volatile("sti; hlt"); 
+        yield(); 
+    }
 }
 
 process_t* create_idle_task(uint8_t cpu_id) {
     process_t* idle = (process_t*)kmalloc_aligned(sizeof(process_t), PROCESS_T_ALIGN);
-    if (unlikely(!idle)) { return NULL; } else { /* Verified and mapped */ }
+    if (unlikely(!idle)) { 
+        return NULL; 
+    } else { 
+        // Verified and mapped 
+    }
     
     memset(idle, 0, sizeof(process_t));
     idle->pid = 0; 
@@ -227,19 +283,29 @@ process_t* create_idle_task(uint8_t cpu_id) {
     idle->state = PROCESS_RUNNING;
     idle->cpu_id = cpu_id;
     idle->priority = PRIO_IDLE;
+    idle->base_priority = PRIO_IDLE;
     idle->affinity = cpu_id; 
     idle->thread_fn = idle_task_fn;
     idle->flags = PROC_FLAG_KERNEL | PROC_FLAG_CRITICAL;
     
+    idle->stack_canary = get_secure_random();
+    if (idle->stack_canary == 0) { idle->stack_canary = __stack_chk_guard; } else { /* Valid */ }
+    
     memset(idle->fxsave_region, 0, FPU_BUFFER_SIZE);
     *((uint16_t*)&idle->fxsave_region[0]) = 0x037F; 
-    *((uint32_t*)&idle->fxsave_region[24]) = FPU_DEFAULT_MXCSR;
+    extern uint32_t fpu_default_mxcsr;
+    *((uint32_t*)&idle->fxsave_region[24]) = fpu_default_mxcsr;
     
     uint64_t current_rsp;
     __asm__ volatile("mov %%rsp, %0" : "=r"(current_rsp));
     idle->rsp = current_rsp;
     
-    if (task_list_lock) { rwlock_acquire_write(task_list_lock); } else { /* No task lock deployed yet */ }
+    if (task_list_lock) { 
+        rwlock_acquire_write(task_list_lock); 
+    } else { 
+        // No task lock deployed yet 
+    }
+    
     if (process_list_tail) {
         idle->next = process_list_head;
         process_list_tail->next = idle;
@@ -249,7 +315,13 @@ process_t* create_idle_task(uint8_t cpu_id) {
         process_list_tail = idle;
         idle->next = idle;
     }
-    if (task_list_lock) { rwlock_release_write(task_list_lock); } else { /* Clean lock release */ }
+    
+    if (task_list_lock) { 
+        rwlock_release_write(task_list_lock); 
+    } else { 
+        // Clean lock release 
+    }
+    
     return idle;
 }
 
@@ -258,7 +330,11 @@ static int create_task_internal(void (*entry_point)(), kernel_prio_t prio, int16
     if (unlikely(!new_proc)) { 
         oom_reaper_scan(); 
         new_proc = (process_t*)kmalloc_aligned(sizeof(process_t), PROCESS_T_ALIGN);
-        if (!new_proc) { return 0; } else { /* Harvest succeeded */ }
+        if (!new_proc) { 
+            return 0; 
+        } else { 
+            // Harvest succeeded 
+        }
     } else {
         // Proceed with regular task setup
     }
@@ -268,36 +344,55 @@ static int create_task_internal(void (*entry_point)(), kernel_prio_t prio, int16
 
     memset(new_proc, 0, sizeof(process_t));
     new_proc->pid = next_pid++;
-    if (next_pid == 0) { next_pid = 1; } else { /* Linear incrementation */ }
+    if (next_pid == 0) { 
+        next_pid = 1; 
+    } else { 
+        // Linear incrementation 
+    }
     
-    if (parent && parent->pid != 0) { new_proc->parent_id = parent->pid; }
-    else { new_proc->parent_id = 0; }
+    if (parent && parent->pid != 0) { 
+        new_proc->parent_id = parent->pid; 
+    } else { 
+        new_proc->parent_id = 0; 
+    }
     
     new_proc->flags = PROC_FLAG_KERNEL;
-    if (prio >= PRIO_HIGH) { new_proc->flags |= PROC_FLAG_CRITICAL; } else { /* Non-vital assignment */ }
+    if (prio >= PRIO_HIGH) { 
+        new_proc->flags |= PROC_FLAG_CRITICAL; 
+    } else { 
+        // Non-vital assignment 
+    }
     
     new_proc->state = PROCESS_READY;
     new_proc->thread_fn = entry_point;
     new_proc->priority = prio; 
+    new_proc->base_priority = prio;
     new_proc->affinity = affinity;
     new_proc->wake_tick = 0; 
-    new_proc->start_tick = timer_get_ticks();
+    new_proc->start_tick = hal_timer_get_ticks();
     new_proc->used_pages = KERNEL_STACK_PAGES; 
     new_proc->is_queued = false;
+    
+    new_proc->stack_canary = get_secure_random() ^ ((uint64_t)new_proc->pid << 32) ^ hal_timer_get_ticks();
+    if (new_proc->stack_canary == 0) { new_proc->stack_canary = 0xDEADBEEFCAFEBABEULL; } else { /* Valid */ }
     
     static volatile uint32_t rr_cpu = 0;
     uint8_t target_cpu;
     if (affinity != -1) {
         target_cpu = (uint8_t)affinity;
     } else {
-        if (num_cpus == 0) { target_cpu = 0; }
-        else { target_cpu = (uint8_t)(__atomic_fetch_add(&rr_cpu, 1, __ATOMIC_RELAXED) % num_cpus); }
+        if (num_cpus == 0) { 
+            target_cpu = 0; 
+        } else { 
+            target_cpu = (uint8_t)(__atomic_fetch_add(&rr_cpu, 1, __ATOMIC_RELAXED) % num_cpus); 
+        }
     }
     new_proc->cpu_id = target_cpu;
 
     memset(new_proc->fxsave_region, 0, FPU_BUFFER_SIZE);
     *((uint16_t*)&new_proc->fxsave_region[0]) = 0x037F; 
-    *((uint32_t*)&new_proc->fxsave_region[24]) = FPU_DEFAULT_MXCSR;
+    extern uint32_t fpu_default_mxcsr;
+    *((uint32_t*)&new_proc->fxsave_region[24]) = fpu_default_mxcsr;
 
     void* stack_addr = alloc_kernel_stack();
     if (unlikely(!stack_addr)) {
@@ -313,10 +408,17 @@ static int create_task_internal(void (*entry_point)(), kernel_prio_t prio, int16
         new_proc->stack_base = stack_addr;
     }
     
-    uint64_t* stack_top = (uint64_t*)((uint64_t)stack_addr + KERNEL_STACK_SIZE);
+    uint64_t random_pad = (get_secure_random() % 512) & ~15ULL;
+    uint64_t* stack_top = (uint64_t*)((uint64_t)stack_addr + KERNEL_STACK_SIZE - random_pad);
+    
     setup_stack_frame(stack_top, entry_point, NULL, &new_proc->rsp);
 
-    if (task_list_lock) { rwlock_acquire_write(task_list_lock); } else { /* Free flow */ }
+    if (task_list_lock) { 
+        rwlock_acquire_write(task_list_lock); 
+    } else { 
+        // Free flow 
+    }
+    
     if (!process_list_head) {
         process_list_head = new_proc;
         process_list_tail = new_proc;
@@ -326,15 +428,28 @@ static int create_task_internal(void (*entry_point)(), kernel_prio_t prio, int16
         process_list_tail->next = new_proc;
         process_list_tail = new_proc;
     }
-    if (task_list_lock) { rwlock_release_write(task_list_lock); } else { /* Clean flow */ }
+    
+    if (task_list_lock) { 
+        rwlock_release_write(task_list_lock); 
+    } else { 
+        // Clean flow 
+    }
     
     sched_enqueue(target_cpu, new_proc, prio, affinity);
     return 1;
 }
 
-int create_kernel_task_prio(void (*entry_point)(), kernel_prio_t prio) { return create_task_internal(entry_point, prio, -1); }
-int create_kernel_task_pinned(void (*entry_point)(), kernel_prio_t prio, int cpu_id) { return create_task_internal(entry_point, prio, (int16_t)cpu_id); }
-void create_kernel_task(void (*entry_point)()) { create_kernel_task_prio(entry_point, PRIO_NORMAL); }
+int create_kernel_task_prio(void (*entry_point)(), kernel_prio_t prio) { 
+    return create_task_internal(entry_point, prio, -1); 
+}
+
+int create_kernel_task_pinned(void (*entry_point)(), kernel_prio_t prio, int cpu_id) { 
+    return create_task_internal(entry_point, prio, (int16_t)cpu_id); 
+}
+
+void create_kernel_task(void (*entry_point)()) { 
+    create_kernel_task_prio(entry_point, PRIO_NORMAL); 
+}
 
 __attribute__((no_stack_protector))
 void process_exit() {
@@ -359,42 +474,76 @@ void process_exit() {
     
     reaper_invoke();
     schedule();
-    while(1) hal_cpu_halt();
+    while(1) { hal_cpu_halt(); }
 }
 
-void reaper_invoke() { signal_reaper(); }
+void reaper_invoke() { 
+    extern void signal_reaper();
+    signal_reaper(); 
+}
 
-// OPT-002 FIX: Changed to rwlock_acquire_read to prevent lock starvation
 void process_get_info(int* total, int* running, int* zombie) {
     *total = 0; *running = 0; *zombie = 0;
-    if (task_list_lock) { rwlock_acquire_read(task_list_lock); } else { /* No lock mechanism deployed yet */ }
+    if (task_list_lock) { 
+        rwlock_acquire_read(task_list_lock); 
+    } else { 
+        // No lock mechanism deployed yet 
+    }
+    
     process_t* curr = process_list_head;
     if (curr) {
         do {
             (*total)++;
-            if (curr->state == PROCESS_RUNNING) { (*running)++; } else { /* Waiting or Zombie */ }
-            if (curr->state == PROCESS_ZOMBIE || curr->state == PROCESS_DEAD) { (*zombie)++; } else { /* Structurally Alive */ }
+            if (curr->state == PROCESS_RUNNING) { 
+                (*running)++; 
+            } else { 
+                // Waiting or Zombie 
+            }
+            
+            if (curr->state == PROCESS_ZOMBIE || curr->state == PROCESS_DEAD) { 
+                (*zombie)++; 
+            } else { 
+                // Structurally Alive 
+            }
             curr = curr->next;
         } while (curr != process_list_head);
     } else {
         // No threads detected
     }
-    if (task_list_lock) { rwlock_release_read(task_list_lock); } else { /* Clean bypass */ }
+    
+    if (task_list_lock) { 
+        rwlock_release_read(task_list_lock); 
+    } else { 
+        // Clean bypass 
+    }
 }
 
-// OPT-002 FIX: Changed to rwlock_acquire_read
 int process_get_zombie_count() {
     int zombie = 0;
-    if (task_list_lock) { rwlock_acquire_read(task_list_lock); } else { /* Valid operation unhindered */ }
+    if (task_list_lock) { 
+        rwlock_acquire_read(task_list_lock); 
+    } else { 
+        // Valid operation unhindered 
+    }
+    
     process_t* curr = process_list_head;
     if (curr) {
         do {
-            if (curr->state == PROCESS_ZOMBIE || curr->state == PROCESS_DEAD) { zombie++; } else { /* Operational Node */ }
+            if (curr->state == PROCESS_ZOMBIE || curr->state == PROCESS_DEAD) { 
+                zombie++; 
+            } else { 
+                // Operational Node 
+            }
             curr = curr->next;
         } while (curr != process_list_head);
     } else {
         // System clear
     }
-    if (task_list_lock) { rwlock_release_read(task_list_lock); } else { /* Complete */ }
+    
+    if (task_list_lock) { 
+        rwlock_release_read(task_list_lock); 
+    } else { 
+        // Complete 
+    }
     return zombie;
 }

@@ -2,9 +2,8 @@
 #include "memory/paging.h"
 #include "memory/pmm.h"
 #include "libc/string.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "archs/cpu/x86_64/sync/spinlock.h"
-#include "drivers/apic/apic.h"
 #include "archs/cpu/x86_64/smp/smp.h"
 
 #define VMM_START       0xFFFF800000000000ULL

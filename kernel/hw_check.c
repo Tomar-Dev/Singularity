@@ -1,6 +1,6 @@
 // kernel/hw_check.c
 #include "archs/cpu/x86_64/core/cpuid.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "libc/stdio.h"
 #include "kernel/debug.h"
 #include "archs/cpu/x86_64/core/msr.h"

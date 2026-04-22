@@ -1,7 +1,7 @@
 // archs/cpu/x86_64/memory/pat.c
 #include "archs/cpu/x86_64/core/msr.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "archs/cpu/x86_64/core/cpuid.h"
 void init_pat() {
     uint32_t eax, ebx, ecx, edx;

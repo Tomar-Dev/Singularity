@@ -24,7 +24,6 @@ private:
     
     void logStartup(const char* msg, int status); 
 
-    // GÜVENLİK YAMASI: Command Pattern Mimarisi
     struct ShellCommand {
         const char* name;
         int (Shell::*handler)(const char*);
@@ -46,7 +45,6 @@ public:
     void executeScript(const char* path);
 
     // --- System & Core Commands ---
-    // FIX: Tüm komutların argüman imzaları (Signature) standartlaştırıldı.
     int cmd_help(const char* arg);
     int cmd_clear(const char* arg);
     int cmd_echo(const char* arg);
@@ -85,7 +83,6 @@ public:
     int cmd_mkfs(const char* arg);
     int cmd_fdisk(const char* arg);
     int cmd_disks(const char* arg);
-    int cmd_parts(const char* arg);
 };
 
 extern "C" {

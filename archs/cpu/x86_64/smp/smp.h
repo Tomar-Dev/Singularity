@@ -10,21 +10,25 @@ extern "C" {
 
 #define MAX_CPUS 32
 
+#define SMP_TRAMPOLINE_BASE 0x8000
+#define SMP_TRAMPOLINE_PT   0x7000
+#define SMP_FALLBACK_FREQ   2000000000ULL
+
 struct PerCPU;
 
 typedef struct PerCPU {
-    struct PerCPU* self;          // 0x00
-    uint64_t kernel_stack;        // 0x08
-    uint64_t user_rsp_scratch;    // 0x10
-    uint32_t lapic_id;            // 0x18
-    uint32_t cpu_id;              // 0x1C
-    void* current_process;        // 0x20
-    uintptr_t stack_canary;       // 0x28
-    uint64_t syscall_stack;       // 0x30  <-- GÜVENLİK YAMASI: İzole Syscall Yığını
-    void* switching_task;         // 0x38
-    void* pending_task;           // 0x40
-    uint64_t idle_ticks;          // 0x48
-    volatile int32_t preempt_count; // 0x50
+    struct PerCPU* self;          
+    uint64_t kernel_stack;        
+    uint64_t user_rsp_scratch;    
+    uint32_t lapic_id;            
+    uint32_t cpu_id;              
+    void* current_process;        
+    uintptr_t stack_canary;       
+    uint64_t syscall_stack;       
+    void* switching_task;         
+    void* pending_task;           
+    uint64_t idle_ticks;          
+    volatile int32_t preempt_count; 
     uint8_t _pad[64 - (0x54 % 64)]; 
 } __attribute__((packed, aligned(64))) per_cpu_t;
 
@@ -52,8 +56,11 @@ static inline per_cpu_t* this_cpu_ptr() {
 }
 
 static inline per_cpu_t* per_cpu_ptr(int cpu_id) {
-    if (cpu_id >= MAX_CPUS) return 0;
-    return per_cpu_data[cpu_id];
+    if (cpu_id >= MAX_CPUS) {
+        return 0;
+    } else {
+        return per_cpu_data[cpu_id];
+    }
 }
 
 static inline uint32_t this_cpu_id() {

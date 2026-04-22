@@ -3,7 +3,7 @@
 #include "memory/kheap.h"
 #include "libc/string.h"
 #include "kernel/debug.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 
 KContainer::KContainer() : KObject(KObjectType::CONTAINER), head(nullptr), rw_lock(nullptr) {
     rw_lock = rwlock_create();

@@ -7,18 +7,18 @@
 #include "system/power/power.h"
 #include "archs/cpu/x86_64/core/thermal.h"
 #include "drivers/pci/pci.hpp"
-#include "drivers/misc/speaker.h"
+#include "archs/cpu/x86_64/drivers/misc/speaker.h"
 #include "system/gui/gui.h"
 #include "system/graphics/graphics.h"
 #include "archs/cpu/x86_64/core/cpuid.h"
-#include "archs/memory/kheap.h"
+#include "memory/kheap.h"
 #include "system/console/console.h"
 #include "kernel/profiler.h"
 #include "archs/cpu/x86_64/smp/smp.h"
-#include "drivers/acpi/numa.h"
+#include "archs/cpu/x86_64/acpi/numa.h"
 #include "system/process/process.h"
-#include "drivers/apic/apic.h"
-#include "drivers/acpi/acpi.h"
+#include "archs/cpu/x86_64/apic/apic.h"
+#include "archs/cpu/x86_64/acpi/acpi.h"
 #include "system/debug/system_check.h"
 #include "kernel/config.h"
 #include "system/ffi/ffi.hpp"
@@ -52,8 +52,7 @@ const Shell::ShellCommand Shell::command_table[] = {
     {"mount",       &Shell::cmd_mount,       "Mount a filesystem manually"},
     {"automount",   &Shell::cmd_automount,   "Auto-mount all discovered volumes"},
     {"ramdisk",     &Shell::cmd_ramdisk,     "Create Volatile Storage (Ramdisk)"},
-    {"disks",       &Shell::cmd_disks,       "List all physical storage devices"},
-    {"parts",       &Shell::cmd_parts,       "List all disk partitions"},
+    {"disks",       &Shell::cmd_disks,       "List all storage devices and partitions"},
     {"system",      &Shell::cmd_system,      "Display full system information"},
     {"systemcheck", &Shell::cmd_systemcheck, "Run kernel health diagnostics"},
     {"taskmgr",     &Shell::cmd_taskmgr,     "Show Task Manager"},

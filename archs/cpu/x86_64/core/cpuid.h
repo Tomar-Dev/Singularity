@@ -32,6 +32,9 @@ typedef struct {
     char brand_string[65];
     cpu_vendor_t vendor;
 
+    uint32_t max_std_func;
+    uint32_t max_ext_func;
+
     uint32_t family;
     uint32_t model;
     uint32_t stepping;
@@ -45,20 +48,35 @@ typedef struct {
     uint32_t physical_cores;
     uint32_t logical_cores;
 
-    bool has_fpu; bool has_apic; bool has_msr; bool has_longmode;
+    bool has_fpu; 
+    bool has_apic; 
+    bool has_msr; 
+    bool has_longmode;
 
     bool has_mmx;
-    bool has_sse; bool has_sse2; bool has_sse3; bool has_ssse3;
-    bool has_sse4_1; bool has_sse4_2; bool has_sse4a;
-    bool has_avx; bool has_avx2; bool has_avx512; bool has_fma3;
-    bool has_aes; bool has_sha;
+    bool has_sse; 
+    bool has_sse2; 
+    bool has_sse3; 
+    bool has_ssse3;
+    bool has_sse4_1; 
+    bool has_sse4_2; 
+    bool has_sse4a;
+    bool has_avx; 
+    bool has_avx2; 
+    bool has_avx512; 
+    bool has_fma3;
+    bool has_aes; 
+    bool has_sha;
 
     bool has_rdrand; 
-    bool has_rdseed; // BUG-007 FIX: Struct parameter created
+    bool has_rdseed; 
     bool has_xsave;
     
-    bool has_vmx; bool has_svm; bool has_ht;
-    bool has_dts; bool has_pdcm;
+    bool has_vmx; 
+    bool has_svm; 
+    bool has_ht;
+    bool has_dts; 
+    bool has_pdcm;
     bool has_xsaveopt;
     bool has_hwp;
     bool has_cppc;

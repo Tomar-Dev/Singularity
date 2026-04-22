@@ -8,7 +8,6 @@
 #include "archs/cpu/cpu_hal.h"
 #include "memory/paging.h" 
 #include "archs/storage/storage_hal.h" 
-#include "drivers/serial/serial.h" 
 
 extern "C" {
     void print_status(const char* prefix, const char* msg, const char* status);

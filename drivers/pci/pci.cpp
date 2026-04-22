@@ -3,7 +3,6 @@
 #include "archs/cpu/cpu_hal.h"
 #include "libc/stdio.h"
 #include "libc/string.h"
-#include "drivers/serial/serial.h"
 
 extern "C" {
     uint32_t rust_pcie_read_dword(uint8_t bus, uint8_t dev, uint8_t func, uint16_t offset);

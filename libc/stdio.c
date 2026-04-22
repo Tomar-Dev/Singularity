@@ -2,7 +2,7 @@
 #include "libc/stdio.h"
 #include "drivers/video/framebuffer.h"
 #include "system/console/console.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "libc/string.h"
 #include "archs/cpu/x86_64/sync/spinlock.h"
 #include "system/process/process.h"

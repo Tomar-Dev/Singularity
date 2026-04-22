@@ -30,17 +30,38 @@ void     hal_io_outb(uint32_t port, uint8_t val);
 void     hal_io_outw(uint32_t port, uint16_t val);
 void     hal_io_outl(uint32_t port, uint32_t val);
 uint8_t  hal_io_inb(uint32_t port);
-uint16_t hal_io_inw(uint32_t port);
+uint16_t  hal_io_inw(uint32_t port);
 uint32_t hal_io_inl(uint32_t port);
 
 void     hal_io_insw(uint32_t port, void* buffer, uint32_t count);
 void     hal_io_outsw(uint32_t port, const void* buffer, uint32_t count);
 
-// BUG-004 FIX: Inline assembly removed to prevent #UD Exceptions on non-SSE4.2 hardware
 uint32_t hal_crc32_u64(uint32_t crc, uint64_t data);
 
 #ifdef __cplusplus
 }
+#endif
+
+/* --- X86_64 ARCHITECTURE SPECIFIC INCLUDES --- */
+#if defined(__x86_64__) || defined(_M_X64)
+#include "archs/cpu/x86_64/acpi/acpi.h"
+#include "archs/cpu/x86_64/acpi/numa.h"
+#include "archs/cpu/x86_64/apic/apic.h"
+#include "archs/cpu/x86_64/apic/ioapic.h"
+#include "archs/cpu/x86_64/timer/pit_lock.h"
+#include "archs/cpu/x86_64/timer/tsc.h"
+#include "archs/cpu/x86_64/smbios/smbios.h"
+#include "archs/cpu/x86_64/drivers/keyboard/keyboard.h"
+#include "archs/cpu/x86_64/drivers/mouse/mouse.h"
+#include "archs/cpu/x86_64/drivers/misc/speaker.h"
+#include "archs/cpu/x86_64/drivers/serial/serial.h"
+#include "archs/cpu/x86_64/drivers/rtc/rtc.hpp"
+
+#ifdef __cplusplus
+#include "archs/cpu/x86_64/drivers/watchdog/wdt.hpp"
+#include "archs/cpu/x86_64/drivers/bus/smbus.hpp"
+#endif
+
 #endif
 
 #endif

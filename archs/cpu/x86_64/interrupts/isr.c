@@ -5,15 +5,12 @@
 #include "libc/stdio.h"
 #include "drivers/video/framebuffer.h"
 #include "system/console/console.h"
-#include "drivers/apic/apic.h"
 #include "kernel/debug.h"
-#include "drivers/serial/serial.h"
 #include "kernel/ksyms.h" 
 #include "system/process/process.h" 
 
 extern void set_panic_registers(registers_t* regs);
 extern volatile bool global_panic_active;
-extern uint8_t get_apic_id();
 extern void kir_dispatch_irq(uint8_t vector); 
 extern void panic_at(const char* file, int line, kernel_error_t code, const char* message);
 
@@ -33,7 +30,11 @@ void register_interrupt_handler(uint8_t n, isr_t handler) {
 }
 
 static void fpu_exception_handler(registers_t* regs) {
-    if (!regs) return;
+    if (!regs) {
+        return;
+    } else {
+        // Valid registers
+    }
 
     bool from_user_mode = (regs->cs & 3) == 3;
 
@@ -46,12 +47,11 @@ static void fpu_exception_handler(registers_t* regs) {
         default: ex_name = "Undefined FPU Fault"; break;
     }
 
-    uint8_t cpu_id = get_cpu_id_fast();
+    uint8_t cpu_id = (uint8_t)hal_cpu_get_id();
     process_t* curr = current_process[cpu_id];
     bool is_sandboxed_driver = (!from_user_mode && curr && curr->pid != 0 && !(curr->flags & PROC_FLAG_CRITICAL));
 
     if (from_user_mode || is_sandboxed_driver) {
-        // GÜVENLİK YAMASI: Süreç hemen ölmek yerine lekeli (TAINTED) olarak işaretlenir.
         curr->flags |= PROC_FLAG_TAINTED; 
         
         const char* mode_str = from_user_mode ? "User-Space" : "Sandboxed Driver";
@@ -60,7 +60,6 @@ static void fpu_exception_handler(registers_t* regs) {
         process_exit();
         return; 
     } else {
-        // Çekirdek kritik alanı patladıysa panik
         if (global_panic_active) {
             dbg_direct("\n[FATAL] FPU Exception WHILE in panic state! (Double Panic)\n");
             for (;;) { __asm__ volatile("cli; hlt"); }
@@ -72,7 +71,9 @@ static void fpu_exception_handler(registers_t* regs) {
             
             if (regs->int_no == 6) {
                 dbg_direct("[CPU] DIAGNOSIS: xsaveopt/xsave/fxsave may have been called without proper CR4.OSXSAVE / XCR0 initialization on this core.\n");
-            } else {}
+            } else {
+                // Other FPU fault
+            }
 
             set_panic_registers(regs);
             panic_at("isr.c", __LINE__, KERR_CPU_EX, buf);
@@ -81,13 +82,18 @@ static void fpu_exception_handler(registers_t* regs) {
 }
 
 void isr_handler(registers_t* regs) {
-    if (!regs) return;
+    if (!regs) {
+        return;
+    } else {
+        // Valid registers
+    }
 
     if (regs->int_no == 8) {
         dbg_direct("\n[CPU] DOUBLE FAULT (#DF) - System halted.\n");
-        // FIX: hal_cpu_halt NMI'da uyanabilir, bu nedenle sonsuz kilit atıldı.
         for (;;) { __asm__ volatile("cli; hlt"); }
-    } else {}
+    } else {
+        // Not a double fault
+    }
 
     bool from_user_mode = (regs->cs & 3) == 3;
 
@@ -102,28 +108,37 @@ void isr_handler(registers_t* regs) {
         if (sym) {
             snprintf(dp_buf, sizeof(dp_buf), "Location: <%s+%llu>\n", sym, offset);
             dbg_direct(dp_buf);
-        } else {}
+        } else {
+            // Symbol not found
+        }
         
         dbg_direct("System gracefully halted to prevent infinite loop.\n");
         for (;;) { __asm__ volatile("cli; hlt"); }
-    } else {}
+    } else {
+        // Normal execution
+    }
 
     if (regs->int_no < 32) {
         set_panic_registers(regs);
-    } else {}
+    } else {
+        // Not an exception
+    }
 
     if (interrupt_handlers[regs->int_no] != 0) {
         isr_t handler = interrupt_handlers[regs->int_no];
         handler(regs);
-        if (regs->int_no < 32) set_panic_registers(NULL);
+        if (regs->int_no < 32) {
+            set_panic_registers(NULL);
+        } else {
+            // Not an exception
+        }
         return;
     } else {
-        uint8_t cpu_id = get_cpu_id_fast();
+        uint8_t cpu_id = (uint8_t)hal_cpu_get_id();
         process_t* curr = current_process[cpu_id];
         bool is_sandboxed_driver = (!from_user_mode && curr && curr->pid != 0 && !(curr->flags & PROC_FLAG_CRITICAL) && regs->int_no < 32);
 
         if (from_user_mode || is_sandboxed_driver) {
-            // GÜVENLİK YAMASI: Process Tainting
             curr->flags |= PROC_FLAG_TAINTED;
             const char* mode_str = from_user_mode ? "User-Space" : "Sandboxed Driver";
             serial_printf("[KERNEL] %s process %lu TAINTED and killed by Unhandled Exception #%lu at RIP: 0x%lx\n", 
@@ -149,17 +164,22 @@ void register_fpu_exception_handlers(void) {
 }
 
 void irq_handler(registers_t* regs) {
-    if (!regs) return;
+    if (!regs) {
+        return;
+    } else {
+        // Valid registers
+    }
+
+    extern bool is_apic_enabled();
+    extern void apic_send_eoi();
 
     if (is_apic_enabled()) {
-        // GÜVENLİK YAMASI: Spurious IRQ Handling APIC uyumlu hale getirildi.
         if (regs->int_no == 0xFF) {
-            return; // Spurious interrupt safely ignored
+            return; 
         } else {
             apic_send_eoi(); 
         }
     } else {
-        // MİMARİ YAMASI: Legacy-Free ortamda PIC üzerinden IRQ gelmesi ölümcüldür.
         panic_at("isr.c", __LINE__, KERR_UNHANDLED_IRQ, "FATAL: Legacy PIC IRQ received in strictly APIC-only environment!");
         return;
     }
@@ -172,8 +192,6 @@ void irq_handler(registers_t* regs) {
     } else {
         // Unhandled APIC IRQ
     }
-    
-    // GÜVENLİK YAMASI: Eski (Legacy 8259) PIC outb çağrıları tamamen silinmiştir.
 }
 
 static void pic_remap() {

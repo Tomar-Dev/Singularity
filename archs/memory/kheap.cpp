@@ -4,7 +4,7 @@
 #include "memory/paging.h"
 #include "libc/stdio.h"
 #include "libc/string.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "kernel/debug.h"
 #include "system/security/rng.h"
 #include "kernel/config.h"

@@ -5,10 +5,9 @@
 #include "memory/pmm.h"
 #include "libc/stdio.h"
 #include "libc/string.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "archs/cpu/x86_64/sync/spinlock.h"
 #include "archs/cpu/x86_64/smp/smp.h" 
-#include "archs/cpu/cpu_hal.h"
 
 extern "C" {
     extern rwlock_t task_list_lock;

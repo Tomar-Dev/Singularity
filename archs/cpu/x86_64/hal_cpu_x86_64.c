@@ -11,9 +11,12 @@ extern void sleep_ns(uint64_t ns);
 extern uint64_t timer_get_ticks();
 extern void invlpg_range_asm_fast(uint64_t start, size_t count);
 extern int get_cpu_numa_node(uint8_t apic_id);
+extern uint8_t get_apic_id(); 
 
 uint32_t hal_cpu_get_id(void) {
-    return (uint32_t)get_current_cpu_id();
+    // FIX: Sonsuz özyineleme (Infinite Recursion) engellendi.
+    // Doğrudan donanım APIC ID'si okunur.
+    return (uint32_t)get_apic_id();
 }
 
 uint32_t hal_cpu_get_count(void) {
@@ -28,7 +31,7 @@ int hal_cpu_get_numa_node(uint32_t cpu_id) {
         if (per_cpu_data[cpu_id]) {
             return get_cpu_numa_node(cpus[cpu_id].lapic_id);
         } else {
-            return 0; // Default node
+            return 0; 
         }
     }
 }
@@ -77,8 +80,6 @@ void hal_tlb_flush_all(void) {
     __asm__ volatile("mov %0, %%cr3" :: "r"(cr3) : "memory");
 }
 
-// Bulgu 3.1 & FIX: Removed [[unlikely]] attribute to fix Clang C-mode warning. 
-// Using __builtin_expect directly for optimal branch prediction.
 #define HAL_PORT_CHECK(p) \
     if (__builtin_expect((p) > 0xFFFF, 0)) { \
         panic_at(__FILE__, __LINE__, KERR_OUT_OF_BOUNDS, "HAL I/O: Port address exceeds 0xFFFF!"); \

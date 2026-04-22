@@ -5,7 +5,7 @@
 #include "libc/stdio.h"
 #include "libc/string.h"
 #include "kernel/debug.h"
-#include "drivers/keyboard/keyboard.h" 
+#include "archs/cpu/cpu_hal.h"
 #include "kernel/config.h"
 
 void draw_circle(uint32_t xc, uint32_t yc, int r, uint32_t color) {

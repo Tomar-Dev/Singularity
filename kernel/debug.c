@@ -3,7 +3,7 @@
 #include "libc/stdio.h"
 #include "libc/string.h"
 #include "archs/cpu/x86_64/sync/spinlock.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "kernel/ksyms.h" 
 #include "drivers/uefi/uefi.h"
 #include "kernel/config.h"

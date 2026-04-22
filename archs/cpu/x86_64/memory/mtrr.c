@@ -2,7 +2,7 @@
 #include "archs/cpu/x86_64/memory/mtrr.h"
 #include "archs/cpu/x86_64/core/msr.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 #include "archs/cpu/x86_64/core/cpuid.h"
 
 #define MSR_MTRR_CAP        0xFE

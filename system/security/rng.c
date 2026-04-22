@@ -2,7 +2,6 @@
 #include "system/security/rng.h"
 #include "archs/cpu/x86_64/core/cpuid.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
 #include "archs/cpu/cpu_hal.h"
 
 static bool rng_initialized = false;

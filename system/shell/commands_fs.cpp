@@ -9,7 +9,7 @@
 #include "kernel/config.h"
 #include "system/console/console.h"
 #include "archs/kom/kom_aal.h"
-#include "archs/memory/kheap.h"
+#include "memory/kheap.h"
 #include "system/ffi/ffi.h"
 
 extern "C" {
@@ -19,7 +19,6 @@ extern "C" {
 
     void console_set_auto_flush(bool enabled);
     void rust_device_print_disks(void);
-    void rust_device_print_parts(void);
 }
 
 int Shell::cmd_ls(const char* arg) {
@@ -569,14 +568,6 @@ int Shell::cmd_disks(const char* arg) {
     (void)arg;
     console_set_auto_flush(false);
     rust_device_print_disks();
-    console_set_auto_flush(true);
-    return 0;
-}
-
-int Shell::cmd_parts(const char* arg) {
-    (void)arg;
-    console_set_auto_flush(false);
-    rust_device_print_parts();
     console_set_auto_flush(true);
     return 0;
 }

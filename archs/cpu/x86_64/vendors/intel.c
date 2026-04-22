@@ -2,7 +2,7 @@
 #include "archs/cpu/x86_64/core/cpuid.h"
 #include "archs/cpu/x86_64/core/msr.h"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 extern uint64_t timer_get_ticks();
 
 #define INTEL_PSTATE_CORE_SCALING 100000

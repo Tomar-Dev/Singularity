@@ -1,7 +1,7 @@
 // system/irq/kir.cpp
 #include "system/irq/kir.hpp"
 #include "libc/stdio.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 
 static KInterrupt* irq_map[256] = {nullptr};
 static spinlock_t kir_lock = {0, 0, {0}};

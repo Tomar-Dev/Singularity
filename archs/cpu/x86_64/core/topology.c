@@ -3,7 +3,8 @@
 #include "archs/cpu/x86_64/core/cpuid.h"
 #include "libc/stdio.h"
 #include "drivers/serial/serial.h"
-#include "drivers/apic/apic.h" 
+#include "archs/cpu/x86_64/apic/apic.h" 
+
 cpu_topology_t cpu_topologies[32];
 
 void detect_cpu_topology() {
@@ -18,17 +19,29 @@ void detect_cpu_topology() {
     uint32_t eax, ebx, ecx, edx;
 
     if (cpu_info.vendor == VENDOR_INTEL) {
-        __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) 
-                         : "a"(0x0B), "c"(0));
-        
-        int smt_shift = eax & 0x1F; 
-        
-        if (smt_shift > 0) {
-            cpu_topologies[current_id].thread_id = current_id & ((1 << smt_shift) - 1);
-            cpu_topologies[current_id].core_id = (current_id >> smt_shift);
+        if (cpu_info.max_std_func >= 0x0B) {
+            __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) 
+                             : "a"(0x0B), "c"(0));
+            
+            int smt_shift = eax & 0x1F; 
+            
+            if (smt_shift > 0) {
+                cpu_topologies[current_id].thread_id = current_id & ((1 << smt_shift) - 1);
+                cpu_topologies[current_id].core_id = (current_id >> smt_shift);
+            } else {
+                // SMT not active or not supported
+            }
+        } else {
+            // Fallback for older Intel CPUs without Extended Topology Enumeration
+            if (cpu_info.has_ht) {
+                cpu_topologies[current_id].thread_id = current_id & 1;
+                cpu_topologies[current_id].core_id = current_id >> 1;
+            } else {
+                // Single thread per core
+            }
         }
         
-        if (cpu_info.family == 6 && cpu_info.model >= 0x97) {
+        if (cpu_info.family == 6 && cpu_info.model >= 0x97 && cpu_info.max_std_func >= 0x1A) {
              __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) 
                          : "a"(0x1A), "c"(0));
              
@@ -38,14 +51,12 @@ void detect_cpu_topology() {
              } else {
                  cpu_topologies[current_id].is_p_core = true;
              }
+        } else {
+            // Hybrid architecture not supported, assume all are P-Cores
         }
 
     } else if (cpu_info.vendor == VENDOR_AMD || cpu_info.vendor == VENDOR_HYGON) {
-        // AMD Topology Extensions (Leaf 0x8000001E)
-        uint32_t max_ext;
-        __asm__ volatile("cpuid" : "=a"(max_ext) : "a"(0x80000000));
-        
-        if (max_ext >= 0x8000001E) {
+        if (cpu_info.max_ext_func >= 0x8000001E) {
             __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) 
                              : "a"(0x8000001E));
             
@@ -54,8 +65,20 @@ void detect_cpu_topology() {
             if (cpu_info.has_ht) {
                 cpu_topologies[current_id].thread_id = current_id & 1;
                 cpu_topologies[current_id].core_id = current_id >> 1;
+            } else {
+                // Single thread per core
+            }
+        } else {
+            // Fallback for older AMD CPUs
+            if (cpu_info.has_ht) {
+                cpu_topologies[current_id].thread_id = current_id & 1;
+                cpu_topologies[current_id].core_id = current_id >> 1;
+            } else {
+                // Single thread per core
             }
         }
+    } else {
+        // Generic fallback for unknown vendors
     }
 }
 

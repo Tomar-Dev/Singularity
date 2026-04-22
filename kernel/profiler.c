@@ -4,7 +4,7 @@
 #include "libc/string.h"
 #include "memory/kheap.h"
 #include "archs/cpu/x86_64/sync/spinlock.h"
-#include "drivers/serial/serial.h"
+#include "archs/cpu/cpu_hal.h"
 extern void print_status(const char* prefix, const char* msg, const char* status);
 
 #define PROFILER_MEM_START 0xFFFF800000000000ULL     
