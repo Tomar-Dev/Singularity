@@ -269,7 +269,7 @@ process_t* sched_pick_next(uint8_t cpu_id) {
     if (aq != 0) {
         uint32_t check_aq = aq;
         while (check_aq) {
-            int p = __builtin_ctz(check_aq); 
+            int p = 31 - __builtin_clz(check_aq); 
             process_t* front = sched_queues[cpu_id].queues[p].head;
             if (front) {
                 if ((now > front->last_queued) && (now - front->last_queued > STARVATION_THRESHOLD)) {

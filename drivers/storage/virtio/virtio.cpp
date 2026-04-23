@@ -1,6 +1,5 @@
 // drivers/storage/virtio/virtio.cpp
 #include "drivers/storage/virtio/virtio.hpp"
-#include "archs/cpu/x86_64/core/ports.h"
 #include "memory/kheap.h"
 #include "memory/paging.h"
 #include "memory/pmm.h"
@@ -17,20 +16,10 @@ extern "C" void* kmalloc_contiguous(size_t size);
 extern "C" uint64_t get_physical_address(uint64_t virt);
 extern "C" void* ioremap(uint64_t phys, uint32_t size, uint64_t flags);
 
-extern "C" uint64_t tsc_read_asm();
-extern "C" uint64_t get_tsc_freq();
-
 #define ALIGN_UP(x, align) (((x) + ((align) - 1)) & ~((align) - 1))
 
-static inline void virtio_wmb() { __asm__ volatile("sfence" ::: "memory"); }
-static inline void virtio_rmb() { __asm__ volatile("lfence" ::: "memory"); }
-
-// YENİ: TSC Donanım Saati Tabanlı Kesin Timeout
-static inline bool check_timeout(uint64_t start, uint32_t ms) {
-    uint64_t freq = get_tsc_freq();
-    if (freq == 0) freq = 2000000000ULL;
-    uint64_t timeout_cycles = (freq / 1000) * ms;
-    return (tsc_read_asm() - start) > timeout_cycles;
+static inline bool check_timeout(uint64_t start_ms, uint32_t timeout_ms) {
+    return (hal_timer_get_uptime_ms() - start_ms) > timeout_ms;
 }
 
 VirtIODriver::VirtIODriver(PCIeDevice* pci) 
@@ -49,7 +38,11 @@ VirtIODriver::VirtIODriver(PCIeDevice* pci)
 }
 
 VirtIODriver::~VirtIODriver() {
-    if (queue_virt) kfree_contiguous(queue_virt, 16384);
+    if (queue_virt) {
+        kfree_contiguous(queue_virt, 16384);
+    } else {
+        // Null
+    }
 }
 
 void VirtIODriver::mapCapability(uint8_t target_type, void** virt_addr, uint64_t* phys_addr, uint32_t* length) {
@@ -70,6 +63,8 @@ void VirtIODriver::mapCapability(uint8_t target_type, void** virt_addr, uint64_t
                 if ((bar_val & 0x4) == 0x4) {
                     uint32_t bar_high = pciDev->getBAR(bar_idx + 1);
                     bar_phys |= ((uint64_t)bar_high << 32);
+                } else {
+                    // 32-bit BAR
                 }
                 
                 uint64_t final_phys = bar_phys + offset;
@@ -79,39 +74,66 @@ void VirtIODriver::mapCapability(uint8_t target_type, void** virt_addr, uint64_t
                 
                 if (target_type == VIRTIO_PCI_CAP_NOTIFY_CFG) {
                     notify_off_multiplier = pciDev->readDWord(cap_offset + 16);
+                } else {
+                    // Other cap
                 }
                 return;
+            } else {
+                // Not target
             }
+        } else {
+            // Not vendor specific
         }
         cap_offset = pciDev->readByte(cap_offset + 1);
     }
 }
 
 void VirtIODriver::write8(uint16_t offset, uint8_t val) {
-    if (!is_modern) outb(io_base + offset, val);
+    if (!is_modern) {
+        hal_io_outb(io_base + offset, val);
+    } else {
+        // Modern
+    }
 }
 
 void VirtIODriver::write16(uint16_t offset, uint16_t val) {
-    if (!is_modern) outw(io_base + offset, val);
+    if (!is_modern) {
+        hal_io_outw(io_base + offset, val);
+    } else {
+        // Modern
+    }
 }
 
 void VirtIODriver::write32(uint16_t offset, uint32_t val) {
-    if (!is_modern) outl(io_base + offset, val);
+    if (!is_modern) {
+        hal_io_outl(io_base + offset, val);
+    } else {
+        // Modern
+    }
 }
 
 uint8_t VirtIODriver::read8(uint16_t offset) {
-    if (!is_modern) return inb(io_base + offset);
-    return 0;
+    if (!is_modern) {
+        return hal_io_inb(io_base + offset);
+    } else {
+        return 0;
+    }
 }
 
 uint16_t VirtIODriver::read16(uint16_t offset) {
-    if (!is_modern) return inw(io_base + offset);
-    return 0;
+    if (!is_modern) {
+        return hal_io_inw(io_base + offset);
+    } else {
+        return 0;
+    }
 }
 
 uint32_t VirtIODriver::read32(uint16_t offset) {
-    if (!is_modern) return inl(io_base + offset);
-    return 0;
+    if (!is_modern) {
+        return hal_io_inl(io_base + offset);
+    } else {
+        return 0;
+    }
 }
 
 void VirtIODriver::notifyQueue(uint16_t queue_index) {
@@ -152,11 +174,19 @@ int VirtIODriver::init() {
             uint8_t g1 = common_cfg->config_generation;
             capacity_sectors = *(volatile uint64_t*)dev_cfg_virt;
             uint8_t g2 = common_cfg->config_generation;
-            if (g1 != g2) capacity_sectors = *(volatile uint64_t*)dev_cfg_virt;
+            if (g1 != g2) {
+                capacity_sectors = *(volatile uint64_t*)dev_cfg_virt;
+            } else {
+                // Match
+            }
+        } else {
+            // No dev cfg
         }
         
         common_cfg->device_status = 0;
-        while(common_cfg->device_status != 0) __asm__ volatile("pause");
+        while(common_cfg->device_status != 0) {
+            hal_cpu_relax();
+        }
         
         common_cfg->device_status |= VIRTIO_STATUS_ACKNOWLEDGE;
         common_cfg->device_status |= VIRTIO_STATUS_DRIVER;
@@ -165,7 +195,11 @@ int VirtIODriver::init() {
         common_cfg->queue_select = 0;
         queue_size = common_cfg->queue_size;
         
-        if (queue_size == 0) return 0;
+        if (queue_size == 0) {
+            return 0;
+        } else {
+            // Valid
+        }
         
         uint32_t desc_size = 16 * queue_size;
         uint32_t avail_size = 6 + 2 * queue_size;
@@ -175,7 +209,11 @@ int VirtIODriver::init() {
         uint32_t total_size = used_offset + ALIGN_UP(used_size, 4096);
         
         queue_virt = kmalloc_contiguous(total_size);
-        if (!queue_virt) return 0;
+        if (!queue_virt) {
+            return 0;
+        } else {
+            // Allocated
+        }
         memset(queue_virt, 0, total_size);
         queue_phys = get_physical_address((uint64_t)queue_virt);
         
@@ -204,7 +242,11 @@ int VirtIODriver::init() {
         
     } else {
         uint32_t bar0 = pciDev->getBAR(0);
-        if ((bar0 & 1) == 0) return 0; 
+        if ((bar0 & 1) == 0) {
+            return 0; 
+        } else {
+            // I/O space
+        }
         pciDev->enableIOSpace();
         io_base = bar0 & 0xFFFC;
         
@@ -217,7 +259,11 @@ int VirtIODriver::init() {
         write16(VIRTIO_REG_QUEUE_SELECT, 0);
         queue_size = read16(VIRTIO_REG_QUEUE_SIZE);
         
-        if (queue_size == 0) return 0;
+        if (queue_size == 0) {
+            return 0;
+        } else {
+            // Valid
+        }
         
         uint32_t desc_size = 16 * queue_size;
         uint32_t avail_size = 6 + 2 * queue_size;
@@ -227,7 +273,11 @@ int VirtIODriver::init() {
         uint32_t total_size = used_offset + ALIGN_UP(used_size, 4096);
         
         queue_virt = kmalloc_contiguous(total_size);
-        if (!queue_virt) return 0;
+        if (!queue_virt) {
+            return 0;
+        } else {
+            // Allocated
+        }
         memset(queue_virt, 0, total_size);
         queue_phys = get_physical_address((uint64_t)queue_virt);
         
@@ -255,7 +305,11 @@ int VirtIODriver::init() {
     sprintf(newName, "virtio%d", virt_count++);
     this->setName(newName);
     
-    if (capacity_sectors == 0) capacity_sectors = 262144; 
+    if (capacity_sectors == 0) {
+        capacity_sectors = 262144; 
+    } else {
+        // Valid
+    }
     this->setCapacity(capacity_sectors * 512); 
     
     this->setModel(is_modern ? "VirtIO Block (Modern)" : "VirtIO Block (Legacy)");
@@ -270,7 +324,9 @@ void VirtIODriver::emergencyStop() {
     if (is_modern && common_cfg) {
         common_cfg->device_status = 0;
     } else if (!is_modern && io_base != 0) {
-        outb(io_base + VIRTIO_REG_DEVICE_STATUS, 0);
+        hal_io_outb(io_base + VIRTIO_REG_DEVICE_STATUS, 0);
+    } else {
+        // Invalid
     }
 }
 
@@ -282,6 +338,8 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[VIRT] DMA Guard Blocked Read Access!\n");
         return 0;
+    } else {
+        // Valid
     }
 
     uint8_t* ptr = (uint8_t*)buffer;
@@ -311,6 +369,8 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
             free_desc_count += 3;
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Allocated
         }
         memset(meta_page, 0, 4096);
         
@@ -330,8 +390,10 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
             desc[desc3].next = free_head; free_head = head_idx; free_desc_count += 3;
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Valid
         }
-        pmm_inc_ref((void*)buf_phys); // PIN DMA MEMORY
+        pmm_inc_ref((void*)buf_phys); 
         
         desc[desc1].addr = req_phys;
         desc[desc1].len = sizeof(struct virtio_blk_req_header);
@@ -348,27 +410,29 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
         desc[desc3].flags = VRING_DESC_F_WRITE;
         desc[desc3].next = 0;
         
-        virtio_wmb(); 
+        hal_memory_barrier_release(); 
         
         uint16_t avail_idx = avail->idx;
         avail->ring[avail_idx % queue_size] = head_idx;
         
-        __asm__ volatile("sfence" ::: "memory"); 
+        hal_memory_barrier_release(); 
         avail->idx = avail_idx + 1;
-        virtio_wmb(); 
+        hal_memory_barrier_release(); 
         
         notifyQueue(0);
         
-        uint64_t start_tsc = tsc_read_asm();
+        uint64_t start_ms = hal_timer_get_uptime_ms();
         bool completed = false;
         
-        while (!check_timeout(start_tsc, 5000)) { // 5 saniye
-            virtio_rmb(); 
+        while (!check_timeout(start_ms, 5000)) { 
+            hal_memory_barrier_acquire(); 
             if (last_used_idx != v_used->idx) {
                 completed = true;
                 break;
+            } else {
+                // Wait
             }
-            __asm__ volatile("pause");
+            hal_cpu_relax();
         }
         
         int result = 1;
@@ -378,10 +442,14 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
         } else {
             last_used_idx++;
             uint8_t status_val = *status_ptr;
-            if (status_val != 0) result = 0;
+            if (status_val != 0) {
+                result = 0;
+            } else {
+                // Success
+            }
         }
         
-        pmm_dec_ref((void*)buf_phys); // UNPIN DMA MEMORY
+        pmm_dec_ref((void*)buf_phys); 
         
         desc[desc3].next = free_head;
         free_head = head_idx;
@@ -391,6 +459,8 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
         if (result == 0) {
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Success
         }
     }
     
@@ -402,6 +472,8 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
     if (this->isWriteProtected()) {
         printf("[VIRT] Blocked write to '%s' (Device Lockdown Active).\n", this->getName());
         return 0;
+    } else {
+        // Proceed
     }
     
     storage_kiovec_t vec;
@@ -411,6 +483,8 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[VIRT] DMA Guard Blocked Write Access!\n");
         return 0;
+    } else {
+        // Valid
     }
     
     const uint8_t* ptr = (const uint8_t*)buffer;
@@ -440,6 +514,8 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
             free_desc_count += 3;
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Allocated
         }
         memset(meta_page, 0, 4096);
         
@@ -459,8 +535,10 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
             desc[desc3].next = free_head; free_head = head_idx; free_desc_count += 3;
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Valid
         }
-        pmm_inc_ref((void*)buf_phys); // PIN DMA MEMORY
+        pmm_inc_ref((void*)buf_phys); 
 
         desc[desc1].addr = req_phys;
         desc[desc1].len = sizeof(struct virtio_blk_req_header);
@@ -477,27 +555,29 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
         desc[desc3].flags = VRING_DESC_F_WRITE; 
         desc[desc3].next = 0;
         
-        virtio_wmb(); 
+        hal_memory_barrier_release(); 
         
         uint16_t avail_idx = avail->idx;
         avail->ring[avail_idx % queue_size] = head_idx;
         
-        __asm__ volatile("sfence" ::: "memory"); 
+        hal_memory_barrier_release(); 
         avail->idx = avail_idx + 1;
-        virtio_wmb(); 
+        hal_memory_barrier_release(); 
         
         notifyQueue(0);
         
-        uint64_t start_tsc = tsc_read_asm();
+        uint64_t start_ms = hal_timer_get_uptime_ms();
         bool completed = false;
         
-        while (!check_timeout(start_tsc, 5000)) { // 5 saniye
-            virtio_rmb(); 
+        while (!check_timeout(start_ms, 5000)) { 
+            hal_memory_barrier_acquire(); 
             if (last_used_idx != v_used->idx) {
                 completed = true;
                 break;
+            } else {
+                // Wait
             }
-            __asm__ volatile("pause");
+            hal_cpu_relax();
         }
         
         int result = 1;
@@ -507,10 +587,14 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
         } else {
             last_used_idx++;
             uint8_t status_val = *status_ptr;
-            if (status_val != 0) result = 0;
+            if (status_val != 0) {
+                result = 0;
+            } else {
+                // Success
+            }
         }
         
-        pmm_dec_ref((void*)buf_phys); // UNPIN DMA MEMORY
+        pmm_dec_ref((void*)buf_phys); 
 
         desc[desc3].next = free_head;
         free_head = head_idx;
@@ -520,6 +604,8 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
         if (result == 0) {
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Success
         }
     }
     
@@ -535,6 +621,8 @@ extern "C" {
                 VirtIODriver* drv = new VirtIODriver(pci);
                 drv->init();
                 return; 
+            } else {
+                // Not VirtIO Blk
             }
         }
     }

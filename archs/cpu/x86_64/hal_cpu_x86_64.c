@@ -9,13 +9,12 @@
 extern void sleep_ms(uint64_t ms);
 extern void sleep_ns(uint64_t ns);
 extern uint64_t timer_get_ticks();
+extern uint64_t get_uptime_ns();
 extern void invlpg_range_asm_fast(uint64_t start, size_t count);
 extern int get_cpu_numa_node(uint8_t apic_id);
 extern uint8_t get_apic_id(); 
 
 uint32_t hal_cpu_get_id(void) {
-    // FIX: Sonsuz özyineleme (Infinite Recursion) engellendi.
-    // Doğrudan donanım APIC ID'si okunur.
     return (uint32_t)get_apic_id();
 }
 
@@ -38,6 +37,14 @@ int hal_cpu_get_numa_node(uint32_t cpu_id) {
 
 uint64_t hal_timer_get_ticks(void) {
     return timer_get_ticks();
+}
+
+uint64_t hal_timer_get_uptime_ms(void) {
+    return get_uptime_ns() / 1000000ULL;
+}
+
+uint64_t hal_timer_get_uptime_us(void) {
+    return get_uptime_ns() / 1000ULL;
 }
 
 void hal_timer_delay_ms(uint32_t ms) {
@@ -78,6 +85,22 @@ void hal_tlb_flush_all(void) {
     uint64_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     __asm__ volatile("mov %0, %%cr3" :: "r"(cr3) : "memory");
+}
+
+void hal_memory_barrier_acquire(void) {
+    __asm__ volatile("lfence" ::: "memory");
+}
+
+void hal_memory_barrier_release(void) {
+    __asm__ volatile("sfence" ::: "memory");
+}
+
+void hal_memory_barrier_full(void) {
+    __asm__ volatile("mfence" ::: "memory");
+}
+
+void hal_cache_flush_line(const void* addr) {
+    __asm__ volatile("clflush (%0)" :: "r"(addr) : "memory");
 }
 
 #define HAL_PORT_CHECK(p) \

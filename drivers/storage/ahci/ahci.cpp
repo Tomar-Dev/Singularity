@@ -10,11 +10,11 @@
 #include "system/disk/gpt.h"
 #include "kernel/debug.h"
 #include "system/power/power.h"
+
 extern "C" void print_status(const char* prefix, const char* msg, const char* status);
 extern "C" uint64_t get_physical_address(uint64_t virtual_addr);
 extern "C" void* kmalloc_contiguous(size_t size);
 extern "C" void kfree_contiguous(void* ptr, size_t size);
-extern "C" void tsc_delay_ms(uint32_t ms);
 
 static AHCIDriver* g_ahci_driver = nullptr;
 
@@ -42,6 +42,8 @@ public:
         if (this->isWriteProtected()) {
             printf("[AHCI] Blocked write to '%s' (Device Lockdown Active).\n", this->getName());
             return 0;
+        } else {
+            // Proceed
         }
         return port->write(lba, count, buffer);
     }
@@ -60,6 +62,8 @@ AHCIDriver::~AHCIDriver() {
             ports[i]->stopCmd();
             delete ports[i];
             ports[i] = nullptr;
+        } else {
+            // Null
         }
     }
 }
@@ -69,12 +73,20 @@ int AHCIDriver::earlyInit() {
     pciDev->enableMemorySpace();
 
     uint32_t bar5 = pciDev->getBAR(5);
-    if (bar5 == 0) { return 0; }
+    if (bar5 == 0) { 
+        return 0; 
+    } else {
+        // Valid
+    }
 
     uint64_t phys_addr = bar5 & 0xFFFFFFF0ULL;
     void* virt_addr = ioremap(phys_addr, 8192,
                                PAGE_PRESENT | PAGE_WRITE | PAGE_PCD | PAGE_PWT);
-    if (!virt_addr) { return 0; }
+    if (!virt_addr) { 
+        return 0; 
+    } else {
+        // Mapped
+    }
 
     abar = (volatile hba_mem_t*)virt_addr;
 
@@ -82,7 +94,7 @@ int AHCIDriver::earlyInit() {
 
     int wait = 0;
     while ((abar->ghc & (1u << 0)) && wait < 100) {
-        tsc_delay_ms(10);
+        hal_timer_delay_ms(10);
         wait++;
     }
 
@@ -95,6 +107,8 @@ int AHCIDriver::earlyInit() {
             volatile hba_port_t* port =
                 (volatile hba_port_t*)((uint8_t*)abar + 0x100 + (i * 0x80));
             port->cmd |= (1u << 1) | (1u << 2);
+        } else {
+            // Empty
         }
     }
 
@@ -103,14 +117,22 @@ int AHCIDriver::earlyInit() {
 }
 
 int AHCIDriver::finalize() {
-    if (!initialized_early) return 0;
+    if (!initialized_early) {
+        return 0;
+    } else {
+        // Proceed
+    }
 
-    tsc_delay_ms(10);
+    hal_timer_delay_ms(10);
 
     uint32_t pi = abar->pi;
 
     for (int i = 0; i < 32; i++) {
-        if (!(pi & (1u << i))) continue;
+        if (!(pi & (1u << i))) {
+            continue;
+        } else {
+            // Active
+        }
 
         volatile hba_port_t* port = (volatile hba_port_t*)((uint8_t*)abar + 0x100 + (i * 0x80));
 
@@ -120,6 +142,8 @@ int AHCIDriver::finalize() {
 
         if (det != HBA_PORT_DET_PRESENT || ipm != HBA_PORT_IPM_ACTIVE) {
             continue;
+        } else {
+            // Present
         }
 
         AHCIPort* newPort = new AHCIPort();
@@ -133,7 +157,11 @@ int AHCIDriver::finalize() {
             char newName[32];
             DeviceManager::getNextSataName(newName);
 
-            if (newPort->is_atapi) sprintf(newName, "cdrom%d", i);
+            if (newPort->is_atapi) {
+                sprintf(newName, "cdrom%d", i);
+            } else {
+                // SATA
+            }
 
             AHCISubDevice* subDev = new AHCISubDevice(newPort, newName, newPort->model_name);
             DeviceManager::registerDevice(subDev);
@@ -142,30 +170,49 @@ int AHCIDriver::finalize() {
             sprintf(msg, "Port %d attached as %s", i, newName);
             print_status("[ AHCI ]", msg, "INFO");
 
-            if (!newPort->is_atapi) gpt_scan_partitions(subDev);
+            if (!newPort->is_atapi) {
+                gpt_scan_partitions(subDev);
+            } else {
+                // ATAPI
+            }
         } else {
             delete newPort;
         }
     }
 
-    return (portCount > 0) ? 1 : 0;
+    if (portCount > 0) { 
+        return 1; 
+    } else { 
+        return 0; 
+    }
 }
 
 int AHCIDriver::init() {
-    if (earlyInit()) { return finalize(); }
-    return 0;
+    if (earlyInit()) { 
+        return finalize(); 
+    } else {
+        return 0;
+    }
 }
 
 int AHCIDriver::shutdown() {
     for (int i = 0; i < portCount; i++) {
-        if (ports[i]) { ports[i]->stopCmd(); }
+        if (ports[i]) { 
+            ports[i]->stopCmd(); 
+        } else {
+            // Null
+        }
     }
     print_shutdown("AHCI DMA engines stopped");
     return 1;
 }
 
 void AHCIDriver::emergencyStop() {
-    if (abar) { abar->ghc |= 1u; }
+    if (abar) { 
+        abar->ghc |= 1u; 
+    } else {
+        // Null
+    }
 }
 
 int AHCIDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
@@ -185,6 +232,8 @@ extern "C" {
                 AHCIDriver* drv = new AHCIDriver(pci);
                 drv->init();
                 return;
+            } else {
+                // Skip
             }
         }
     }
@@ -197,12 +246,18 @@ extern "C" {
                 g_ahci_driver = new AHCIDriver(pci);
                 g_ahci_driver->earlyInit();
                 return;
+            } else {
+                // Skip
             }
         }
     }
 
     __attribute__((used, noinline))
     void init_ahci_late() {
-        if (g_ahci_driver) { g_ahci_driver->finalize(); }
+        if (g_ahci_driver) { 
+            g_ahci_driver->finalize(); 
+        } else {
+            // Null
+        }
     }
 }

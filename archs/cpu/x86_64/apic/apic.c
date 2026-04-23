@@ -112,11 +112,15 @@ static void apic_clear_isr() {
         // Legacy APIC
     }
     
-    uint32_t isr_val = apic_read(LAPIC_ISR);
-    if (isr_val != 0) {
-        apic_write(LAPIC_EOI, 0);
-    } else {
-        // Clean
+    // GÜVENLİK YAMASI: Sadece ISR[0] değil, tüm 8 ISR register'ı taranarak 
+    // Spurious Interrupt kaçakları önlendi.
+    for (int i = 0; i < 8; i++) {
+        uint32_t isr_val = apic_read(LAPIC_ISR + (i * 0x10));
+        if (isr_val != 0) {
+            apic_write(LAPIC_EOI, 0);
+        } else {
+            // Clean
+        }
     }
 }
 
@@ -203,6 +207,12 @@ void init_apic(uint32_t physical_addr) {
 }
 
 void apic_finalize() {
+    if (is_apic_enabled()) {
+        apic_write(LAPIC_LINT0, 0x10000);
+        apic_write(LAPIC_LINT1, 0x10000);
+    } else {
+        // APIC not enabled
+    }
 }
 
 bool is_apic_enabled() { 
@@ -287,7 +297,16 @@ void apic_timer_oneshot(uint64_t us) {
         __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
         uint64_t current_tsc = ((uint64_t)hi << 32) | lo;
         
-        uint64_t target_tsc = current_tsc + ((ticks_per_ms * us) / 1000ULL); 
+        extern uint64_t get_tsc_freq();
+        uint64_t freq = get_tsc_freq();
+        if (freq == 0) {
+            freq = 2000000000ULL;
+        } else {
+            // Valid
+        }
+        
+        // PERFORMANS YAMASI: TSC Deadline için yanlış frekans çarpanı düzeltildi.
+        uint64_t target_tsc = current_tsc + ((freq / 1000000ULL) * us); 
         wrmsr(MSR_IA32_TSC_DEADLINE, target_tsc);
         
     } else {

@@ -33,7 +33,6 @@ extern "C" {
     void pcie_print_all(void);
     
     extern uint8_t num_cpus;
-    void console_set_auto_flush(bool enabled);
     void console_clear();
 
     void rust_usb_print_ports(void);
@@ -84,9 +83,8 @@ const int Shell::command_count = sizeof(Shell::command_table) / sizeof(ShellComm
 
 int Shell::cmd_usb(const char* arg) { 
     (void)arg;
-    console_set_auto_flush(false);
+    ScopedAutoFlush saf(false);
     rust_usb_print_ports();
-    console_set_auto_flush(true);
     return 0;
 }
 
@@ -100,7 +98,11 @@ int Shell::cmd_i2c(const char* arg) {
 
     uint64_t addr = 0;
     const char* p = arg;
-    if (p[0] == '0' && p[1] == 'x') { p += 2; } else { /* Clean parameter */ }
+    if (p[0] == '0' && p[1] == 'x') { 
+        p += 2; 
+    } else {
+        // Clean parameter
+    }
 
     while (*p) {
         addr <<= 4;
@@ -111,9 +113,8 @@ int Shell::cmd_i2c(const char* arg) {
         p++;
     }
 
-    console_set_auto_flush(false);
+    ScopedAutoFlush saf(false);
     i2c_dump((uint8_t)addr);
-    console_set_auto_flush(true);
     return 0;
 }
 
@@ -157,7 +158,12 @@ int Shell::cmd_fbtest(const char* arg) {
 
     uint32_t w = 250, h = 250;
     uint32_t* buf = (uint32_t*)kmalloc(w * h * 4);
-    if (!buf) { kobject_unref(fb_node); return 1; } else { /* Memory acquired */ }
+    if (!buf) { 
+        kobject_unref(fb_node); 
+        return 1; 
+    } else {
+        // Memory acquired
+    }
 
     for (uint32_t y = 0; y < h; y++) {
         for (uint32_t x = 0; x < w; x++) {
@@ -187,11 +193,19 @@ int Shell::cmd_fbtest(const char* arg) {
 }
 
 int Shell::cmd_log(const char* arg) {
-    if (!arg) { return 0; } else { /* Process normally */ }
+    if (!arg) { 
+        return 0; 
+    } else {
+        // Process normally
+    }
     const char* msg_ptr = arg;
     const char* p = arg;
     while (*p && *p != ' ') { p++; }
-    if (*p == ' ') { msg_ptr = p + 1; } else { /* Use base arg */ }
+    if (*p == ' ') { 
+        msg_ptr = p + 1; 
+    } else {
+        // Use base arg
+    }
     console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK); printf("[ STARTUP ] ");
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("%s\n", msg_ptr);
@@ -201,10 +215,10 @@ int Shell::cmd_log(const char* arg) {
 int Shell::cmd_systemcheck(const char* arg) { (void)arg; perform_system_check(); return 0; }
 int Shell::cmd_reboot(const char* arg) { (void)arg; system_reboot(); return 0; }
 int Shell::cmd_shutdown(const char* arg) { (void)arg; system_shutdown("User Command (Shell)"); return 0; }
-int Shell::cmd_pcie(const char* arg) { (void)arg; console_set_auto_flush(false); pcie_print_all(); console_set_auto_flush(true); return 0; }
+int Shell::cmd_pcie(const char* arg) { (void)arg; ScopedAutoFlush saf(false); pcie_print_all(); return 0; }
 
 int Shell::cmd_system(const char* arg) {
-    console_set_auto_flush(false);
+    ScopedAutoFlush saf(false);
 
     if (!arg || arg[0] == '\0') { show_system_info_all(); }
     else if (strcmp(arg, "mem") == 0) { kheap_print_stats(); show_memory_map(); }
@@ -213,19 +227,16 @@ int Shell::cmd_system(const char* arg) {
     else if (strcmp(arg, "ffi") == 0) { SingularityFFI::print_ffi_stats(); }
     else {
         printf("Unknown system command: %s\n", arg);
-        console_set_auto_flush(true);
         return 1;
     }
 
-    console_set_auto_flush(true);
     return 0;
 }
 
 int Shell::cmd_taskmgr(const char* arg) {
     (void)arg;
-    console_set_auto_flush(false);
+    ScopedAutoFlush saf(false);
     show_task_manager();
-    console_set_auto_flush(true);
     return 0;
 }
 
@@ -258,7 +269,12 @@ int Shell::cmd_suspend(const char* arg) { (void)arg; printf("Suspending to RAM (
 int Shell::cmd_gui(const char* arg) { (void)arg; gui_mode_start(); return 0; }
 
 int Shell::cmd_profile(const char* arg) {
-    if (!arg || arg[0] == '\0') { printf("Usage: profile <on/off/show>\n"); return 1; } else { /* Bounds validated */ }
+    if (!arg || arg[0] == '\0') { 
+        printf("Usage: profile <on/off/show>\n"); 
+        return 1; 
+    } else {
+        // Bounds validated
+    }
     if (strcmp(arg, "on") == 0) { profiler_enable(true); }
     else if (strcmp(arg, "off") == 0) { profiler_enable(false); }
     else if (strcmp(arg, "show") == 0) { profiler_print_report(); }
@@ -315,7 +331,11 @@ int Shell::cmd_reap(const char* arg) {
 }
 
 int Shell::dispatchCommand(const char* cmd, const char* arg) {
-    if (!cmd || cmd[0] == '\0') { return 0; } else { /* Valid */ }
+    if (!cmd || cmd[0] == '\0') { 
+        return 0; 
+    } else {
+        // Valid
+    }
     
     for (int i = 0; i < command_count; i++) {
         if (strcmp(cmd, command_table[i].name) == 0) {

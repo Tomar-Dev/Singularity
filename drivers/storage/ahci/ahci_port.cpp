@@ -32,11 +32,8 @@ static inline uint32_t swap_uint32(uint32_t val) {
            ((val >> 8)  & 0xff00) | ((val << 24) & 0xff000000);
 }
 
-static inline bool check_timeout(uint64_t start, uint32_t ms) {
-    uint64_t freq = get_tsc_freq();
-    if (freq == 0) freq = 2000000000ULL;
-    uint64_t timeout_cycles = (freq / 1000) * ms;
-    return (tsc_read_asm() - start) > timeout_cycles;
+static inline bool check_timeout(uint64_t start_ms, uint32_t timeout_ms) {
+    return (hal_timer_get_uptime_ms() - start_ms) > timeout_ms;
 }
 
 void AHCIPort::startCmd() {
@@ -54,7 +51,11 @@ void AHCIPort::stopCmd() {
     hbaPort->cmd &= ~(1 << 4);
     int wait = 0;
     while (wait < 500) {
-        if (!(hbaPort->cmd & (1 << 14)) && !(hbaPort->cmd & (1 << 15))) break;
+        if (!(hbaPort->cmd & (1 << 14)) && !(hbaPort->cmd & (1 << 15))) {
+            break;
+        } else {
+            // Wait
+        }
         hal_timer_delay_ms(1);
         wait++;
     }
@@ -85,7 +86,11 @@ void AHCIPort::reset() {
 int AHCIPort::findCmdSlot() {
     uint32_t slots = (hbaPort->sact | hbaPort->ci);
     for (int i = 0; i < 32; i++) {
-        if ((slots & 1) == 0) { return i; }
+        if ((slots & 1) == 0) { 
+            return i; 
+        } else {
+            // Occupied
+        }
         slots >>= 1;
     }
     return -1;
@@ -94,7 +99,11 @@ int AHCIPort::findCmdSlot() {
 bool AHCIPort::identify() {
     hbaPort->is = 0xFFFFFFFF;
     int slot = findCmdSlot();
-    if (slot == -1) { return false; }
+    if (slot == -1) { 
+        return false; 
+    } else {
+        // Valid
+    }
 
     hba_cmd_header_t* cmdheader = (hba_cmd_header_t*)clb_virt;
     cmdheader += slot;
@@ -107,7 +116,11 @@ bool AHCIPort::identify() {
     memset(cmdtbl, 0, sizeof(hba_cmd_tbl_t));
 
     uint16_t* id_buf = (uint16_t*)kmalloc_contiguous(512);
-    if (!id_buf) { return false; }
+    if (!id_buf) { 
+        return false; 
+    } else {
+        // Allocated
+    }
     memset(id_buf, 0, 512);
 
     bool result = false;
@@ -123,24 +136,38 @@ bool AHCIPort::identify() {
     cmd->c        = 1;
     cmd->command  = is_atapi ? 0xA1 : ATA_CMD_IDENTIFY;
 
-    uint64_t spin_start = tsc_read_asm();
+    uint64_t spin_start = hal_timer_get_uptime_ms();
     uint64_t start = 0;
     uint64_t wakeups = 0;
     
     while ((hbaPort->tfd & (0x80 | 0x08))) {
-        if (check_timeout(spin_start, 500)) goto identify_done; 
+        if (check_timeout(spin_start, 500)) {
+            goto identify_done; 
+        } else {
+            // Wait
+        }
         hal_cpu_relax();
     }
 
     hbaPort->ci = 1u << slot;
-    start = tsc_read_asm(); 
+    start = hal_timer_get_uptime_ms(); 
 
     while (1) {
-        if ((hbaPort->ci & (1u << slot)) == 0) { break; }
-        if (hbaPort->is & HBA_PxIS_TFES)       { goto identify_done; }
+        if ((hbaPort->ci & (1u << slot)) == 0) { 
+            break; 
+        } else {
+            // Wait
+        }
+        if (hbaPort->is & HBA_PxIS_TFES) { 
+            goto identify_done; 
+        } else {
+            // No error
+        }
         
         if (check_timeout(start, 750) || wakeups > 5000000) { 
             goto identify_done; 
+        } else {
+            // Wait
         }
         hal_cpu_relax();
         wakeups++;
@@ -152,7 +179,11 @@ bool AHCIPort::identify() {
     } else {
         uint16_t config = id_buf[0];
         uint8_t pkt_size = config & 0x3u;
-        this->atapi_packet_size = (pkt_size == 1) ? 16 : 12;
+        if (pkt_size == 1) {
+            this->atapi_packet_size = 16;
+        } else {
+            this->atapi_packet_size = 12;
+        }
         this->sector_count = 0;
     }
 
@@ -163,8 +194,11 @@ bool AHCIPort::identify() {
     }
     this->model_name[40] = '\0';
     for (int i = 39; i > 0; i--) {
-        if (this->model_name[i] == ' ') { this->model_name[i] = '\0'; }
-        else { break; }
+        if (this->model_name[i] == ' ') { 
+            this->model_name[i] = '\0'; 
+        } else { 
+            break; 
+        }
     }
 
     result = true;
@@ -183,7 +217,11 @@ int AHCIPort::configure() {
     hbaPort->serr = 0xFFFFFFFF;
 
     clb_virt = kmalloc_contiguous(4096);
-    if (!clb_virt) { return -1; }
+    if (!clb_virt) { 
+        return -1; 
+    } else {
+        // Allocated
+    }
     memset(clb_virt, 0, 4096);
 
     uint64_t clb_phys = get_physical_address((uint64_t)clb_virt);
@@ -201,6 +239,8 @@ int AHCIPort::configure() {
         ctba_virt[i] = kmalloc_contiguous(4096);
         if (!ctba_virt[i]) {
             return -1;
+        } else {
+            // Allocated
         }
         memset(ctba_virt[i], 0, 4096);
 
@@ -211,9 +251,13 @@ int AHCIPort::configure() {
 
     hbaPort->cmd |= (1 << 4);
 
-    uint64_t spin_start = tsc_read_asm();
+    uint64_t spin_start = hal_timer_get_uptime_ms();
     while (hbaPort->sig == 0xFFFFFFFF) {
-        if (check_timeout(spin_start, 10)) break;
+        if (check_timeout(spin_start, 10)) {
+            break;
+        } else {
+            // Wait
+        }
         hal_cpu_relax();
     }
 
@@ -231,13 +275,21 @@ int AHCIPort::configure() {
 
     if (!identify()) {
         serial_printf("[AHCI] Port %d identification failed.\n", id);
+    } else {
+        // Identified
     }
 
     if (is_atapi) {
         for (int i = 0; i < 3; i++) {
-            if (atapi_read_capacity()) { break; }
+            if (atapi_read_capacity()) { 
+                break; 
+            } else {
+                // Retry
+            }
             hal_timer_delay_ms(10);
         }
+    } else {
+        // SATA
     }
 
     return 0;
@@ -251,11 +303,17 @@ void AHCIPort::unpinBuffer(void* buffer, uint32_t byte_count) {
         uint64_t phys_addr = get_physical_address(current_virt);
         if (phys_addr != 0) {
             pmm_dec_ref((void*)phys_addr);
+        } else {
+            // Unmapped
         }
         
         uint32_t page_offset = current_virt & (PAGE_SIZE - 1);
         uint32_t chunk_size = PAGE_SIZE - page_offset;
-        if (chunk_size > bytes_remaining) chunk_size = bytes_remaining;
+        if (chunk_size > bytes_remaining) {
+            chunk_size = bytes_remaining;
+        } else {
+            // Fits
+        }
         
         bytes_remaining -= chunk_size;
         current_virt += chunk_size;
@@ -272,12 +330,16 @@ int AHCIPort::fillPrdt(hba_cmd_tbl_t* cmdtbl, void* buffer, uint32_t byte_count)
         if (prdt_idx >= MAX_PRDT_ENTRIES) { 
             unpinBuffer(buffer, byte_count - bytes_remaining);
             return -1; 
+        } else {
+            // Fits
         }
 
         uint64_t phys_addr = get_physical_address(current_virt);
         if (phys_addr == 0) { 
             unpinBuffer(buffer, byte_count - bytes_remaining);
             return -1; 
+        } else {
+            // Mapped
         }
 
         pmm_inc_ref((void*)phys_addr);
@@ -314,7 +376,11 @@ bool AHCIPort::scsi_packet(uint8_t* packet, uint32_t packet_len,
         if (!rust_dma_guard_validate(&vec, 1, 0)) {
             serial_printf("[AHCI] DMA Guard Blocked ATAPI Packet Access!\n");
             return false;
+        } else {
+            // Valid
         }
+    } else {
+        // No buffer
     }
 
     uint64_t flags = spinlock_acquire(&this->lock);
@@ -324,6 +390,8 @@ bool AHCIPort::scsi_packet(uint8_t* packet, uint32_t packet_len,
     if (slot == -1) {
         spinlock_release(&this->lock, flags);
         return false;
+    } else {
+        // Valid
     }
 
     hba_cmd_header_t* cmdheader = (hba_cmd_header_t*)clb_virt;
@@ -345,7 +413,11 @@ bool AHCIPort::scsi_packet(uint8_t* packet, uint32_t packet_len,
         if (prdt_count < 0) {
             spinlock_release(&this->lock, flags);
             return false;
+        } else {
+            // Valid
         }
+    } else {
+        // No data
     }
     cmdheader->prdtl = (uint16_t)prdt_count;
 
@@ -355,38 +427,52 @@ bool AHCIPort::scsi_packet(uint8_t* packet, uint32_t packet_len,
     cmd->command  = 0xA0;
     cmd->featurel = 1;
 
-    uint64_t spin_start = tsc_read_asm();
+    uint64_t spin_start = hal_timer_get_uptime_ms();
     while ((hbaPort->tfd & (0x80 | 0x08))) {
         if (check_timeout(spin_start, 500)) {
             reset();
             unpinBuffer(buffer, transfer_size);
             spinlock_release(&this->lock, flags);
             return false;
+        } else {
+            // Wait
         }
         hal_cpu_relax(); 
     }
 
     if (buffer && transfer_size > 0) {
         if ((uint64_t)buffer >= 0xC0000000ULL) {
-            __asm__ volatile("sfence" ::: "memory");
+            hal_memory_barrier_full();
+        } else {
+            // Low mem
         }
+    } else {
+        // No buffer
     }
 
     hbaPort->ci = 1u << slot;
 
-    uint64_t start = tsc_read_asm();
+    uint64_t start = hal_timer_get_uptime_ms();
     bool ok = true;
 
     while (1) {
-        if ((hbaPort->ci & (1u << slot)) == 0) { break; }
+        if ((hbaPort->ci & (1u << slot)) == 0) { 
+            break; 
+        } else {
+            // Wait
+        }
         if (hbaPort->is & HBA_PxIS_TFES) {
             ok = false;
             break;
+        } else {
+            // No error
         }
         if (check_timeout(start, 750)) { 
             reset();
             ok = false;
             break;
+        } else {
+            // Wait
         }
         hal_cpu_relax(); 
     }
@@ -396,6 +482,8 @@ bool AHCIPort::scsi_packet(uint8_t* packet, uint32_t packet_len,
     if (!ok || (hbaPort->is & HBA_PxIS_TFES)) {
         spinlock_release(&this->lock, flags);
         return false;
+    } else {
+        // Success
     }
     
     spinlock_release(&this->lock, flags);
@@ -408,7 +496,11 @@ bool AHCIPort::atapi_read_capacity() {
     packet[0] = SCSI_READ_CAPACITY;
 
     uint32_t* resp = (uint32_t*)kmalloc_contiguous(8);
-    if (!resp) { return false; }
+    if (!resp) { 
+        return false; 
+    } else {
+        // Allocated
+    }
     memset(resp, 0, 8);
 
     bool result = false;
@@ -432,8 +524,12 @@ bool AHCIPort::atapi_read_capacity() {
             if (sense_buf) {
                 scsi_packet(sense_pkt, 12, sense_buf, 18, false);
                 kfree_contiguous(sense_buf, 32);
+            } else {
+                // OOM
             }
         }
+    } else {
+        // Packet failed
     }
 
     kfree_contiguous(resp, 8);
@@ -452,13 +548,21 @@ bool AHCIPort::atapi_read(uint64_t sector, uint32_t count, void* buffer) {
 
     while (sectors_read < count) {
         uint32_t chunk = count - sectors_read;
-        if (chunk > MAX_BLOCKS_PER_CMD) { chunk = MAX_BLOCKS_PER_CMD; }
+        if (chunk > MAX_BLOCKS_PER_CMD) { 
+            chunk = MAX_BLOCKS_PER_CMD; 
+        } else {
+            // Fits
+        }
 
         uint64_t current_sector = sector + sectors_read;
         uint32_t byte_count     = chunk * 2048;
 
         uint8_t* temp_buf = (uint8_t*)kmalloc_contiguous(byte_count);
-        if (!temp_buf) { return false; }
+        if (!temp_buf) { 
+            return false; 
+        } else {
+            // Allocated
+        }
 
         uint8_t pkt[16];
         memset(pkt, 0, 16);
@@ -474,11 +578,17 @@ bool AHCIPort::atapi_read(uint64_t sector, uint32_t count, void* buffer) {
 
         if (ok) {
             memcpy(ptr + (sectors_read * 2048), temp_buf, byte_count);
+        } else {
+            // Failed
         }
 
         kfree_contiguous(temp_buf, byte_count);
 
-        if (!ok) { return false; }
+        if (!ok) { 
+            return false; 
+        } else {
+            // Success
+        }
 
         sectors_read += chunk;
     }
@@ -487,7 +597,11 @@ bool AHCIPort::atapi_read(uint64_t sector, uint32_t count, void* buffer) {
 }
 
 bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
-    if (is_atapi) { return atapi_read(sector, count, buffer); }
+    if (is_atapi) { 
+        return atapi_read(sector, count, buffer); 
+    } else {
+        // SATA
+    }
 
     storage_kiovec_t vec;
     vec.virt_addr = buffer;
@@ -496,6 +610,8 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[AHCI] DMA Guard Blocked Read Access!\n");
         return false;
+    } else {
+        // Valid
     }
 
     uint8_t* user_buf = (uint8_t*)buffer;
@@ -506,12 +622,21 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
 
     while (sectors_read < count) {
         uint32_t chunk = count - sectors_read;
-        if (chunk > MAX_SECTORS_PER_CMD) chunk = MAX_SECTORS_PER_CMD;
+        if (chunk > MAX_SECTORS_PER_CMD) {
+            chunk = MAX_SECTORS_PER_CMD;
+        } else {
+            // Fits
+        }
 
         hbaPort->serr = 0xFFFFFFFF;
         hbaPort->is   = 0xFFFFFFFF;
         int slot = findCmdSlot();
-        if (slot == -1) { spinlock_release(&this->lock, flags); return false; }
+        if (slot == -1) { 
+            spinlock_release(&this->lock, flags); 
+            return false; 
+        } else {
+            // Valid
+        }
 
         hba_cmd_header_t* cmdheader = (hba_cmd_header_t*)clb_virt;
         cmdheader += slot;
@@ -523,7 +648,12 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
         memset(cmdtbl, 0, sizeof(hba_cmd_tbl_t));
 
         int prdt_count = fillPrdt(cmdtbl, user_buf + (sectors_read * 512), chunk * 512);
-        if (prdt_count < 0) { spinlock_release(&this->lock, flags); return false; }
+        if (prdt_count < 0) { 
+            spinlock_release(&this->lock, flags); 
+            return false; 
+        } else {
+            // Valid
+        }
         cmdheader->prdtl = (uint16_t)prdt_count;
 
         fis_reg_h2d_t* cmd = (fis_reg_h2d_t*)(&cmdtbl->cfis);
@@ -542,36 +672,46 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
         cmd->countl   = (uint8_t)(chunk & 0xFF);
         cmd->counth   = (uint8_t)((chunk >> 8) & 0xFF);
 
-        uint64_t spin_start = tsc_read_asm();
+        uint64_t spin_start = hal_timer_get_uptime_ms();
         while ((hbaPort->tfd & (0x80 | 0x08))) {
             if(check_timeout(spin_start, 500)) { 
                 unpinBuffer(user_buf + (sectors_read * 512), chunk * 512);
                 spinlock_release(&this->lock, flags); 
                 return false; 
+            } else {
+                // Wait
             }
             hal_cpu_relax();
         }
 
         for (uint64_t i = 0; i < (chunk * 512) + 64; i += 64) {
-            __asm__ volatile("clflush (%0)" :: "r"((uint64_t)user_buf + (sectors_read * 512) + i));
+            hal_cache_flush_line((const void*)((uint64_t)user_buf + (sectors_read * 512) + i));
         }
-        __asm__ volatile("sfence" ::: "memory");
+        hal_memory_barrier_release();
 
         hbaPort->ci = 1u << slot;
 
-        uint64_t start = tsc_read_asm();
+        uint64_t start = hal_timer_get_uptime_ms();
         bool ok = true;
 
         while (1) {
-            if ((hbaPort->ci & (1u << slot)) == 0) { break; }
+            if ((hbaPort->ci & (1u << slot)) == 0) { 
+                break; 
+            } else {
+                // Wait
+            }
             if (hbaPort->is & HBA_PxIS_TFES) { 
                 ok = false;
                 break; 
+            } else {
+                // No error
             }
             if (check_timeout(start, 750)) { 
                 reset();
                 ok = false;
                 break;
+            } else {
+                // Wait
             }
             hal_cpu_relax();
         }
@@ -581,6 +721,8 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
         if (!ok || (hbaPort->is & HBA_PxIS_TFES)) {
             spinlock_release(&this->lock, flags);
             return false;
+        } else {
+            // Success
         }
         
         sectors_read += chunk;
@@ -591,7 +733,11 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
 }
 
 bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
-    if (is_atapi) { return false; }
+    if (is_atapi) { 
+        return false; 
+    } else {
+        // SATA
+    }
 
     storage_kiovec_t vec;
     vec.virt_addr = (void*)buffer;
@@ -600,6 +746,8 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[AHCI] DMA Guard Blocked Write Access!\n");
         return false;
+    } else {
+        // Valid
     }
 
     const uint8_t* user_buf = (const uint8_t*)buffer;
@@ -610,12 +758,21 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
 
     while (sectors_written < count) {
         uint32_t chunk = count - sectors_written;
-        if (chunk > MAX_SECTORS_PER_CMD) chunk = MAX_SECTORS_PER_CMD;
+        if (chunk > MAX_SECTORS_PER_CMD) {
+            chunk = MAX_SECTORS_PER_CMD;
+        } else {
+            // Fits
+        }
 
         hbaPort->serr = 0xFFFFFFFF;
         hbaPort->is   = 0xFFFFFFFF;
         int slot = findCmdSlot();
-        if (slot == -1) { spinlock_release(&this->lock, flags); return false; }
+        if (slot == -1) { 
+            spinlock_release(&this->lock, flags); 
+            return false; 
+        } else {
+            // Valid
+        }
 
         hba_cmd_header_t* cmdheader = (hba_cmd_header_t*)clb_virt;
         cmdheader += slot;
@@ -627,7 +784,12 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
         memset(cmdtbl, 0, sizeof(hba_cmd_tbl_t));
 
         int prdt_count = fillPrdt(cmdtbl, (void*)(user_buf + (sectors_written * 512)), chunk * 512);
-        if (prdt_count < 0) { spinlock_release(&this->lock, flags); return false; }
+        if (prdt_count < 0) { 
+            spinlock_release(&this->lock, flags); 
+            return false; 
+        } else {
+            // Valid
+        }
         cmdheader->prdtl = (uint16_t)prdt_count;
 
         fis_reg_h2d_t* cmd = (fis_reg_h2d_t*)(&cmdtbl->cfis);
@@ -646,36 +808,46 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
         cmd->countl   = (uint8_t)(chunk & 0xFF);
         cmd->counth   = (uint8_t)((chunk >> 8) & 0xFF);
 
-        uint64_t spin_start = tsc_read_asm();
+        uint64_t spin_start = hal_timer_get_uptime_ms();
         while ((hbaPort->tfd & (0x80 | 0x08))) {
             if(check_timeout(spin_start, 500)) { 
                 unpinBuffer((void*)(user_buf + (sectors_written * 512)), chunk * 512);
                 spinlock_release(&this->lock, flags); 
                 return false; 
+            } else {
+                // Wait
             }
             hal_cpu_relax();
         }
 
         for (uint64_t i = 0; i < (chunk * 512) + 64; i += 64) {
-            __asm__ volatile("clflush (%0)" :: "r"((uint64_t)user_buf + (sectors_written * 512) + i));
+            hal_cache_flush_line((const void*)((uint64_t)user_buf + (sectors_written * 512) + i));
         }
-        __asm__ volatile("mfence" ::: "memory");
+        hal_memory_barrier_full();
 
         hbaPort->ci = 1u << slot;
 
-        uint64_t start = tsc_read_asm();
+        uint64_t start = hal_timer_get_uptime_ms();
         bool ok = true;
 
         while (1) {
-            if ((hbaPort->ci & (1u << slot)) == 0) { break; }
+            if ((hbaPort->ci & (1u << slot)) == 0) { 
+                break; 
+            } else {
+                // Wait
+            }
             if (hbaPort->is & HBA_PxIS_TFES) { 
                 ok = false;
                 break; 
+            } else {
+                // No error
             }
             if (check_timeout(start, 750)) { 
                 reset();
                 ok = false;
                 break;
+            } else {
+                // Wait
             }
             hal_cpu_relax();
         }
@@ -685,6 +857,8 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
         if (!ok || (hbaPort->is & HBA_PxIS_TFES)) {
             spinlock_release(&this->lock, flags);
             return false;
+        } else {
+            // Success
         }
 
         sectors_written += chunk;

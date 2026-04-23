@@ -15,22 +15,31 @@ uint32_t hal_cpu_get_count(void);
 int      hal_cpu_get_numa_node(uint32_t cpu_id);
 
 uint64_t hal_timer_get_ticks(void);
+uint64_t hal_timer_get_uptime_ms(void);
+uint64_t hal_timer_get_uptime_us(void);
 void     hal_timer_delay_ms(uint32_t ms);
 void     hal_timer_delay_ns(uint64_t ns);
+
 void     hal_cpu_relax(void);
 void     hal_cpu_halt(void);
 
 void     hal_interrupts_disable(void);
 void     hal_interrupts_enable(void);
 bool     hal_interrupts_are_enabled(void);
+
 void     hal_tlb_flush_single(uint64_t virt_addr);
 void     hal_tlb_flush_all(void);
+
+void     hal_memory_barrier_acquire(void);
+void     hal_memory_barrier_release(void);
+void     hal_memory_barrier_full(void);
+void     hal_cache_flush_line(const void* addr);
 
 void     hal_io_outb(uint32_t port, uint8_t val);
 void     hal_io_outw(uint32_t port, uint16_t val);
 void     hal_io_outl(uint32_t port, uint32_t val);
 uint8_t  hal_io_inb(uint32_t port);
-uint16_t  hal_io_inw(uint32_t port);
+uint16_t hal_io_inw(uint32_t port);
 uint32_t hal_io_inl(uint32_t port);
 
 void     hal_io_insw(uint32_t port, void* buffer, uint32_t count);

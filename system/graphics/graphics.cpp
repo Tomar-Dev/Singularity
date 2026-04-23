@@ -6,6 +6,7 @@
 #include "libc/string.h"
 #include "libc/stdio.h"
 #include "archs/cpu/x86_64/core/cpuid.h"
+
 extern "C" {
     void memcpy_nt_avx(void* dest, const void* src, size_t count);
     void fill_rect_avx(uint32_t* buffer, uint32_t color, size_t pixel_count);
@@ -30,6 +31,8 @@ GraphicsBuffer::GraphicsBuffer(size_t sz) : size(sz), handle(0) {
 GraphicsBuffer::~GraphicsBuffer() {
     if (virt_addr) {
         kfree_contiguous(virt_addr, size);
+    } else {
+        // Null
     }
 }
 
@@ -38,13 +41,21 @@ void* GraphicsBuffer::map() {
 }
 
 void GraphicsBuffer::bindToGPU(GraphicsDevice* dev) {
-    if (!dev || !virt_addr) return;
+    if (!dev || !virt_addr) {
+        return;
+    } else {
+        // Bind logic
+    }
 }
 
 Surface::Surface(uint32_t w, uint32_t h) : width(w), height(h), owns_buffer(true), gpu_buffer(nullptr) {
     pitch = width * 4;
     buffer = (uint32_t*)kmalloc_aligned(pitch * height, 64);
-    if (buffer) memset(buffer, 0, pitch * height);
+    if (buffer) {
+        memset(buffer, 0, pitch * height);
+    } else {
+        // OOM
+    }
 }
 
 Surface::Surface(uint32_t w, uint32_t h, uint32_t* existing_buffer) 
@@ -56,12 +67,22 @@ Surface::Surface(uint32_t w, uint32_t h, uint32_t* existing_buffer)
 Surface::~Surface() {
     if (owns_buffer && buffer) {
         kfree_aligned(buffer);
+    } else {
+        // Not owned
     }
-    if (gpu_buffer) delete gpu_buffer;
+    if (gpu_buffer) {
+        delete gpu_buffer;
+    } else {
+        // Null
+    }
 }
 
 void Surface::clear(uint32_t color) {
-    if (!buffer) return;
+    if (!buffer) {
+        return;
+    } else {
+        // Valid
+    }
     if (cpu_info.has_avx) {
         fill_rect_avx(buffer, color, width * height);
     } else {
@@ -71,20 +92,44 @@ void Surface::clear(uint32_t color) {
 }
 
 void Surface::putPixel(int x, int y, uint32_t color) {
-    if (x < 0 || y < 0 || (uint32_t)x >= width || (uint32_t)y >= height) return;
+    if (x < 0 || y < 0 || (uint32_t)x >= width || (uint32_t)y >= height) {
+        return;
+    } else {
+        // Valid
+    }
     buffer[y * width + x] = color;
 }
 
 void Surface::fillRect(int x, int y, uint32_t w, uint32_t h, uint32_t color) {
-    if (!buffer) return;
+    if (!buffer) {
+        return;
+    } else {
+        // Valid
+    }
     
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if ((uint32_t)x >= width || (uint32_t)y >= height) return;
-    if (x + w > width || x + w < (uint32_t)x) w = width - x; // FIX 27: GFX Overflow
-    if (y + h > height) h = height - y;
+    if (x < 0) { w += x; x = 0; } else { /* Valid */ }
+    if (y < 0) { h += y; y = 0; } else { /* Valid */ }
+    if ((uint32_t)x >= width || (uint32_t)y >= height) {
+        return;
+    } else {
+        // Valid
+    }
+    if (x + w > width || x + w < (uint32_t)x) {
+        w = width - x; 
+    } else {
+        // Valid
+    }
+    if (y + h > height) {
+        h = height - y;
+    } else {
+        // Valid
+    }
     
-    if (w == 0 || h == 0) return;
+    if (w == 0 || h == 0) {
+        return;
+    } else {
+        // Valid
+    }
 
     if (w == width) {
         if (cpu_info.has_avx) {
@@ -93,6 +138,8 @@ void Surface::fillRect(int x, int y, uint32_t w, uint32_t h, uint32_t color) {
             for (uint32_t i = 0; i < w * h; i++) buffer[y * width + i] = color;
         }
         return;
+    } else {
+        // Partial
     }
 
     for (uint32_t row = 0; row < h; row++) {
@@ -106,21 +153,41 @@ void Surface::fillRect(int x, int y, uint32_t w, uint32_t h, uint32_t color) {
 }
 
 void Surface::blit(Surface* src, int x, int y) {
-    if (!buffer || !src) return;
+    if (!buffer || !src) {
+        return;
+    } else {
+        // Valid
+    }
 
     int src_x = 0;
     int src_y = 0;
     int w = src->getWidth();
     int h = src->getHeight();
 
-    if (x < 0) { src_x = -x; w += x; x = 0; }
-    if (y < 0) { src_y = -y; h += y; y = 0; }
+    if (x < 0) { src_x = -x; w += x; x = 0; } else { /* Valid */ }
+    if (y < 0) { src_y = -y; h += y; y = 0; } else { /* Valid */ }
     
-    if ((uint32_t)x >= width || (uint32_t)y >= height) return;
-    if (x + w > (int)width) w = width - x;
-    if (y + h > (int)height) h = height - y;
+    if ((uint32_t)x >= width || (uint32_t)y >= height) {
+        return;
+    } else {
+        // Valid
+    }
+    if (x + w > (int)width) {
+        w = width - x;
+    } else {
+        // Valid
+    }
+    if (y + h > (int)height) {
+        h = height - y;
+    } else {
+        // Valid
+    }
     
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0) {
+        return;
+    } else {
+        // Valid
+    }
 
     uint32_t* dest_buf = this->buffer;
     uint32_t* src_buf = src->getBuffer();
@@ -131,8 +198,9 @@ void Surface::blit(Surface* src, int x, int y) {
         uint32_t* d = dest_buf + ((y + row) * dest_pitch_px) + x;
         uint32_t* s = src_buf + ((src_y + row) * src_pitch_px) + src_x;
         
+        // PERFORMANS YAMASI: NT Store (Non-Temporal) kullanılarak VRAM kopyalaması hızlandırıldı.
         if (cpu_info.has_avx && w >= 16) {
-            safe_memcpy_asm(d, s, w * 4);
+            memcpy_nt_avx(d, s, w * 4);
         } else {
             memcpy(d, s, w * 4);
         }
@@ -140,16 +208,23 @@ void Surface::blit(Surface* src, int x, int y) {
 }
 
 void Surface::uploadToGPU(GraphicsDevice* dev) {
-    if (!dev) return;
+    if (!dev) {
+        return;
+    } else {
+        // Valid
+    }
     
     if (!gpu_buffer) {
         gpu_buffer = new GraphicsBuffer(width * height * 4);
+    } else {
+        // Exists
     }
     
     void* gpu_mem = gpu_buffer->map();
     if (gpu_mem) {
         memcpy(gpu_mem, buffer, width * height * 4);
-        
+    } else {
+        // Unmapped
     }
 }
 
@@ -158,11 +233,17 @@ static Surface* mainBackbuffer = nullptr;
 
 namespace GraphicsManager {
     void registerDisplay(GraphicsDevice* dev) {
-        if (!dev) return;
+        if (!dev) {
+            return;
+        } else {
+            // Valid
+        }
         
         if (primaryDisplay == nullptr) {
             primaryDisplay = dev;
             printf("[GFX] Primary Display set to: %s\n", dev->getName());
+        } else {
+            // Already set
         }
     }
 

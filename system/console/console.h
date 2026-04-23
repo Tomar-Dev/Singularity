@@ -40,6 +40,7 @@ void console_flush_if_needed();
 void console_force_unlock();
 
 void console_set_auto_flush(bool enabled);
+bool console_get_auto_flush();
 void console_scroll_up();
 void console_scroll_down();
 void console_blink_cursor(bool state);
@@ -48,6 +49,22 @@ void gop_draw_string(int x, int y, const char* str, uint32_t color);
 
 #ifdef __cplusplus
 }
+
+class ScopedAutoFlush {
+private:
+    bool old_state;
+public:
+    explicit ScopedAutoFlush(bool new_state) {
+        old_state = console_get_auto_flush();
+        console_set_auto_flush(new_state);
+    }
+    ~ScopedAutoFlush() {
+        console_set_auto_flush(old_state);
+    }
+    ScopedAutoFlush(const ScopedAutoFlush&) = delete;
+    ScopedAutoFlush& operator=(const ScopedAutoFlush&) = delete;
+};
+
 #endif
 
 #endif

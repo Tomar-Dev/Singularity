@@ -31,7 +31,7 @@ private:
     uint32_t db_stride; 
     uint32_t namespace_id; 
     
-    bool initialized_early; // OPTİMİZASYON YAMASI
+    bool initialized_early;
 
     void writeDoorbell(uint16_t index, uint16_t val);
     void waitReady();
@@ -49,8 +49,8 @@ public:
     NVMeDriver(PCIeDevice* pci);
     
     int init() override;
-    int earlyInit(); // OPTİMİZASYON YAMASI
-    int finalize();  // OPTİMİZASYON YAMASI
+    int earlyInit();
+    int finalize();
     
     int shutdown() override;
     void emergencyStop() override;

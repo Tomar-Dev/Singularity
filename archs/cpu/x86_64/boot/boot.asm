@@ -81,7 +81,6 @@ start:
     mov esp, stack_top
     mov[multiboot_info_ptr], ebx
 
-    ; Paging tablolarının hazırlanması
     mov eax, p3_table
     or eax, 0b11
     mov [p4_table], eax
@@ -103,19 +102,15 @@ start:
     mov eax, 0x200000
     mul ecx
     
-    ; OPTİMİZASYON YAMASI: Eski 3GB MMIO (PCD) kontrolü silindi.
-    ; Tüm 4GB alan standart RAM (Önbelleklenebilir) olarak haritalanır.
-    ; MMIO adresleri çalışma zamanında ioremap() ile düzeltilecektir.
     or eax, 0b10000011 
     
     mov[p2_tables + ecx * 8], eax
-    mov [p2_tables + ecx * 8 + 4], edx
+    mov[p2_tables + ecx * 8 + 4], edx
     
     inc ecx
     cmp ecx, PAGE_TABLE_COUNT * 512 
     jne .map_p2_loop
 
-    ; 64-bit (Long Mode) ortamını hazırla
     mov eax, cr4
     or eax, 1 << 5     ; PAE (Physical Address Extension)
     mov cr4, eax
@@ -123,9 +118,10 @@ start:
     mov eax, p4_table
     mov cr3, eax
 
+    ; GÜVENLİK YAMASI: NXE (No-Execute Enable) biti eklendi.
     mov ecx, 0xC0000080
     rdmsr
-    or eax, 1 << 8     ; LME (Long Mode Enable)
+    or eax, (1 << 8) | (1 << 11) ; LME ve NXE aktif
     wrmsr
 
     mov eax, cr0
@@ -137,7 +133,6 @@ start:
 
 bits 64
 long_mode_start:
-    ; 64-bit Moda Kesin Geçiş
     xor ax, ax
     mov ss, ax
     mov ds, ax
@@ -145,7 +140,6 @@ long_mode_start:
     mov fs, ax
     mov gs, ax
 
-    ; Güvenlik: CR0.WP ve CR4 modern ayarları
     mov rax, cr0
     and ax, 0xFFFB
     or ax, 0x2

@@ -4,7 +4,8 @@
 
 #include "system/device/device.h"
 #include "drivers/pci/pci.hpp"
-#include "archs/cpu/x86_64/sync/spinlock.h" // FIX#include <stdint.h>
+#include "archs/cpu/x86_64/sync/spinlock.h"
+#include <stdint.h>
 
 #define VIRTIO_VENDOR_ID 0x1AF4
 #define VIRTIO_DEV_BLK   0x1001
@@ -111,9 +112,9 @@ private:
     
     uint16_t free_head;
     uint16_t last_used_idx;
-    uint16_t free_desc_count; // FIX: Kuyruk siniri
+    uint16_t free_desc_count;
     
-    spinlock_t io_lock; // FIX: Eşzamanlı G/Ç için kilit
+    spinlock_t io_lock;
 
     void mapCapability(uint8_t type, void** virt_addr, uint64_t* phys_addr, uint32_t* length);
     

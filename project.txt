@@ -197,7 +197,6 @@ Root_Directory
 |     |--> string.h
 |--> project.py
 |--> project.txt
-|--> refactor_arch.py
 |--> rust_core
 |     |--> Cargo.lock
 |     |--> Cargo.toml
@@ -362,46 +361,6 @@ This file creates the “project.txt” file. (The contents of files with the fo
 .../project.txt:
 This file contains all the project's code and directory structure.
 
-.../refactor_arch.py:
-import os
-import shutil
-
-# İç içe geçmiş hatalı klasör yolları ve olmaları gereken doğru yollar
-FIX_DIRS = {
-    "archs/cpu/x86_64/acpi/acpi": "archs/cpu/x86_64/acpi",
-    "archs/cpu/x86_64/apic/apic": "archs/cpu/x86_64/apic",
-    "archs/cpu/x86_64/timer/timer": "archs/cpu/x86_64/timer",
-    "archs/cpu/x86_64/drivers/rtc/rtc": "archs/cpu/x86_64/drivers/rtc",
-    "archs/cpu/x86_64/drivers/keyboard/keyboard": "archs/cpu/x86_64/drivers/keyboard",
-    "archs/cpu/x86_64/drivers/mouse/mouse": "archs/cpu/x86_64/drivers/mouse",
-    "archs/cpu/x86_64/drivers/misc/misc": "archs/cpu/x86_64/drivers/misc",
-    "archs/cpu/x86_64/drivers/serial/serial": "archs/cpu/x86_64/drivers/serial",
-    "archs/cpu/x86_64/drivers/watchdog/watchdog": "archs/cpu/x86_64/drivers/watchdog",
-    "archs/cpu/x86_64/drivers/bus/bus": "archs/cpu/x86_64/drivers/bus",
-    "archs/cpu/x86_64/smbios/smbios": "archs/cpu/x86_64/smbios"
-}
-
-def main():
-    print("[FIX] İç içe geçmiş klasörler onarılıyor...")
-
-    for bad_dir, good_dir in FIX_DIRS.items():
-        if os.path.exists(bad_dir):
-            # İçerideki tüm dosyaları bir üst klasöre (olması gereken yere) taşı
-            for item in os.listdir(bad_dir):
-                src_path = os.path.join(bad_dir, item)
-                dst_path = os.path.join(good_dir, item)
-                shutil.move(src_path, dst_path)
-            
-            # İçi boşalan hatalı klasörü sil
-            os.rmdir(bad_dir)
-            print(f"Düzeltildi: {bad_dir} -> {good_dir}")
-
-    print("\n[OK] Dizin yapısı başarıyla onarıldı!")
-    print("Lütfen derlemeyi temizleyip tekrar başlatın: 'make rebuild' veya 'make run'")
-
-if __name__ == "__main__":
-    main()
-
 .../archs\cpu\cpu_hal.h:
 // archs/cpu/cpu_hal.h
 #ifndef ARCHS_CPU_HAL_H
@@ -420,22 +379,31 @@ uint32_t hal_cpu_get_count(void);
 int      hal_cpu_get_numa_node(uint32_t cpu_id);
 
 uint64_t hal_timer_get_ticks(void);
+uint64_t hal_timer_get_uptime_ms(void);
+uint64_t hal_timer_get_uptime_us(void);
 void     hal_timer_delay_ms(uint32_t ms);
 void     hal_timer_delay_ns(uint64_t ns);
+
 void     hal_cpu_relax(void);
 void     hal_cpu_halt(void);
 
 void     hal_interrupts_disable(void);
 void     hal_interrupts_enable(void);
 bool     hal_interrupts_are_enabled(void);
+
 void     hal_tlb_flush_single(uint64_t virt_addr);
 void     hal_tlb_flush_all(void);
+
+void     hal_memory_barrier_acquire(void);
+void     hal_memory_barrier_release(void);
+void     hal_memory_barrier_full(void);
+void     hal_cache_flush_line(const void* addr);
 
 void     hal_io_outb(uint32_t port, uint8_t val);
 void     hal_io_outw(uint32_t port, uint16_t val);
 void     hal_io_outl(uint32_t port, uint32_t val);
 uint8_t  hal_io_inb(uint32_t port);
-uint16_t  hal_io_inw(uint32_t port);
+uint16_t hal_io_inw(uint32_t port);
 uint32_t hal_io_inl(uint32_t port);
 
 void     hal_io_insw(uint32_t port, void* buffer, uint32_t count);
@@ -500,13 +468,12 @@ uint32_t hal_crc32_u64(uint32_t crc, uint64_t data);
 extern void sleep_ms(uint64_t ms);
 extern void sleep_ns(uint64_t ns);
 extern uint64_t timer_get_ticks();
+extern uint64_t get_uptime_ns();
 extern void invlpg_range_asm_fast(uint64_t start, size_t count);
 extern int get_cpu_numa_node(uint8_t apic_id);
 extern uint8_t get_apic_id(); 
 
 uint32_t hal_cpu_get_id(void) {
-    // FIX: Sonsuz özyineleme (Infinite Recursion) engellendi.
-    // Doğrudan donanım APIC ID'si okunur.
     return (uint32_t)get_apic_id();
 }
 
@@ -529,6 +496,14 @@ int hal_cpu_get_numa_node(uint32_t cpu_id) {
 
 uint64_t hal_timer_get_ticks(void) {
     return timer_get_ticks();
+}
+
+uint64_t hal_timer_get_uptime_ms(void) {
+    return get_uptime_ns() / 1000000ULL;
+}
+
+uint64_t hal_timer_get_uptime_us(void) {
+    return get_uptime_ns() / 1000ULL;
 }
 
 void hal_timer_delay_ms(uint32_t ms) {
@@ -569,6 +544,22 @@ void hal_tlb_flush_all(void) {
     uint64_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     __asm__ volatile("mov %0, %%cr3" :: "r"(cr3) : "memory");
+}
+
+void hal_memory_barrier_acquire(void) {
+    __asm__ volatile("lfence" ::: "memory");
+}
+
+void hal_memory_barrier_release(void) {
+    __asm__ volatile("sfence" ::: "memory");
+}
+
+void hal_memory_barrier_full(void) {
+    __asm__ volatile("mfence" ::: "memory");
+}
+
+void hal_cache_flush_line(const void* addr) {
+    __asm__ volatile("clflush (%0)" :: "r"(addr) : "memory");
 }
 
 #define HAL_PORT_CHECK(p) \
@@ -1579,11 +1570,15 @@ static void apic_clear_isr() {
         // Legacy APIC
     }
     
-    uint32_t isr_val = apic_read(LAPIC_ISR);
-    if (isr_val != 0) {
-        apic_write(LAPIC_EOI, 0);
-    } else {
-        // Clean
+    // GÜVENLİK YAMASI: Sadece ISR[0] değil, tüm 8 ISR register'ı taranarak 
+    // Spurious Interrupt kaçakları önlendi.
+    for (int i = 0; i < 8; i++) {
+        uint32_t isr_val = apic_read(LAPIC_ISR + (i * 0x10));
+        if (isr_val != 0) {
+            apic_write(LAPIC_EOI, 0);
+        } else {
+            // Clean
+        }
     }
 }
 
@@ -1670,6 +1665,12 @@ void init_apic(uint32_t physical_addr) {
 }
 
 void apic_finalize() {
+    if (is_apic_enabled()) {
+        apic_write(LAPIC_LINT0, 0x10000);
+        apic_write(LAPIC_LINT1, 0x10000);
+    } else {
+        // APIC not enabled
+    }
 }
 
 bool is_apic_enabled() { 
@@ -1754,7 +1755,16 @@ void apic_timer_oneshot(uint64_t us) {
         __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
         uint64_t current_tsc = ((uint64_t)hi << 32) | lo;
         
-        uint64_t target_tsc = current_tsc + ((ticks_per_ms * us) / 1000ULL); 
+        extern uint64_t get_tsc_freq();
+        uint64_t freq = get_tsc_freq();
+        if (freq == 0) {
+            freq = 2000000000ULL;
+        } else {
+            // Valid
+        }
+        
+        // PERFORMANS YAMASI: TSC Deadline için yanlış frekans çarpanı düzeltildi.
+        uint64_t target_tsc = current_tsc + ((freq / 1000000ULL) * us); 
         wrmsr(MSR_IA32_TSC_DEADLINE, target_tsc);
         
     } else {
@@ -2861,7 +2871,6 @@ start:
     mov esp, stack_top
     mov[multiboot_info_ptr], ebx
 
-    ; Paging tablolarının hazırlanması
     mov eax, p3_table
     or eax, 0b11
     mov [p4_table], eax
@@ -2883,19 +2892,15 @@ start:
     mov eax, 0x200000
     mul ecx
     
-    ; OPTİMİZASYON YAMASI: Eski 3GB MMIO (PCD) kontrolü silindi.
-    ; Tüm 4GB alan standart RAM (Önbelleklenebilir) olarak haritalanır.
-    ; MMIO adresleri çalışma zamanında ioremap() ile düzeltilecektir.
     or eax, 0b10000011 
     
     mov[p2_tables + ecx * 8], eax
-    mov [p2_tables + ecx * 8 + 4], edx
+    mov[p2_tables + ecx * 8 + 4], edx
     
     inc ecx
     cmp ecx, PAGE_TABLE_COUNT * 512 
     jne .map_p2_loop
 
-    ; 64-bit (Long Mode) ortamını hazırla
     mov eax, cr4
     or eax, 1 << 5     ; PAE (Physical Address Extension)
     mov cr4, eax
@@ -2903,9 +2908,10 @@ start:
     mov eax, p4_table
     mov cr3, eax
 
+    ; GÜVENLİK YAMASI: NXE (No-Execute Enable) biti eklendi.
     mov ecx, 0xC0000080
     rdmsr
-    or eax, 1 << 8     ; LME (Long Mode Enable)
+    or eax, (1 << 8) | (1 << 11) ; LME ve NXE aktif
     wrmsr
 
     mov eax, cr0
@@ -2917,7 +2923,6 @@ start:
 
 bits 64
 long_mode_start:
-    ; 64-bit Moda Kesin Geçiş
     xor ax, ax
     mov ss, ax
     mov ds, ax
@@ -2925,7 +2930,6 @@ long_mode_start:
     mov fs, ax
     mov gs, ax
 
-    ; Güvenlik: CR0.WP ve CR4 modern ayarları
     mov rax, cr0
     and ax, 0xFFFB
     or ax, 0x2
@@ -10410,6 +10414,8 @@ KBlob::KBlob(const char* blobName, uint64_t initialSize)
 KBlob::~KBlob() {
     if (rw_lock) {
         rwlock_destroy(rw_lock);
+    } else {
+        // Null
     }
 }
 
@@ -10420,19 +10426,32 @@ KVolatileBlob::KVolatileBlob(const char* blobName, const void* data, size_t data
     capacity = data_size;
     if (capacity > 0) {
         buffer = static_cast<uint8_t*>(kmalloc(capacity));
-        if (buffer && data) memcpy(buffer, data, capacity);
+        if (buffer && data) {
+            memcpy(buffer, data, capacity);
+        } else {
+            // Null
+        }
     } else {
         buffer = nullptr;
     }
 }
 
 KVolatileBlob::~KVolatileBlob() {
-    if (buffer) kfree(buffer);
+    if (buffer) {
+        kfree(buffer);
+    } else {
+        // Null
+    }
 }
 
 error_t KVolatileBlob::read(uint64_t offset, void* buf, size_t count, size_t* bytes_read) {
     ScopedReadLock srl(rw_lock);
-    if (offset >= size) { *bytes_read = 0; return KOM_OK; }
+    if (offset >= size) { 
+        *bytes_read = 0; 
+        return KOM_OK; 
+    } else {
+        // Valid
+    }
     size_t available = size - offset;
     size_t to_read = (count < available) ? count : available;
     memcpy(buf, buffer + offset, to_read);
@@ -10443,32 +10462,55 @@ error_t KVolatileBlob::read(uint64_t offset, void* buf, size_t count, size_t* by
 error_t KVolatileBlob::write(uint64_t offset, const void* buf, size_t count, size_t* bytes_written) {
     ScopedWriteLock swl(rw_lock);
     
-    // GÜVENLİK YAMASI: 64-Bit Integer Wrap-Around (Taşma) Koruması
-    // Kullanıcı çok büyük offset ve count verip (örn: offset=0xFFFF... count=2)
-    // matematikten kaçarak Kernel Heap'in ilerisini (rastgele adresi) ezebilir!
     if (offset + count < offset) {
         *bytes_written = 0;
         return KOM_ERR_IO;
+    } else {
+        // Valid
     }
     
     if (offset + count > capacity) {
-        size_t new_cap = offset + count;
+        size_t needed = offset + count;
+        // PERFORMANS YAMASI: O(n^2) büyüme engellendi. Capacity * 2 faktörü eklendi.
+        size_t new_cap = (capacity * 2 > needed) ? capacity * 2 : needed;
+        if (new_cap < 4096) {
+            new_cap = 4096;
+        } else {
+            // Valid
+        }
+        
         uint8_t* new_buf = static_cast<uint8_t*>(kmalloc(new_cap));
-        if (!new_buf) { *bytes_written = 0; return KOM_ERR_NO_MEMORY; }
+        if (!new_buf) { 
+            *bytes_written = 0; 
+            return KOM_ERR_NO_MEMORY; 
+        } else {
+            // Allocated
+        }
+        
         if (buffer) {
             memcpy(new_buf, buffer, size);
             kfree(buffer);
+        } else {
+            // First alloc
         }
         buffer = new_buf;
         capacity = new_cap;
+    } else {
+        // Fits
     }
     
     if (offset > size) {
         memset(buffer + size, 0, offset - size);
+    } else {
+        // Overwrite or append
     }
     
     memcpy(buffer + offset, buf, count);
-    if (offset + count > size) size = offset + count;
+    if (offset + count > size) {
+        size = offset + count;
+    } else {
+        // Valid
+    }
     *bytes_written = count;
     return KOM_OK;
 }
@@ -10477,17 +10519,27 @@ error_t KVolatileBlob::resize(uint64_t new_size) {
     ScopedWriteLock swl(rw_lock);
     if (new_size > capacity) {
         uint8_t* new_buf = static_cast<uint8_t*>(kmalloc(new_size));
-        if (!new_buf) return KOM_ERR_NO_MEMORY;
+        if (!new_buf) {
+            return KOM_ERR_NO_MEMORY;
+        } else {
+            // Allocated
+        }
         if (buffer) {
             memcpy(new_buf, buffer, size);
             kfree(buffer);
+        } else {
+            // First alloc
         }
         buffer = new_buf;
         capacity = new_size;
+    } else {
+        // Fits
     }
     
     if (new_size > size) {
         memset(buffer + size, 0, new_size - size);
+    } else {
+        // Shrink
     }
     
     size = new_size;
@@ -10500,7 +10552,12 @@ KDynamicBlob::KDynamicBlob(const char* blobName, DynamicReadCallback cb) : KBlob
 KDynamicBlob::~KDynamicBlob() {}
 
 error_t KDynamicBlob::read(uint64_t offset, void* buf, size_t count, size_t* bytes_read) {
-    if (!read_cb) { *bytes_read = 0; return KOM_ERR_UNSUPPORTED; }
+    if (!read_cb) { 
+        *bytes_read = 0; 
+        return KOM_ERR_UNSUPPORTED; 
+    } else {
+        // Valid
+    }
     *bytes_read = read_cb(offset, buf, count);
     return KOM_OK;
 }
@@ -11877,7 +11934,11 @@ alignas(KernelHeap) static uint8_t heap_instance_buffer[sizeof(KernelHeap)];
 extern "C" void memzero_nt_avx(void* dest, size_t count);
 
 static inline void fast_poison(void* ptr, size_t size) {
-    if (size == 0) { return; } else { /* Execute */ }
+    if (size == 0) { 
+        return; 
+    } else {
+        // Execute
+    }
     
     if (size < ASM_THRESHOLD) { 
         memset(ptr, POISON_VALUE, size); 
@@ -11915,8 +11976,16 @@ uint64_t KernelHeap::getAslrOffset() {
 void KernelHeap::init() {
     magic  = get_secure_random();
     canary = get_secure_random();
-    if (!magic)  { magic  = 0xC0FFEE1234567890ULL; } else { /* Seed loaded */ }
-    if (!canary) { canary = 0xDEADBEEFCAFEBABEULL; } else { /* Seed loaded */ }
+    if (!magic)  { 
+        magic  = 0xC0FFEE1234567890ULL; 
+    } else {
+        // Seed loaded
+    }
+    if (!canary) { 
+        canary = 0xDEADBEEFCAFEBABEULL; 
+    } else {
+        // Seed loaded
+    }
 
     kheap_magic  = magic;
     kheap_canary = canary;
@@ -11936,17 +12005,33 @@ void KernelHeap::init() {
 }
 
 int KernelHeap::getBucketIndex(size_t size) {
-    if (size == 0 || size > 4096) { return -1; } else { /* Size validated */ }
-    if (size <= 32) { return 0; } else { /* Proceed to calculate tree */ }
+    if (size == 0 || size > 4096) { 
+        return -1; 
+    } else {
+        // Size validated
+    }
+    if (size <= 32) { 
+        return 0; 
+    } else {
+        // Proceed to calculate tree
+    }
     
     int log2 = 32 - __builtin_clz(static_cast<unsigned int>(size - 1));
     int idx  = log2 - 5;
-    if (idx < 0) { return 0; } else { return idx; }
+    if (idx < 0) { 
+        return 0; 
+    } else { 
+        return idx; 
+    }
 }
 
 void* KernelHeap::vmm_alloc(size_t pages) {
     uint64_t virt = vm_arena.alloc(pages);
-    if (unlikely(!virt)) { return nullptr; } else { /* Virtual block reserved */ }
+    if (unlikely(!virt)) { 
+        return nullptr; 
+    } else {
+        // Virtual block reserved
+    }
 
     bool use_huge = (pages >= 512) && ((virt & 0x1FFFFF) == 0);
     size_t align_req = use_huge ? 512 : 1;
@@ -11954,7 +12039,11 @@ void* KernelHeap::vmm_alloc(size_t pages) {
     void* phys = pmm_alloc_contiguous_aligned(pages, align_req);
     if (likely(phys)) {
         uint64_t flags = PAGE_PRESENT | PAGE_WRITE | PAGE_NX;
-        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) { flags |= PAGE_HUGE; } else { /* Excluded */ }
+        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) { 
+            flags |= PAGE_HUGE; 
+        } else {
+            // Excluded
+        }
 
         if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages, flags)) {
             pmm_free_contiguous(phys, pages);
@@ -11973,7 +12062,11 @@ void* KernelHeap::vmm_alloc(size_t pages) {
                     uint64_t v  = virt + j * PAGE_SIZE;
                     uint64_t pa = get_physical_address(v);
                     unmap_page(v);
-                    if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Corrupt mapping */ }
+                    if (pa) { 
+                        pmm_free_frame(reinterpret_cast<void*>(pa)); 
+                    } else {
+                        // Corrupt mapping
+                    }
                 }
                 vm_arena.free(virt, pages);
                 return nullptr;
@@ -11986,7 +12079,11 @@ void* KernelHeap::vmm_alloc(size_t pages) {
                     uint64_t v  = virt + j * PAGE_SIZE;
                     uint64_t pa = get_physical_address(v);
                     unmap_page(v);
-                    if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Bad mapping tree */ }
+                    if (pa) { 
+                        pmm_free_frame(reinterpret_cast<void*>(pa)); 
+                    } else {
+                        // Bad mapping tree
+                    }
                 }
                 vm_arena.free(virt, pages);
                 return nullptr;
@@ -12001,22 +12098,29 @@ void* KernelHeap::vmm_alloc(size_t pages) {
 
 void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
     uint64_t virt = vm_arena.alloc_aligned(pages, align_pages);
-    if (unlikely(!virt)) { return nullptr; } else { /* Executing */ }
+    if (unlikely(!virt)) { 
+        return nullptr; 
+    } else {
+        // Executing
+    }
 
     bool use_huge = (pages >= 512) && ((virt & 0x1FFFFF) == 0);
     
-    // BUG-002 FIX: Do not silently downgrade requested alignment!
     size_t align_req = align_pages;
     if (use_huge && align_pages < 512) {
         align_req = 512;
     } else {
-        // Honor the larger requested alignment (e.g. 1024 pages for VRAM/DMA)
+        // Honor the larger requested alignment
     }
 
     void* phys = pmm_alloc_contiguous_aligned(pages, align_req);
     if (likely(phys)) {
         uint64_t flags = PAGE_PRESENT | PAGE_WRITE | PAGE_NX;
-        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) { flags |= PAGE_HUGE; } else { /* Safe */ }
+        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) { 
+            flags |= PAGE_HUGE; 
+        } else {
+            // Safe
+        }
 
         if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages, flags)) {
             pmm_free_contiguous(phys, pages);
@@ -12035,7 +12139,11 @@ void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
                     uint64_t v  = virt + j * PAGE_SIZE;
                     uint64_t pa = get_physical_address(v);
                     unmap_page(v);
-                    if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Erroneous free */ }
+                    if (pa) { 
+                        pmm_free_frame(reinterpret_cast<void*>(pa)); 
+                    } else {
+                        // Erroneous free
+                    }
                 }
                 vm_arena.free(virt, pages);
                 return nullptr;
@@ -12048,7 +12156,11 @@ void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
                     uint64_t v  = virt + j * PAGE_SIZE;
                     uint64_t pa = get_physical_address(v);
                     unmap_page(v);
-                    if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Erroneous drop */ }
+                    if (pa) { 
+                        pmm_free_frame(reinterpret_cast<void*>(pa)); 
+                    } else {
+                        // Erroneous drop
+                    }
                 }
                 vm_arena.free(virt, pages);
                 return nullptr;
@@ -12062,12 +12174,20 @@ void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
 }
 
 void* KernelHeap::malloc(size_t size, uint64_t caller) {
-    if (unlikely(size == 0)) { return nullptr; } else { /* Validate bounds */ }
+    if (unlikely(size == 0)) { 
+        return nullptr; 
+    } else {
+        // Validate bounds
+    }
     
     if (likely(size < PAGE_SIZE)) {
         if (unlikely(gwp_asan_should_sample())) {
             void* gwp_ptr = gwp_asan_malloc(size, caller);
-            if (gwp_ptr) { return gwp_ptr; } else { /* Fallback to normal allocation */ }
+            if (gwp_ptr) { 
+                return gwp_ptr; 
+            } else {
+                // Fallback to normal allocation
+            }
         } else {
             // Out of bounds sample metric
         }
@@ -12076,7 +12196,11 @@ void* KernelHeap::malloc(size_t size, uint64_t caller) {
     }
 
     size_t total_req = HEAP_HEADER_SIZE + size + HEAP_FOOTER_SIZE;
-    if (unlikely(total_req < size)) { return nullptr; } else { /* Integer safety passed */ }
+    if (unlikely(total_req < size)) { 
+        return nullptr; 
+    } else {
+        // Integer safety passed
+    }
 
     if (likely(total_req <= 4096)) {
         int idx = getBucketIndex(total_req);
@@ -12119,7 +12243,11 @@ void* KernelHeap::malloc(size_t size, uint64_t caller) {
 }
 
 void KernelHeap::free(void* ptr) {
-    if (unlikely(!ptr)) { return; } else { /* Dereference checking */ }
+    if (unlikely(!ptr)) { 
+        return; 
+    } else {
+        // Dereference checking
+    }
     
     uint64_t caller = reinterpret_cast<uint64_t>(__builtin_return_address(0));
     
@@ -12134,8 +12262,16 @@ void KernelHeap::free(void* ptr) {
     uint64_t  h_start = KHEAP_START_VIRTUAL;
     uint64_t  h_end   = KHEAP_START_VIRTUAL + KHEAP_MAX_SIZE + HEAP_ASLR_MASK;
 
-    if (unlikely(addr < h_start || addr > h_end)) { return; } else { /* Bounds mapped */ }
-    if (unlikely((addr & 0x7) != 0)) { return; } else { /* SSE Misalignment guard passed */ }
+    if (unlikely(addr < h_start || addr > h_end)) { 
+        return; 
+    } else {
+        // Bounds mapped
+    }
+    if (unlikely((addr & 0x7) != 0)) { 
+        return; 
+    } else {
+        // SSE Misalignment guard passed
+    }
 
     void*    real_ptr   = reinterpret_cast<void*>(addr - HEAP_HEADER_SIZE);
     uint64_t bucket_size = *reinterpret_cast<uint64_t*>(real_ptr);
@@ -12188,7 +12324,11 @@ void KernelHeap::free(void* ptr) {
         uint64_t v  = reinterpret_cast<uintptr_t>(real_ptr) + i * PAGE_SIZE;
         uint64_t pa = get_physical_address(v);
         unmap_page(v);
-        if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Unknown pointer footprint */ }
+        if (pa) { 
+            pmm_free_frame(reinterpret_cast<void*>(pa)); 
+        } else {
+            // Unknown pointer footprint
+        }
     }
     vm_arena.free(reinterpret_cast<uint64_t>(real_ptr), pages);
     big_alloc_bytes -= bucket_size;
@@ -12196,20 +12336,38 @@ void KernelHeap::free(void* ptr) {
 }
 
 void* KernelHeap::calloc(size_t num, size_t size, uint64_t caller) {
-    if (num != 0 && size > (static_cast<size_t>(-1)) / num) { return nullptr; } else { /* Proceed without math overflows */ }
+    if (num != 0 && size > (static_cast<size_t>(-1)) / num) { 
+        return nullptr; 
+    } else {
+        // Proceed without math overflows
+    }
     void* p = malloc(num * size, caller);
-    if (p) { memset(p, 0, num * size); } else { /* Ignore null assignment */ }
+    if (p) { 
+        memset(p, 0, num * size); 
+    } else {
+        // Ignore null assignment
+    }
     return p;
 }
 
 void* KernelHeap::realloc(void* ptr, size_t new_size, uint64_t caller) {
-    if (!ptr) { return malloc(new_size, caller); } else { /* Pointers are active */ }
-    if (!new_size) { free(ptr); return nullptr; } else { /* Size is acceptable */ }
+    if (!ptr) { 
+        return malloc(new_size, caller); 
+    } else {
+        // Pointers are active
+    }
+    if (!new_size) { 
+        free(ptr); 
+        return nullptr; 
+    } else {
+        // Size is acceptable
+    }
     
     if (unlikely(gwp_asan_is_managed(ptr))) {
+        size_t old_sz = gwp_asan_get_allocation_size(ptr);
         void* np = malloc(new_size, caller);
         if (np) {
-            memcpy(np, ptr, new_size); 
+            memcpy(np, ptr, (old_sz < new_size) ? old_sz : new_size); 
             free(ptr);
         } else {
             // OOM failure during GWP ASAN resize operation
@@ -12240,7 +12398,11 @@ void* KernelHeap::mallocAligned(size_t size, size_t alignment, uint64_t caller) 
         // Alignment boundary matches system specifications
     }
     
-    if (alignment >= static_cast<size_t>(PAGE_SIZE)) { return mallocDma(size, alignment, caller); } else { /* Fallback to granular alignment block */ }
+    if (alignment >= static_cast<size_t>(PAGE_SIZE)) { 
+        return mallocDma(size, alignment, caller); 
+    } else {
+        // Fallback to granular alignment block
+    }
     
     size_t total = size + alignment + sizeof(void*);
     if (total < size) { 
@@ -12251,7 +12413,11 @@ void* KernelHeap::mallocAligned(size_t size, size_t alignment, uint64_t caller) 
     }
     
     void* raw = malloc(total, caller);
-    if (!raw) { return nullptr; } else { /* Valid raw memory segment allocated */ }
+    if (!raw) { 
+        return nullptr; 
+    } else {
+        // Valid raw memory segment allocated
+    }
     
     uintptr_t aligned = ALIGN_UP(reinterpret_cast<uintptr_t>(raw) + sizeof(void*), alignment);
     *reinterpret_cast<void**>(aligned - sizeof(void*)) = raw;
@@ -12259,7 +12425,11 @@ void* KernelHeap::mallocAligned(size_t size, size_t alignment, uint64_t caller) 
 }
 
 void KernelHeap::freeAligned(void* ptr) {
-    if (!ptr) { return; } else { /* Proceed */ }
+    if (!ptr) { 
+        return; 
+    } else {
+        // Proceed
+    }
     if ((reinterpret_cast<uintptr_t>(ptr) & (static_cast<size_t>(PAGE_SIZE) - 1)) == 0) { 
         free(ptr); 
         return; 
@@ -12272,21 +12442,37 @@ void KernelHeap::freeAligned(void* ptr) {
 
 void* KernelHeap::mallocDma(size_t size, size_t alignment, uint64_t caller) {
     (void)caller;
-    if (!size || !alignment) { return nullptr; } else { /* Bounds verified */ }
-    if (alignment < static_cast<size_t>(PAGE_SIZE)) { alignment = PAGE_SIZE; } else { /* Alignment strictly enforces page borders */ }
+    if (!size || !alignment) { 
+        return nullptr; 
+    } else {
+        // Bounds verified
+    }
+    if (alignment < static_cast<size_t>(PAGE_SIZE)) { 
+        alignment = PAGE_SIZE; 
+    } else {
+        // Alignment strictly enforces page borders
+    }
     
     size_t pages     = ALIGN_UP(size, PAGE_SIZE) / PAGE_SIZE;
     size_t align_pgs = alignment / PAGE_SIZE;
     
     uint64_t flags   = spinlock_acquire(&vm_lock);
     void* ptr = vmm_alloc_aligned(pages, align_pgs);
-    if (likely(ptr)) { big_alloc_bytes += pages * PAGE_SIZE; } else { /* DMA Request has completely starved */ }
+    if (likely(ptr)) { 
+        big_alloc_bytes += pages * PAGE_SIZE; 
+    } else {
+        // DMA Request has completely starved
+    }
     spinlock_release(&vm_lock, flags);
     return ptr;
 }
 
 void KernelHeap::freeDma(void* ptr, size_t size) {
-    if (!ptr || !size) { return; } else { /* Proceed to destroy physical links */ }
+    if (!ptr || !size) { 
+        return; 
+    } else {
+        // Proceed to destroy physical links
+    }
     size_t   pages = ALIGN_UP(size, PAGE_SIZE) / PAGE_SIZE;
     uint64_t virt  = reinterpret_cast<uintptr_t>(ptr);
     
@@ -12297,16 +12483,28 @@ void KernelHeap::freeDma(void* ptr, size_t size) {
         uint64_t v  = virt + i * PAGE_SIZE;
         uint64_t pa = get_physical_address(v);
         unmap_page(v);
-        if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Frame dropped previously */ }
+        if (pa) { 
+            pmm_free_frame(reinterpret_cast<void*>(pa)); 
+        } else {
+            // Frame dropped previously
+        }
     }
     vm_arena.free(virt, pages);
-    if (big_alloc_bytes >= pages * PAGE_SIZE) { big_alloc_bytes -= pages * PAGE_SIZE; } else { /* Mathematical underflow prevented */ }
+    if (big_alloc_bytes >= pages * PAGE_SIZE) { 
+        big_alloc_bytes -= pages * PAGE_SIZE; 
+    } else {
+        // Mathematical underflow prevented
+    }
     spinlock_release(&vm_lock, flags);
 }
 
 void* KernelHeap::mallocContiguous(size_t size, uint64_t caller) {
     (void)caller;
-    if (!size) { return nullptr; } else { /* Proceed to allocate physical linear segment */ }
+    if (!size) { 
+        return nullptr; 
+    } else {
+        // Proceed to allocate physical linear segment
+    }
     size_t pages = ALIGN_UP(size, PAGE_SIZE) / PAGE_SIZE;
     
     uint64_t flags = spinlock_acquire(&vm_lock);
@@ -12344,7 +12542,11 @@ void* KernelHeap::mallocContiguous(size_t size, uint64_t caller) {
 }
 
 void KernelHeap::freeContiguous(void* ptr, size_t size) {
-    if (!ptr || !size) { return; } else { /* Target pointer acquired */ }
+    if (!ptr || !size) { 
+        return; 
+    } else {
+        // Target pointer acquired
+    }
     size_t   pages = ALIGN_UP(size, PAGE_SIZE) / PAGE_SIZE;
     uint64_t virt  = reinterpret_cast<uintptr_t>(ptr);
     
@@ -12355,10 +12557,18 @@ void KernelHeap::freeContiguous(void* ptr, size_t size) {
         uint64_t v  = virt + i * PAGE_SIZE;
         uint64_t pa = get_physical_address(v);
         unmap_page(v);
-        if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Ghost frame handled safely */ }
+        if (pa) { 
+            pmm_free_frame(reinterpret_cast<void*>(pa)); 
+        } else {
+            // Ghost frame handled safely
+        }
     }
     vm_arena.free(virt, pages);
-    if (big_alloc_bytes >= pages * PAGE_SIZE) { big_alloc_bytes -= pages * PAGE_SIZE; } else { /* Accounting mismatch avoided */ }
+    if (big_alloc_bytes >= pages * PAGE_SIZE) { 
+        big_alloc_bytes -= pages * PAGE_SIZE; 
+    } else {
+        // Accounting mismatch avoided
+    }
     spinlock_release(&vm_lock, flags);
 }
 
@@ -12448,26 +12658,47 @@ void kfree_contiguous(void* ptr, size_t size) {
 }
 
 void kheap_print_stats() {
-    if (g_Heap) { g_Heap->printStats(); } else { /* Ignore if heap is corrupted */ }
+    if (g_Heap) { 
+        g_Heap->printStats(); 
+    } else {
+        // Ignore if heap is corrupted
+    }
 }
 
 void kheap_trim() {
-    if (g_Heap) { g_Heap->trim(); } else { /* System state degraded */ }
+    if (g_Heap) { 
+        g_Heap->trim(); 
+    } else {
+        // System state degraded
+    }
 }
 
 size_t kheap_get_cached_size() {
-    if (g_Heap) { return g_Heap->getCachedSize(); } else { return 0; }
+    if (g_Heap) { 
+        return g_Heap->getCachedSize(); 
+    } else { 
+        return 0; 
+    }
 }
 
 size_t kheap_get_payload_size() {
-    if (g_Heap) { return g_Heap->getUsedPayload(); } else { return 0; }
+    if (g_Heap) { 
+        return g_Heap->getUsedPayload(); 
+    } else { 
+        return 0; 
+    }
 }
 
 size_t kheap_get_reserved_size() {
-    if (g_Heap) { return g_Heap->getTotalReserved(); } else { return 0; }
+    if (g_Heap) { 
+        return g_Heap->getTotalReserved(); 
+    } else { 
+        return 0; 
+    }
 }
 
 }
+
 
 .../archs\memory\kheap.h:
 // archs/memory/kheap.h
@@ -13893,11 +14124,11 @@ namespace PCIe {
 #include "system/disk/gpt.h"
 #include "kernel/debug.h"
 #include "system/power/power.h"
+
 extern "C" void print_status(const char* prefix, const char* msg, const char* status);
 extern "C" uint64_t get_physical_address(uint64_t virtual_addr);
 extern "C" void* kmalloc_contiguous(size_t size);
 extern "C" void kfree_contiguous(void* ptr, size_t size);
-extern "C" void tsc_delay_ms(uint32_t ms);
 
 static AHCIDriver* g_ahci_driver = nullptr;
 
@@ -13925,6 +14156,8 @@ public:
         if (this->isWriteProtected()) {
             printf("[AHCI] Blocked write to '%s' (Device Lockdown Active).\n", this->getName());
             return 0;
+        } else {
+            // Proceed
         }
         return port->write(lba, count, buffer);
     }
@@ -13943,6 +14176,8 @@ AHCIDriver::~AHCIDriver() {
             ports[i]->stopCmd();
             delete ports[i];
             ports[i] = nullptr;
+        } else {
+            // Null
         }
     }
 }
@@ -13952,12 +14187,20 @@ int AHCIDriver::earlyInit() {
     pciDev->enableMemorySpace();
 
     uint32_t bar5 = pciDev->getBAR(5);
-    if (bar5 == 0) { return 0; }
+    if (bar5 == 0) { 
+        return 0; 
+    } else {
+        // Valid
+    }
 
     uint64_t phys_addr = bar5 & 0xFFFFFFF0ULL;
     void* virt_addr = ioremap(phys_addr, 8192,
                                PAGE_PRESENT | PAGE_WRITE | PAGE_PCD | PAGE_PWT);
-    if (!virt_addr) { return 0; }
+    if (!virt_addr) { 
+        return 0; 
+    } else {
+        // Mapped
+    }
 
     abar = (volatile hba_mem_t*)virt_addr;
 
@@ -13965,7 +14208,7 @@ int AHCIDriver::earlyInit() {
 
     int wait = 0;
     while ((abar->ghc & (1u << 0)) && wait < 100) {
-        tsc_delay_ms(10);
+        hal_timer_delay_ms(10);
         wait++;
     }
 
@@ -13978,6 +14221,8 @@ int AHCIDriver::earlyInit() {
             volatile hba_port_t* port =
                 (volatile hba_port_t*)((uint8_t*)abar + 0x100 + (i * 0x80));
             port->cmd |= (1u << 1) | (1u << 2);
+        } else {
+            // Empty
         }
     }
 
@@ -13986,14 +14231,22 @@ int AHCIDriver::earlyInit() {
 }
 
 int AHCIDriver::finalize() {
-    if (!initialized_early) return 0;
+    if (!initialized_early) {
+        return 0;
+    } else {
+        // Proceed
+    }
 
-    tsc_delay_ms(10);
+    hal_timer_delay_ms(10);
 
     uint32_t pi = abar->pi;
 
     for (int i = 0; i < 32; i++) {
-        if (!(pi & (1u << i))) continue;
+        if (!(pi & (1u << i))) {
+            continue;
+        } else {
+            // Active
+        }
 
         volatile hba_port_t* port = (volatile hba_port_t*)((uint8_t*)abar + 0x100 + (i * 0x80));
 
@@ -14003,6 +14256,8 @@ int AHCIDriver::finalize() {
 
         if (det != HBA_PORT_DET_PRESENT || ipm != HBA_PORT_IPM_ACTIVE) {
             continue;
+        } else {
+            // Present
         }
 
         AHCIPort* newPort = new AHCIPort();
@@ -14016,7 +14271,11 @@ int AHCIDriver::finalize() {
             char newName[32];
             DeviceManager::getNextSataName(newName);
 
-            if (newPort->is_atapi) sprintf(newName, "cdrom%d", i);
+            if (newPort->is_atapi) {
+                sprintf(newName, "cdrom%d", i);
+            } else {
+                // SATA
+            }
 
             AHCISubDevice* subDev = new AHCISubDevice(newPort, newName, newPort->model_name);
             DeviceManager::registerDevice(subDev);
@@ -14025,30 +14284,49 @@ int AHCIDriver::finalize() {
             sprintf(msg, "Port %d attached as %s", i, newName);
             print_status("[ AHCI ]", msg, "INFO");
 
-            if (!newPort->is_atapi) gpt_scan_partitions(subDev);
+            if (!newPort->is_atapi) {
+                gpt_scan_partitions(subDev);
+            } else {
+                // ATAPI
+            }
         } else {
             delete newPort;
         }
     }
 
-    return (portCount > 0) ? 1 : 0;
+    if (portCount > 0) { 
+        return 1; 
+    } else { 
+        return 0; 
+    }
 }
 
 int AHCIDriver::init() {
-    if (earlyInit()) { return finalize(); }
-    return 0;
+    if (earlyInit()) { 
+        return finalize(); 
+    } else {
+        return 0;
+    }
 }
 
 int AHCIDriver::shutdown() {
     for (int i = 0; i < portCount; i++) {
-        if (ports[i]) { ports[i]->stopCmd(); }
+        if (ports[i]) { 
+            ports[i]->stopCmd(); 
+        } else {
+            // Null
+        }
     }
     print_shutdown("AHCI DMA engines stopped");
     return 1;
 }
 
 void AHCIDriver::emergencyStop() {
-    if (abar) { abar->ghc |= 1u; }
+    if (abar) { 
+        abar->ghc |= 1u; 
+    } else {
+        // Null
+    }
 }
 
 int AHCIDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
@@ -14068,6 +14346,8 @@ extern "C" {
                 AHCIDriver* drv = new AHCIDriver(pci);
                 drv->init();
                 return;
+            } else {
+                // Skip
             }
         }
     }
@@ -14080,16 +14360,21 @@ extern "C" {
                 g_ahci_driver = new AHCIDriver(pci);
                 g_ahci_driver->earlyInit();
                 return;
+            } else {
+                // Skip
             }
         }
     }
 
     __attribute__((used, noinline))
     void init_ahci_late() {
-        if (g_ahci_driver) { g_ahci_driver->finalize(); }
+        if (g_ahci_driver) { 
+            g_ahci_driver->finalize(); 
+        } else {
+            // Null
+        }
     }
 }
-
 
 .../drivers\storage\ahci\ahci.hpp:
 // drivers/storage/ahci/ahci.hpp
@@ -14180,11 +14465,8 @@ static inline uint32_t swap_uint32(uint32_t val) {
            ((val >> 8)  & 0xff00) | ((val << 24) & 0xff000000);
 }
 
-static inline bool check_timeout(uint64_t start, uint32_t ms) {
-    uint64_t freq = get_tsc_freq();
-    if (freq == 0) freq = 2000000000ULL;
-    uint64_t timeout_cycles = (freq / 1000) * ms;
-    return (tsc_read_asm() - start) > timeout_cycles;
+static inline bool check_timeout(uint64_t start_ms, uint32_t timeout_ms) {
+    return (hal_timer_get_uptime_ms() - start_ms) > timeout_ms;
 }
 
 void AHCIPort::startCmd() {
@@ -14202,7 +14484,11 @@ void AHCIPort::stopCmd() {
     hbaPort->cmd &= ~(1 << 4);
     int wait = 0;
     while (wait < 500) {
-        if (!(hbaPort->cmd & (1 << 14)) && !(hbaPort->cmd & (1 << 15))) break;
+        if (!(hbaPort->cmd & (1 << 14)) && !(hbaPort->cmd & (1 << 15))) {
+            break;
+        } else {
+            // Wait
+        }
         hal_timer_delay_ms(1);
         wait++;
     }
@@ -14233,7 +14519,11 @@ void AHCIPort::reset() {
 int AHCIPort::findCmdSlot() {
     uint32_t slots = (hbaPort->sact | hbaPort->ci);
     for (int i = 0; i < 32; i++) {
-        if ((slots & 1) == 0) { return i; }
+        if ((slots & 1) == 0) { 
+            return i; 
+        } else {
+            // Occupied
+        }
         slots >>= 1;
     }
     return -1;
@@ -14242,7 +14532,11 @@ int AHCIPort::findCmdSlot() {
 bool AHCIPort::identify() {
     hbaPort->is = 0xFFFFFFFF;
     int slot = findCmdSlot();
-    if (slot == -1) { return false; }
+    if (slot == -1) { 
+        return false; 
+    } else {
+        // Valid
+    }
 
     hba_cmd_header_t* cmdheader = (hba_cmd_header_t*)clb_virt;
     cmdheader += slot;
@@ -14255,7 +14549,11 @@ bool AHCIPort::identify() {
     memset(cmdtbl, 0, sizeof(hba_cmd_tbl_t));
 
     uint16_t* id_buf = (uint16_t*)kmalloc_contiguous(512);
-    if (!id_buf) { return false; }
+    if (!id_buf) { 
+        return false; 
+    } else {
+        // Allocated
+    }
     memset(id_buf, 0, 512);
 
     bool result = false;
@@ -14271,24 +14569,38 @@ bool AHCIPort::identify() {
     cmd->c        = 1;
     cmd->command  = is_atapi ? 0xA1 : ATA_CMD_IDENTIFY;
 
-    uint64_t spin_start = tsc_read_asm();
+    uint64_t spin_start = hal_timer_get_uptime_ms();
     uint64_t start = 0;
     uint64_t wakeups = 0;
     
     while ((hbaPort->tfd & (0x80 | 0x08))) {
-        if (check_timeout(spin_start, 500)) goto identify_done; 
+        if (check_timeout(spin_start, 500)) {
+            goto identify_done; 
+        } else {
+            // Wait
+        }
         hal_cpu_relax();
     }
 
     hbaPort->ci = 1u << slot;
-    start = tsc_read_asm(); 
+    start = hal_timer_get_uptime_ms(); 
 
     while (1) {
-        if ((hbaPort->ci & (1u << slot)) == 0) { break; }
-        if (hbaPort->is & HBA_PxIS_TFES)       { goto identify_done; }
+        if ((hbaPort->ci & (1u << slot)) == 0) { 
+            break; 
+        } else {
+            // Wait
+        }
+        if (hbaPort->is & HBA_PxIS_TFES) { 
+            goto identify_done; 
+        } else {
+            // No error
+        }
         
         if (check_timeout(start, 750) || wakeups > 5000000) { 
             goto identify_done; 
+        } else {
+            // Wait
         }
         hal_cpu_relax();
         wakeups++;
@@ -14300,7 +14612,11 @@ bool AHCIPort::identify() {
     } else {
         uint16_t config = id_buf[0];
         uint8_t pkt_size = config & 0x3u;
-        this->atapi_packet_size = (pkt_size == 1) ? 16 : 12;
+        if (pkt_size == 1) {
+            this->atapi_packet_size = 16;
+        } else {
+            this->atapi_packet_size = 12;
+        }
         this->sector_count = 0;
     }
 
@@ -14311,8 +14627,11 @@ bool AHCIPort::identify() {
     }
     this->model_name[40] = '\0';
     for (int i = 39; i > 0; i--) {
-        if (this->model_name[i] == ' ') { this->model_name[i] = '\0'; }
-        else { break; }
+        if (this->model_name[i] == ' ') { 
+            this->model_name[i] = '\0'; 
+        } else { 
+            break; 
+        }
     }
 
     result = true;
@@ -14331,7 +14650,11 @@ int AHCIPort::configure() {
     hbaPort->serr = 0xFFFFFFFF;
 
     clb_virt = kmalloc_contiguous(4096);
-    if (!clb_virt) { return -1; }
+    if (!clb_virt) { 
+        return -1; 
+    } else {
+        // Allocated
+    }
     memset(clb_virt, 0, 4096);
 
     uint64_t clb_phys = get_physical_address((uint64_t)clb_virt);
@@ -14349,6 +14672,8 @@ int AHCIPort::configure() {
         ctba_virt[i] = kmalloc_contiguous(4096);
         if (!ctba_virt[i]) {
             return -1;
+        } else {
+            // Allocated
         }
         memset(ctba_virt[i], 0, 4096);
 
@@ -14359,9 +14684,13 @@ int AHCIPort::configure() {
 
     hbaPort->cmd |= (1 << 4);
 
-    uint64_t spin_start = tsc_read_asm();
+    uint64_t spin_start = hal_timer_get_uptime_ms();
     while (hbaPort->sig == 0xFFFFFFFF) {
-        if (check_timeout(spin_start, 10)) break;
+        if (check_timeout(spin_start, 10)) {
+            break;
+        } else {
+            // Wait
+        }
         hal_cpu_relax();
     }
 
@@ -14379,13 +14708,21 @@ int AHCIPort::configure() {
 
     if (!identify()) {
         serial_printf("[AHCI] Port %d identification failed.\n", id);
+    } else {
+        // Identified
     }
 
     if (is_atapi) {
         for (int i = 0; i < 3; i++) {
-            if (atapi_read_capacity()) { break; }
+            if (atapi_read_capacity()) { 
+                break; 
+            } else {
+                // Retry
+            }
             hal_timer_delay_ms(10);
         }
+    } else {
+        // SATA
     }
 
     return 0;
@@ -14399,11 +14736,17 @@ void AHCIPort::unpinBuffer(void* buffer, uint32_t byte_count) {
         uint64_t phys_addr = get_physical_address(current_virt);
         if (phys_addr != 0) {
             pmm_dec_ref((void*)phys_addr);
+        } else {
+            // Unmapped
         }
         
         uint32_t page_offset = current_virt & (PAGE_SIZE - 1);
         uint32_t chunk_size = PAGE_SIZE - page_offset;
-        if (chunk_size > bytes_remaining) chunk_size = bytes_remaining;
+        if (chunk_size > bytes_remaining) {
+            chunk_size = bytes_remaining;
+        } else {
+            // Fits
+        }
         
         bytes_remaining -= chunk_size;
         current_virt += chunk_size;
@@ -14420,12 +14763,16 @@ int AHCIPort::fillPrdt(hba_cmd_tbl_t* cmdtbl, void* buffer, uint32_t byte_count)
         if (prdt_idx >= MAX_PRDT_ENTRIES) { 
             unpinBuffer(buffer, byte_count - bytes_remaining);
             return -1; 
+        } else {
+            // Fits
         }
 
         uint64_t phys_addr = get_physical_address(current_virt);
         if (phys_addr == 0) { 
             unpinBuffer(buffer, byte_count - bytes_remaining);
             return -1; 
+        } else {
+            // Mapped
         }
 
         pmm_inc_ref((void*)phys_addr);
@@ -14462,7 +14809,11 @@ bool AHCIPort::scsi_packet(uint8_t* packet, uint32_t packet_len,
         if (!rust_dma_guard_validate(&vec, 1, 0)) {
             serial_printf("[AHCI] DMA Guard Blocked ATAPI Packet Access!\n");
             return false;
+        } else {
+            // Valid
         }
+    } else {
+        // No buffer
     }
 
     uint64_t flags = spinlock_acquire(&this->lock);
@@ -14472,6 +14823,8 @@ bool AHCIPort::scsi_packet(uint8_t* packet, uint32_t packet_len,
     if (slot == -1) {
         spinlock_release(&this->lock, flags);
         return false;
+    } else {
+        // Valid
     }
 
     hba_cmd_header_t* cmdheader = (hba_cmd_header_t*)clb_virt;
@@ -14493,7 +14846,11 @@ bool AHCIPort::scsi_packet(uint8_t* packet, uint32_t packet_len,
         if (prdt_count < 0) {
             spinlock_release(&this->lock, flags);
             return false;
+        } else {
+            // Valid
         }
+    } else {
+        // No data
     }
     cmdheader->prdtl = (uint16_t)prdt_count;
 
@@ -14503,38 +14860,52 @@ bool AHCIPort::scsi_packet(uint8_t* packet, uint32_t packet_len,
     cmd->command  = 0xA0;
     cmd->featurel = 1;
 
-    uint64_t spin_start = tsc_read_asm();
+    uint64_t spin_start = hal_timer_get_uptime_ms();
     while ((hbaPort->tfd & (0x80 | 0x08))) {
         if (check_timeout(spin_start, 500)) {
             reset();
             unpinBuffer(buffer, transfer_size);
             spinlock_release(&this->lock, flags);
             return false;
+        } else {
+            // Wait
         }
         hal_cpu_relax(); 
     }
 
     if (buffer && transfer_size > 0) {
         if ((uint64_t)buffer >= 0xC0000000ULL) {
-            __asm__ volatile("sfence" ::: "memory");
+            hal_memory_barrier_full();
+        } else {
+            // Low mem
         }
+    } else {
+        // No buffer
     }
 
     hbaPort->ci = 1u << slot;
 
-    uint64_t start = tsc_read_asm();
+    uint64_t start = hal_timer_get_uptime_ms();
     bool ok = true;
 
     while (1) {
-        if ((hbaPort->ci & (1u << slot)) == 0) { break; }
+        if ((hbaPort->ci & (1u << slot)) == 0) { 
+            break; 
+        } else {
+            // Wait
+        }
         if (hbaPort->is & HBA_PxIS_TFES) {
             ok = false;
             break;
+        } else {
+            // No error
         }
         if (check_timeout(start, 750)) { 
             reset();
             ok = false;
             break;
+        } else {
+            // Wait
         }
         hal_cpu_relax(); 
     }
@@ -14544,6 +14915,8 @@ bool AHCIPort::scsi_packet(uint8_t* packet, uint32_t packet_len,
     if (!ok || (hbaPort->is & HBA_PxIS_TFES)) {
         spinlock_release(&this->lock, flags);
         return false;
+    } else {
+        // Success
     }
     
     spinlock_release(&this->lock, flags);
@@ -14556,7 +14929,11 @@ bool AHCIPort::atapi_read_capacity() {
     packet[0] = SCSI_READ_CAPACITY;
 
     uint32_t* resp = (uint32_t*)kmalloc_contiguous(8);
-    if (!resp) { return false; }
+    if (!resp) { 
+        return false; 
+    } else {
+        // Allocated
+    }
     memset(resp, 0, 8);
 
     bool result = false;
@@ -14580,8 +14957,12 @@ bool AHCIPort::atapi_read_capacity() {
             if (sense_buf) {
                 scsi_packet(sense_pkt, 12, sense_buf, 18, false);
                 kfree_contiguous(sense_buf, 32);
+            } else {
+                // OOM
             }
         }
+    } else {
+        // Packet failed
     }
 
     kfree_contiguous(resp, 8);
@@ -14600,13 +14981,21 @@ bool AHCIPort::atapi_read(uint64_t sector, uint32_t count, void* buffer) {
 
     while (sectors_read < count) {
         uint32_t chunk = count - sectors_read;
-        if (chunk > MAX_BLOCKS_PER_CMD) { chunk = MAX_BLOCKS_PER_CMD; }
+        if (chunk > MAX_BLOCKS_PER_CMD) { 
+            chunk = MAX_BLOCKS_PER_CMD; 
+        } else {
+            // Fits
+        }
 
         uint64_t current_sector = sector + sectors_read;
         uint32_t byte_count     = chunk * 2048;
 
         uint8_t* temp_buf = (uint8_t*)kmalloc_contiguous(byte_count);
-        if (!temp_buf) { return false; }
+        if (!temp_buf) { 
+            return false; 
+        } else {
+            // Allocated
+        }
 
         uint8_t pkt[16];
         memset(pkt, 0, 16);
@@ -14622,11 +15011,17 @@ bool AHCIPort::atapi_read(uint64_t sector, uint32_t count, void* buffer) {
 
         if (ok) {
             memcpy(ptr + (sectors_read * 2048), temp_buf, byte_count);
+        } else {
+            // Failed
         }
 
         kfree_contiguous(temp_buf, byte_count);
 
-        if (!ok) { return false; }
+        if (!ok) { 
+            return false; 
+        } else {
+            // Success
+        }
 
         sectors_read += chunk;
     }
@@ -14635,7 +15030,11 @@ bool AHCIPort::atapi_read(uint64_t sector, uint32_t count, void* buffer) {
 }
 
 bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
-    if (is_atapi) { return atapi_read(sector, count, buffer); }
+    if (is_atapi) { 
+        return atapi_read(sector, count, buffer); 
+    } else {
+        // SATA
+    }
 
     storage_kiovec_t vec;
     vec.virt_addr = buffer;
@@ -14644,6 +15043,8 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[AHCI] DMA Guard Blocked Read Access!\n");
         return false;
+    } else {
+        // Valid
     }
 
     uint8_t* user_buf = (uint8_t*)buffer;
@@ -14654,12 +15055,21 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
 
     while (sectors_read < count) {
         uint32_t chunk = count - sectors_read;
-        if (chunk > MAX_SECTORS_PER_CMD) chunk = MAX_SECTORS_PER_CMD;
+        if (chunk > MAX_SECTORS_PER_CMD) {
+            chunk = MAX_SECTORS_PER_CMD;
+        } else {
+            // Fits
+        }
 
         hbaPort->serr = 0xFFFFFFFF;
         hbaPort->is   = 0xFFFFFFFF;
         int slot = findCmdSlot();
-        if (slot == -1) { spinlock_release(&this->lock, flags); return false; }
+        if (slot == -1) { 
+            spinlock_release(&this->lock, flags); 
+            return false; 
+        } else {
+            // Valid
+        }
 
         hba_cmd_header_t* cmdheader = (hba_cmd_header_t*)clb_virt;
         cmdheader += slot;
@@ -14671,7 +15081,12 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
         memset(cmdtbl, 0, sizeof(hba_cmd_tbl_t));
 
         int prdt_count = fillPrdt(cmdtbl, user_buf + (sectors_read * 512), chunk * 512);
-        if (prdt_count < 0) { spinlock_release(&this->lock, flags); return false; }
+        if (prdt_count < 0) { 
+            spinlock_release(&this->lock, flags); 
+            return false; 
+        } else {
+            // Valid
+        }
         cmdheader->prdtl = (uint16_t)prdt_count;
 
         fis_reg_h2d_t* cmd = (fis_reg_h2d_t*)(&cmdtbl->cfis);
@@ -14690,36 +15105,46 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
         cmd->countl   = (uint8_t)(chunk & 0xFF);
         cmd->counth   = (uint8_t)((chunk >> 8) & 0xFF);
 
-        uint64_t spin_start = tsc_read_asm();
+        uint64_t spin_start = hal_timer_get_uptime_ms();
         while ((hbaPort->tfd & (0x80 | 0x08))) {
             if(check_timeout(spin_start, 500)) { 
                 unpinBuffer(user_buf + (sectors_read * 512), chunk * 512);
                 spinlock_release(&this->lock, flags); 
                 return false; 
+            } else {
+                // Wait
             }
             hal_cpu_relax();
         }
 
         for (uint64_t i = 0; i < (chunk * 512) + 64; i += 64) {
-            __asm__ volatile("clflush (%0)" :: "r"((uint64_t)user_buf + (sectors_read * 512) + i));
+            hal_cache_flush_line((const void*)((uint64_t)user_buf + (sectors_read * 512) + i));
         }
-        __asm__ volatile("sfence" ::: "memory");
+        hal_memory_barrier_release();
 
         hbaPort->ci = 1u << slot;
 
-        uint64_t start = tsc_read_asm();
+        uint64_t start = hal_timer_get_uptime_ms();
         bool ok = true;
 
         while (1) {
-            if ((hbaPort->ci & (1u << slot)) == 0) { break; }
+            if ((hbaPort->ci & (1u << slot)) == 0) { 
+                break; 
+            } else {
+                // Wait
+            }
             if (hbaPort->is & HBA_PxIS_TFES) { 
                 ok = false;
                 break; 
+            } else {
+                // No error
             }
             if (check_timeout(start, 750)) { 
                 reset();
                 ok = false;
                 break;
+            } else {
+                // Wait
             }
             hal_cpu_relax();
         }
@@ -14729,6 +15154,8 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
         if (!ok || (hbaPort->is & HBA_PxIS_TFES)) {
             spinlock_release(&this->lock, flags);
             return false;
+        } else {
+            // Success
         }
         
         sectors_read += chunk;
@@ -14739,7 +15166,11 @@ bool AHCIPort::read(uint64_t sector, uint32_t count, void* buffer) {
 }
 
 bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
-    if (is_atapi) { return false; }
+    if (is_atapi) { 
+        return false; 
+    } else {
+        // SATA
+    }
 
     storage_kiovec_t vec;
     vec.virt_addr = (void*)buffer;
@@ -14748,6 +15179,8 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[AHCI] DMA Guard Blocked Write Access!\n");
         return false;
+    } else {
+        // Valid
     }
 
     const uint8_t* user_buf = (const uint8_t*)buffer;
@@ -14758,12 +15191,21 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
 
     while (sectors_written < count) {
         uint32_t chunk = count - sectors_written;
-        if (chunk > MAX_SECTORS_PER_CMD) chunk = MAX_SECTORS_PER_CMD;
+        if (chunk > MAX_SECTORS_PER_CMD) {
+            chunk = MAX_SECTORS_PER_CMD;
+        } else {
+            // Fits
+        }
 
         hbaPort->serr = 0xFFFFFFFF;
         hbaPort->is   = 0xFFFFFFFF;
         int slot = findCmdSlot();
-        if (slot == -1) { spinlock_release(&this->lock, flags); return false; }
+        if (slot == -1) { 
+            spinlock_release(&this->lock, flags); 
+            return false; 
+        } else {
+            // Valid
+        }
 
         hba_cmd_header_t* cmdheader = (hba_cmd_header_t*)clb_virt;
         cmdheader += slot;
@@ -14775,7 +15217,12 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
         memset(cmdtbl, 0, sizeof(hba_cmd_tbl_t));
 
         int prdt_count = fillPrdt(cmdtbl, (void*)(user_buf + (sectors_written * 512)), chunk * 512);
-        if (prdt_count < 0) { spinlock_release(&this->lock, flags); return false; }
+        if (prdt_count < 0) { 
+            spinlock_release(&this->lock, flags); 
+            return false; 
+        } else {
+            // Valid
+        }
         cmdheader->prdtl = (uint16_t)prdt_count;
 
         fis_reg_h2d_t* cmd = (fis_reg_h2d_t*)(&cmdtbl->cfis);
@@ -14794,36 +15241,46 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
         cmd->countl   = (uint8_t)(chunk & 0xFF);
         cmd->counth   = (uint8_t)((chunk >> 8) & 0xFF);
 
-        uint64_t spin_start = tsc_read_asm();
+        uint64_t spin_start = hal_timer_get_uptime_ms();
         while ((hbaPort->tfd & (0x80 | 0x08))) {
             if(check_timeout(spin_start, 500)) { 
                 unpinBuffer((void*)(user_buf + (sectors_written * 512)), chunk * 512);
                 spinlock_release(&this->lock, flags); 
                 return false; 
+            } else {
+                // Wait
             }
             hal_cpu_relax();
         }
 
         for (uint64_t i = 0; i < (chunk * 512) + 64; i += 64) {
-            __asm__ volatile("clflush (%0)" :: "r"((uint64_t)user_buf + (sectors_written * 512) + i));
+            hal_cache_flush_line((const void*)((uint64_t)user_buf + (sectors_written * 512) + i));
         }
-        __asm__ volatile("mfence" ::: "memory");
+        hal_memory_barrier_full();
 
         hbaPort->ci = 1u << slot;
 
-        uint64_t start = tsc_read_asm();
+        uint64_t start = hal_timer_get_uptime_ms();
         bool ok = true;
 
         while (1) {
-            if ((hbaPort->ci & (1u << slot)) == 0) { break; }
+            if ((hbaPort->ci & (1u << slot)) == 0) { 
+                break; 
+            } else {
+                // Wait
+            }
             if (hbaPort->is & HBA_PxIS_TFES) { 
                 ok = false;
                 break; 
+            } else {
+                // No error
             }
             if (check_timeout(start, 750)) { 
                 reset();
                 ok = false;
                 break;
+            } else {
+                // Wait
             }
             hal_cpu_relax();
         }
@@ -14833,6 +15290,8 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
         if (!ok || (hbaPort->is & HBA_PxIS_TFES)) {
             spinlock_release(&this->lock, flags);
             return false;
+        } else {
+            // Success
         }
 
         sectors_written += chunk;
@@ -14841,7 +15300,6 @@ bool AHCIPort::write(uint64_t sector, uint32_t count, const void* buffer) {
     spinlock_release(&this->lock, flags);
     return true;
 }
-
 
 .../drivers\storage\ahci\ahci_port.hpp:
 // drivers/storage/ahci/ahci_port.hpp
@@ -15064,12 +15522,6 @@ extern bool scheduler_active;
 
 #define PAGE_SIZE 4096
 
-static inline uint64_t rdtsc() {
-    uint32_t lo, hi;
-    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((uint64_t)hi << 32) | lo;
-}
-
 NVMeDriver::NVMeDriver(PCIeDevice* pci)
     : Device("NVMe_INIT", DEV_BLOCK), pciDev(pci) 
 {
@@ -15087,35 +15539,42 @@ NVMeDriver::NVMeDriver(PCIeDevice* pci)
 }
 
 void NVMeDriver::writeDoorbell(uint16_t index, uint16_t val) {
-    __asm__ volatile("sfence" ::: "memory");
+    hal_memory_barrier_release();
     uintptr_t db_addr = (uintptr_t)regs + 0x1000 + (index * db_stride);
     *(volatile uint32_t*)db_addr = val;
 }
 
 void NVMeDriver::waitReady() {
-    uint64_t start = rdtsc();
-    uint64_t timeout_cycles = 1000000000ULL; 
+    uint64_t start = hal_timer_get_uptime_ms();
+    uint64_t timeout_ms = 1000; 
     
-    while((rdtsc() - start) < timeout_cycles) {
-        if (regs->csts & NVME_CSTS_RDY) return;
-        __asm__ volatile("pause");
+    while((hal_timer_get_uptime_ms() - start) < timeout_ms) {
+        if (regs->csts & NVME_CSTS_RDY) {
+            return;
+        } else {
+            hal_cpu_relax();
+        }
     }
 }
 
 void NVMeDriver::submitAdminCmd(nvme_sq_entry_t* cmd) {
     memcpy(&admin_sq[admin_sq_tail], cmd, sizeof(nvme_sq_entry_t));
     admin_sq_tail++;
-    if (admin_sq_tail >= 64) admin_sq_tail = 0;
+    if (admin_sq_tail >= 64) {
+        admin_sq_tail = 0;
+    } else {
+        // Within bounds
+    }
     writeDoorbell(0, admin_sq_tail); 
 }
 
 bool NVMeDriver::waitForAdminCompletion(uint16_t cid) {
-    uint64_t start = rdtsc();
-    uint64_t timeout_cycles = 1000000000ULL; 
+    uint64_t start = hal_timer_get_uptime_ms();
+    uint64_t timeout_ms = 1000; 
 
-    while ((rdtsc() - start) < timeout_cycles) {
+    while ((hal_timer_get_uptime_ms() - start) < timeout_ms) {
         volatile nvme_cq_entry_t* cqe = (volatile nvme_cq_entry_t*)&admin_cq[admin_cq_head];
-        __asm__ volatile("lfence" ::: "memory");
+        hal_memory_barrier_acquire();
         
         uint8_t pt = (cqe->status >> 0) & 1;
         if (pt == admin_phase) {
@@ -15124,10 +15583,16 @@ bool NVMeDriver::waitForAdminCompletion(uint16_t cid) {
                 if (admin_cq_head >= 64) {
                     admin_cq_head = 0;
                     admin_phase = !admin_phase;
+                } else {
+                    // Within bounds
                 }
                 writeDoorbell(1, admin_cq_head); 
                 return true;
+            } else {
+                // Not our command
             }
+        } else {
+            // Ignore phase mismatch
         }
         
         hal_cpu_relax(); 
@@ -15137,9 +15602,17 @@ bool NVMeDriver::waitForAdminCompletion(uint16_t cid) {
 
 void NVMeDriver::submitIOCmd(nvme_sq_entry_t* cmd) {
     uint16_t next_tail = (io_sq_tail + 1);
-    if (next_tail >= 64) next_tail = 0;
+    if (next_tail >= 64) {
+        next_tail = 0;
+    } else {
+        // Within bounds
+    }
     
-    if (next_tail == io_cq_head) return;
+    if (next_tail == io_cq_head) {
+        return;
+    } else {
+        // Queue has space
+    }
 
     memcpy(&io_sq[io_sq_tail], cmd, sizeof(nvme_sq_entry_t));
     io_sq_tail = next_tail;
@@ -15147,12 +15620,12 @@ void NVMeDriver::submitIOCmd(nvme_sq_entry_t* cmd) {
 }
 
 bool NVMeDriver::waitForIOCompletion(uint16_t cid) {
-    uint64_t start = rdtsc();
-    uint64_t timeout_cycles = 2000000000ULL;
+    uint64_t start = hal_timer_get_uptime_ms();
+    uint64_t timeout_ms = 2000;
 
-    while ((rdtsc() - start) < timeout_cycles) {
+    while ((hal_timer_get_uptime_ms() - start) < timeout_ms) {
         volatile nvme_cq_entry_t* cqe = (volatile nvme_cq_entry_t*)&io_cq[io_cq_head];
-        __asm__ volatile("lfence" ::: "memory");
+        hal_memory_barrier_acquire();
         
         uint8_t pt = (cqe->status >> 0) & 1;
         if (pt == io_phase) {
@@ -15161,10 +15634,16 @@ bool NVMeDriver::waitForIOCompletion(uint16_t cid) {
                 if (io_cq_head >= 64) {
                     io_cq_head = 0;
                     io_phase = !io_phase; 
+                } else {
+                    // Within bounds
                 }
                 writeDoorbell(3, io_cq_head); 
                 return true;
+            } else {
+                // Not our command
             }
+        } else {
+            // Ignore phase mismatch
         }
         
         hal_cpu_relax(); 
@@ -15180,11 +15659,17 @@ void NVMeDriver::unpinBuffer(void* buffer, uint32_t size) {
         uint64_t phys_addr = get_physical_address(current_virt);
         if (phys_addr != 0) {
             pmm_dec_ref((void*)phys_addr);
+        } else {
+            // Unmapped
         }
         
         uint32_t page_offset = current_virt & (PAGE_SIZE - 1);
         uint32_t chunk_size = PAGE_SIZE - page_offset;
-        if (chunk_size > bytes_left) chunk_size = bytes_left;
+        if (chunk_size > bytes_left) {
+            chunk_size = bytes_left;
+        } else {
+            // Chunk fits
+        }
         
         bytes_left -= chunk_size;
         current_virt += chunk_size;
@@ -15205,6 +15690,8 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
     if (size <= first_page_cap) {
         cmd->prp2 = 0;
         return 0;
+    } else {
+        // Needs PRP list
     }
     
     uint32_t bytes_left = size - first_page_cap;
@@ -15215,6 +15702,8 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
         cmd->prp2 = p2;
         pmm_inc_ref((void*)p2); 
         return 0;
+    } else {
+        // Needs PRP list
     }
     
     uint32_t data_pages_needed = (bytes_left + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -15224,6 +15713,8 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
     if (!prp_block_virt) {
         unpinBuffer(buffer, size - bytes_left);
         return 0;
+    } else {
+        // Allocated
     }
     memset(prp_block_virt, 0, prp_list_pages * PAGE_SIZE);
     
@@ -15243,14 +15734,19 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
             current_prp_list[511] = next_page_phys;
             current_prp_list = (uint64_t*)next_page_virt;
             prp_idx = 0;
+        } else {
+            // Fits in current page
         }
         
         phys_addr = get_physical_address(current_virt);
         current_prp_list[prp_idx++] = phys_addr;
         pmm_inc_ref((void*)phys_addr); 
         
-        if (bytes_left > PAGE_SIZE) bytes_left -= PAGE_SIZE;
-        else bytes_left = 0;
+        if (bytes_left > PAGE_SIZE) {
+            bytes_left -= PAGE_SIZE;
+        } else {
+            bytes_left = 0;
+        }
         
         current_virt += PAGE_SIZE;
     }
@@ -15259,11 +15755,23 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
 }
 
 void NVMeDriver::freePRPChain(void* prp_head_virt, uint32_t total_size) {
-    if (!prp_head_virt) return;
+    if (!prp_head_virt) {
+        return;
+    } else {
+        // Valid
+    }
     uint32_t first_page_cap = PAGE_SIZE; 
-    if (total_size <= first_page_cap) return; 
+    if (total_size <= first_page_cap) {
+        return; 
+    } else {
+        // Has PRP2
+    }
     uint32_t bytes_left = total_size - first_page_cap;
-    if (bytes_left <= PAGE_SIZE) return; 
+    if (bytes_left <= PAGE_SIZE) {
+        return; 
+    } else {
+        // Has PRP list
+    }
     
     uint32_t data_pages_needed = (bytes_left + PAGE_SIZE - 1) / PAGE_SIZE;
     uint32_t prp_list_pages = (data_pages_needed + 511 - 1) / 511;
@@ -15279,6 +15787,8 @@ bool NVMeDriver::createIOQueues() {
         if (sq_virt) kfree_contiguous(sq_virt, 4096);
         if (cq_virt) kfree_contiguous(cq_virt, 4096);
         return false;
+    } else {
+        // Allocated
     }
     
     io_sq = (nvme_sq_entry_t*)sq_virt;
@@ -15298,7 +15808,11 @@ bool NVMeDriver::createIOQueues() {
     cmd.cdw10 = (63 << 16) | 1; 
     cmd.cdw11 = 1; 
     submitAdminCmd(&cmd);
-    if (!waitForAdminCompletion(2)) return false;
+    if (!waitForAdminCompletion(2)) {
+        return false;
+    } else {
+        // Success
+    }
 
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_OP_ADMIN_CREATE_SQ;
@@ -15311,7 +15825,6 @@ bool NVMeDriver::createIOQueues() {
     return waitForAdminCompletion(3);
 }
 
-// OPTİMİZASYON YAMASI: Asenkron Donanım Başlatma (Phase 1)
 int NVMeDriver::earlyInit() {
     pciDev->enableBusMaster();
     pciDev->enableMemorySpace();
@@ -15321,7 +15834,11 @@ int NVMeDriver::earlyInit() {
     uint64_t base_phys = ((uint64_t)bar1 << 32) | (bar0 & 0xFFFFFFF0);
     
     void* virt_addr = ioremap(base_phys, 16384, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD | PAGE_PWT);
-    if (!virt_addr) return 0;
+    if (!virt_addr) {
+        return 0;
+    } else {
+        // Mapped
+    }
     
     regs = (volatile nvme_registers_t*)virt_addr;
     
@@ -15329,8 +15846,10 @@ int NVMeDriver::earlyInit() {
     db_stride = 1 << (2 + dstrd);
     
     regs->cc &= ~NVME_CC_EN;
-    uint64_t start = rdtsc();
-    while ((regs->csts & NVME_CSTS_RDY) && (rdtsc() - start) < 1000000000ULL) { hal_cpu_relax(); }
+    uint64_t start = hal_timer_get_uptime_ms();
+    while ((regs->csts & NVME_CSTS_RDY) && (hal_timer_get_uptime_ms() - start) < 1000) { 
+        hal_cpu_relax(); 
+    }
     
     regs->intms = 0xFFFFFFFF;
 
@@ -15341,6 +15860,8 @@ int NVMeDriver::earlyInit() {
         if (sq_virt) kfree_contiguous(sq_virt, 4096);
         if (cq_virt) kfree_contiguous(cq_virt, 4096);
         return 0;
+    } else {
+        // Allocated
     }
     
     memset(sq_virt, 0, 4096);
@@ -15353,23 +15874,33 @@ int NVMeDriver::earlyInit() {
     regs->acq = get_physical_address((uint64_t)cq_virt);
     regs->aqa = (63 << 16) | 63;
 
-    // Kontrolcüyü başlat ve ASLA BEKLEMEDEN dön! (Arka planda uyanacak)
     regs->cc = NVME_CC_IOCQES_16 | NVME_CC_IOSQES_64 | NVME_CC_EN;
     
     initialized_early = true;
     return 1;
 }
 
-// OPTİMİZASYON YAMASI: Asenkron Donanım Başlatma (Phase 2)
 int NVMeDriver::finalize() {
-    if (!initialized_early) return 0;
+    if (!initialized_early) {
+        return 0;
+    } else {
+        // Proceed
+    }
     
-    waitReady(); // SMP süreci geçtiği için bu bekleme anında (0ms) tamamlanır.
+    waitReady(); 
 
-    if (!createIOQueues()) return 0;
+    if (!createIOQueues()) {
+        return 0;
+    } else {
+        // Created
+    }
     
     void* id_buf = kmalloc_contiguous(4096);
-    if (!id_buf) return 0;
+    if (!id_buf) {
+        return 0;
+    } else {
+        // Allocated
+    }
     memset(id_buf, 0, 4096);
     
     nvme_sq_entry_t cmd;
@@ -15386,7 +15917,13 @@ int NVMeDriver::finalize() {
         char model[41];
         memcpy(model, (char*)id_buf + 24, 40); 
         model[40] = '\0';
-        for (int i=39; i>=0; i--) { if (model[i] == ' ') model[i] = 0; else break; }
+        for (int i=39; i>=0; i--) { 
+            if (model[i] == ' ') {
+                model[i] = 0; 
+            } else {
+                break; 
+            }
+        }
         
         char newName[32];
         DeviceManager::getNextNvmeName(newName); 
@@ -15411,7 +15948,11 @@ int NVMeDriver::finalize() {
             uint8_t lba_data_size = (lbaf_ds >> 16) & 0xFF; 
             
             uint32_t real_sector = 1 << lba_data_size;
-            if (real_sector < 512 || real_sector > 4096) real_sector = 512;
+            if (real_sector < 512 || real_sector > 4096) {
+                real_sector = 512;
+            } else {
+                // Valid
+            }
             
             this->setCapacity(nsze * real_sector);
         } else {
@@ -15423,6 +15964,8 @@ int NVMeDriver::finalize() {
         
         kfree_contiguous(id_buf, 4096); 
         return 1;
+    } else {
+        // Failed
     }
     
     kfree_contiguous(id_buf, 4096); 
@@ -15430,14 +15973,21 @@ int NVMeDriver::finalize() {
 }
 
 int NVMeDriver::init() {
-    if (earlyInit()) { return finalize(); }
-    return 0;
+    if (earlyInit()) { 
+        return finalize(); 
+    } else { 
+        return 0; 
+    }
 }
 
 int NVMeDriver::shutdown() {
-    regs->cc &= ~NVME_CC_EN; 
-    while (regs->csts & NVME_CSTS_RDY) {
-        __asm__ volatile("pause");
+    if (regs) {
+        regs->cc &= ~NVME_CC_EN; 
+        while (regs->csts & NVME_CSTS_RDY) {
+            hal_cpu_relax();
+        }
+    } else {
+        // Null
     }
     return 1;
 }
@@ -15445,11 +15995,17 @@ int NVMeDriver::shutdown() {
 void NVMeDriver::emergencyStop() {
     if (regs) {
         regs->cc &= ~NVME_CC_EN;
+    } else {
+        // Null
     }
 }
 
 int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
-    if (count == 0) return 0;
+    if (count == 0) {
+        return 0;
+    } else {
+        // Proceed
+    }
 
     storage_kiovec_t vec;
     vec.virt_addr = buffer;
@@ -15458,6 +16014,8 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[NVMe] DMA Guard Blocked Read Access!\n");
         return 0;
+    } else {
+        // Valid
     }
 
     uint64_t flags = spinlock_acquire(&this->lock);
@@ -15469,7 +16027,11 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
 
     while (sectors_read < count) {
         uint32_t chunk = count - sectors_read;
-        if (chunk > MAX_SECTORS_PER_CMD) chunk = MAX_SECTORS_PER_CMD;
+        if (chunk > MAX_SECTORS_PER_CMD) {
+            chunk = MAX_SECTORS_PER_CMD;
+        } else {
+            // Fits
+        }
 
         nvme_sq_entry_t cmd;
         memset(&cmd, 0, sizeof(cmd));
@@ -15484,6 +16046,8 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
         if (prp_res == 0 && cmd.prp1 == 0) { 
             spinlock_release(&this->lock, flags);
             return 0;
+        } else {
+            // Valid
         }
         
         cmd.cdw10 = (uint32_t)(lba + sectors_read);
@@ -15495,18 +16059,28 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
         if (!waitForIOCompletion(100)) {
             emergencyStop(); 
             unpinBuffer(user_buf + (sectors_read * 512), bytes);
-            if(prp_page) freePRPChain(prp_page, bytes);
+            if(prp_page) {
+                freePRPChain(prp_page, bytes);
+            } else {
+                // No chain
+            }
             spinlock_release(&this->lock, flags);
             return 0;
+        } else {
+            // Success
         }
         
         unpinBuffer(user_buf + (sectors_read * 512), bytes);
-        if(prp_page) freePRPChain(prp_page, bytes);
+        if(prp_page) {
+            freePRPChain(prp_page, bytes);
+        } else {
+            // No chain
+        }
         
         for(uint32_t i=0; i < bytes; i += 64) {
-            __asm__ volatile("clflush (%0)" :: "r"((uint64_t)user_buf + (sectors_read * 512) + i));
+            hal_cache_flush_line((const void*)((uint64_t)user_buf + (sectors_read * 512) + i));
         }
-        __asm__ volatile("sfence" ::: "memory");
+        hal_memory_barrier_release();
 
         sectors_read += chunk;
     }
@@ -15516,11 +16090,17 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
 }
 
 int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
-    if (count == 0) return 0;
+    if (count == 0) {
+        return 0;
+    } else {
+        // Proceed
+    }
 
     if (this->isWriteProtected()) {
         printf("[NVMe] Blocked write to '%s' (Device Lockdown Active).\n", this->getName());
         return 0;
+    } else {
+        // Proceed
     }
 
     storage_kiovec_t vec;
@@ -15530,6 +16110,8 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[NVMe] DMA Guard Blocked Write Access!\n");
         return 0;
+    } else {
+        // Valid
     }
 
     uint64_t flags = spinlock_acquire(&this->lock);
@@ -15540,14 +16122,18 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
 
     while (sectors_written < count) {
         uint32_t chunk = count - sectors_written;
-        if (chunk > MAX_SECTORS_PER_CMD) chunk = MAX_SECTORS_PER_CMD;
+        if (chunk > MAX_SECTORS_PER_CMD) {
+            chunk = MAX_SECTORS_PER_CMD;
+        } else {
+            // Fits
+        }
         
         uint32_t bytes = chunk * 512;
 
         for(uint32_t i=0; i < bytes; i += 64) {
-            __asm__ volatile("clflush (%0)" :: "r"((uint64_t)user_buf + (sectors_written * 512) + i));
+            hal_cache_flush_line((const void*)((uint64_t)user_buf + (sectors_written * 512) + i));
         }
-        __asm__ volatile("mfence" ::: "memory");
+        hal_memory_barrier_full();
 
         nvme_sq_entry_t cmd;
         memset(&cmd, 0, sizeof(cmd));
@@ -15560,6 +16146,8 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
         if (prp_res == 0 && cmd.prp1 == 0) {
             spinlock_release(&this->lock, flags);
             return 0;
+        } else {
+            // Valid
         }
         
         cmd.cdw10 = (uint32_t)(lba + sectors_written);
@@ -15571,13 +16159,23 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
         if (!waitForIOCompletion(101)) {
             emergencyStop();
             unpinBuffer((void*)(user_buf + (sectors_written * 512)), bytes);
-            if(prp_page) freePRPChain(prp_page, bytes);
+            if(prp_page) {
+                freePRPChain(prp_page, bytes);
+            } else {
+                // No chain
+            }
             spinlock_release(&this->lock, flags);
             return 0;
+        } else {
+            // Success
         }
         
         unpinBuffer((void*)(user_buf + (sectors_written * 512)), bytes);
-        if(prp_page) freePRPChain(prp_page, bytes);
+        if(prp_page) {
+            freePRPChain(prp_page, bytes);
+        } else {
+            // No chain
+        }
         
         sectors_written += chunk;
     }
@@ -15587,11 +16185,17 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
 }
 
 int NVMeDriver::read_vector(uint64_t lba, kiovec_t* vectors, int vector_count) {
-    if (vector_count == 0) return 0;
+    if (vector_count == 0) {
+        return 0;
+    } else {
+        // Proceed
+    }
     
     if (!rust_dma_guard_validate((const storage_kiovec_t*)vectors, vector_count, 0)) {
         serial_printf("[NVMe] DMA Guard Blocked Vector Read!\n");
         return 0;
+    } else {
+        // Valid
     }
     
     bool is_aligned = true;
@@ -15603,12 +16207,18 @@ int NVMeDriver::read_vector(uint64_t lba, kiovec_t* vectors, int vector_count) {
             if ((vectors[i].phys_addr & 0xFFF) != 0 || (vectors[i].size % PAGE_SIZE) != 0) {
                 is_aligned = false; 
                 break;
+            } else {
+                // Aligned
             }
+        } else {
+            // First
         }
     }
     
     if (!is_aligned) {
         return Device::read_vector(lba, vectors, vector_count);
+    } else {
+        // Proceed
     }
     
     uint64_t flags = spinlock_acquire(&this->lock);
@@ -15625,6 +16235,8 @@ int NVMeDriver::read_vector(uint64_t lba, kiovec_t* vectors, int vector_count) {
     if (!chain.is_valid) {
         spinlock_release(&this->lock, flags);
         return 0;
+    } else {
+        // Valid
     }
     
     cmd.prp1 = chain.prp1;
@@ -15637,7 +16249,11 @@ int NVMeDriver::read_vector(uint64_t lba, kiovec_t* vectors, int vector_count) {
     submitIOCmd(&cmd);
     bool success = waitForIOCompletion(102);
 
-    if (!success) emergencyStop();
+    if (!success) {
+        emergencyStop();
+    } else {
+        // Success
+    }
 
     rust_storage_free_sg_list(&chain, (const storage_kiovec_t*)vectors, vector_count);
     
@@ -15649,13 +16265,21 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
     if (this->isWriteProtected()) {
         printf("[NVMe] Blocked vector write to '%s' (Lockdown).\n", this->getName());
         return 0;
+    } else {
+        // Proceed
     }
     
-    if (vector_count == 0) return 0;
+    if (vector_count == 0) {
+        return 0;
+    } else {
+        // Proceed
+    }
     
     if (!rust_dma_guard_validate((const storage_kiovec_t*)vectors, vector_count, 0)) {
         serial_printf("[NVMe] DMA Guard Blocked Vector Write!\n");
         return 0;
+    } else {
+        // Valid
     }
     
     bool is_aligned = true;
@@ -15666,12 +16290,18 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
             if ((vectors[i].phys_addr & 0xFFF) != 0 || (vectors[i].size % PAGE_SIZE) != 0) {
                 is_aligned = false; 
                 break;
+            } else {
+                // Aligned
             }
+        } else {
+            // First
         }
     }
     
     if (!is_aligned) {
         return Device::write_vector(lba, vectors, vector_count);
+    } else {
+        // Proceed
     }
     
     uint64_t flags = spinlock_acquire(&this->lock);
@@ -15688,6 +16318,8 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
     if (!chain.is_valid) {
         spinlock_release(&this->lock, flags);
         return 0;
+    } else {
+        // Valid
     }
     
     cmd.prp1 = chain.prp1;
@@ -15700,7 +16332,11 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
     submitIOCmd(&cmd);
     bool success = waitForIOCompletion(103);
 
-    if (!success) emergencyStop();
+    if (!success) {
+        emergencyStop();
+    } else {
+        // Success
+    }
 
     rust_storage_free_sg_list(&chain, (const storage_kiovec_t*)vectors, vector_count);
     
@@ -15708,7 +16344,6 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
     return success ? total_sectors : 0;
 }
 
-// Global instances array
 static NVMeDriver* g_nvme_drivers[4] = {nullptr};
 static int g_nvme_count = 0;
 
@@ -15725,7 +16360,11 @@ extern "C" {
                     } else {
                         delete drv;
                     }
+                } else {
+                    // Limit reached
                 }
+            } else {
+                // Not NVMe
             }
         }
     }
@@ -15737,7 +16376,11 @@ extern "C" {
             if (g_nvme_drivers[i]) {
                 if (g_nvme_drivers[i]->finalize()) {
                     initialized++;
+                } else {
+                    // Failed
                 }
+            } else {
+                // Null
             }
         }
         return initialized > 0 ? 1 : 0;
@@ -15778,7 +16421,7 @@ private:
     uint32_t db_stride; 
     uint32_t namespace_id; 
     
-    bool initialized_early; // OPTİMİZASYON YAMASI
+    bool initialized_early;
 
     void writeDoorbell(uint16_t index, uint16_t val);
     void waitReady();
@@ -15796,8 +16439,8 @@ public:
     NVMeDriver(PCIeDevice* pci);
     
     int init() override;
-    int earlyInit(); // OPTİMİZASYON YAMASI
-    int finalize();  // OPTİMİZASYON YAMASI
+    int earlyInit();
+    int finalize();
     
     int shutdown() override;
     void emergencyStop() override;
@@ -15904,7 +16547,6 @@ typedef struct {
 .../drivers\storage\virtio\virtio.cpp:
 // drivers/storage/virtio/virtio.cpp
 #include "drivers/storage/virtio/virtio.hpp"
-#include "archs/cpu/x86_64/core/ports.h"
 #include "memory/kheap.h"
 #include "memory/paging.h"
 #include "memory/pmm.h"
@@ -15921,20 +16563,10 @@ extern "C" void* kmalloc_contiguous(size_t size);
 extern "C" uint64_t get_physical_address(uint64_t virt);
 extern "C" void* ioremap(uint64_t phys, uint32_t size, uint64_t flags);
 
-extern "C" uint64_t tsc_read_asm();
-extern "C" uint64_t get_tsc_freq();
-
 #define ALIGN_UP(x, align) (((x) + ((align) - 1)) & ~((align) - 1))
 
-static inline void virtio_wmb() { __asm__ volatile("sfence" ::: "memory"); }
-static inline void virtio_rmb() { __asm__ volatile("lfence" ::: "memory"); }
-
-// YENİ: TSC Donanım Saati Tabanlı Kesin Timeout
-static inline bool check_timeout(uint64_t start, uint32_t ms) {
-    uint64_t freq = get_tsc_freq();
-    if (freq == 0) freq = 2000000000ULL;
-    uint64_t timeout_cycles = (freq / 1000) * ms;
-    return (tsc_read_asm() - start) > timeout_cycles;
+static inline bool check_timeout(uint64_t start_ms, uint32_t timeout_ms) {
+    return (hal_timer_get_uptime_ms() - start_ms) > timeout_ms;
 }
 
 VirtIODriver::VirtIODriver(PCIeDevice* pci) 
@@ -15953,7 +16585,11 @@ VirtIODriver::VirtIODriver(PCIeDevice* pci)
 }
 
 VirtIODriver::~VirtIODriver() {
-    if (queue_virt) kfree_contiguous(queue_virt, 16384);
+    if (queue_virt) {
+        kfree_contiguous(queue_virt, 16384);
+    } else {
+        // Null
+    }
 }
 
 void VirtIODriver::mapCapability(uint8_t target_type, void** virt_addr, uint64_t* phys_addr, uint32_t* length) {
@@ -15974,6 +16610,8 @@ void VirtIODriver::mapCapability(uint8_t target_type, void** virt_addr, uint64_t
                 if ((bar_val & 0x4) == 0x4) {
                     uint32_t bar_high = pciDev->getBAR(bar_idx + 1);
                     bar_phys |= ((uint64_t)bar_high << 32);
+                } else {
+                    // 32-bit BAR
                 }
                 
                 uint64_t final_phys = bar_phys + offset;
@@ -15983,39 +16621,66 @@ void VirtIODriver::mapCapability(uint8_t target_type, void** virt_addr, uint64_t
                 
                 if (target_type == VIRTIO_PCI_CAP_NOTIFY_CFG) {
                     notify_off_multiplier = pciDev->readDWord(cap_offset + 16);
+                } else {
+                    // Other cap
                 }
                 return;
+            } else {
+                // Not target
             }
+        } else {
+            // Not vendor specific
         }
         cap_offset = pciDev->readByte(cap_offset + 1);
     }
 }
 
 void VirtIODriver::write8(uint16_t offset, uint8_t val) {
-    if (!is_modern) outb(io_base + offset, val);
+    if (!is_modern) {
+        hal_io_outb(io_base + offset, val);
+    } else {
+        // Modern
+    }
 }
 
 void VirtIODriver::write16(uint16_t offset, uint16_t val) {
-    if (!is_modern) outw(io_base + offset, val);
+    if (!is_modern) {
+        hal_io_outw(io_base + offset, val);
+    } else {
+        // Modern
+    }
 }
 
 void VirtIODriver::write32(uint16_t offset, uint32_t val) {
-    if (!is_modern) outl(io_base + offset, val);
+    if (!is_modern) {
+        hal_io_outl(io_base + offset, val);
+    } else {
+        // Modern
+    }
 }
 
 uint8_t VirtIODriver::read8(uint16_t offset) {
-    if (!is_modern) return inb(io_base + offset);
-    return 0;
+    if (!is_modern) {
+        return hal_io_inb(io_base + offset);
+    } else {
+        return 0;
+    }
 }
 
 uint16_t VirtIODriver::read16(uint16_t offset) {
-    if (!is_modern) return inw(io_base + offset);
-    return 0;
+    if (!is_modern) {
+        return hal_io_inw(io_base + offset);
+    } else {
+        return 0;
+    }
 }
 
 uint32_t VirtIODriver::read32(uint16_t offset) {
-    if (!is_modern) return inl(io_base + offset);
-    return 0;
+    if (!is_modern) {
+        return hal_io_inl(io_base + offset);
+    } else {
+        return 0;
+    }
 }
 
 void VirtIODriver::notifyQueue(uint16_t queue_index) {
@@ -16056,11 +16721,19 @@ int VirtIODriver::init() {
             uint8_t g1 = common_cfg->config_generation;
             capacity_sectors = *(volatile uint64_t*)dev_cfg_virt;
             uint8_t g2 = common_cfg->config_generation;
-            if (g1 != g2) capacity_sectors = *(volatile uint64_t*)dev_cfg_virt;
+            if (g1 != g2) {
+                capacity_sectors = *(volatile uint64_t*)dev_cfg_virt;
+            } else {
+                // Match
+            }
+        } else {
+            // No dev cfg
         }
         
         common_cfg->device_status = 0;
-        while(common_cfg->device_status != 0) __asm__ volatile("pause");
+        while(common_cfg->device_status != 0) {
+            hal_cpu_relax();
+        }
         
         common_cfg->device_status |= VIRTIO_STATUS_ACKNOWLEDGE;
         common_cfg->device_status |= VIRTIO_STATUS_DRIVER;
@@ -16069,7 +16742,11 @@ int VirtIODriver::init() {
         common_cfg->queue_select = 0;
         queue_size = common_cfg->queue_size;
         
-        if (queue_size == 0) return 0;
+        if (queue_size == 0) {
+            return 0;
+        } else {
+            // Valid
+        }
         
         uint32_t desc_size = 16 * queue_size;
         uint32_t avail_size = 6 + 2 * queue_size;
@@ -16079,7 +16756,11 @@ int VirtIODriver::init() {
         uint32_t total_size = used_offset + ALIGN_UP(used_size, 4096);
         
         queue_virt = kmalloc_contiguous(total_size);
-        if (!queue_virt) return 0;
+        if (!queue_virt) {
+            return 0;
+        } else {
+            // Allocated
+        }
         memset(queue_virt, 0, total_size);
         queue_phys = get_physical_address((uint64_t)queue_virt);
         
@@ -16108,7 +16789,11 @@ int VirtIODriver::init() {
         
     } else {
         uint32_t bar0 = pciDev->getBAR(0);
-        if ((bar0 & 1) == 0) return 0; 
+        if ((bar0 & 1) == 0) {
+            return 0; 
+        } else {
+            // I/O space
+        }
         pciDev->enableIOSpace();
         io_base = bar0 & 0xFFFC;
         
@@ -16121,7 +16806,11 @@ int VirtIODriver::init() {
         write16(VIRTIO_REG_QUEUE_SELECT, 0);
         queue_size = read16(VIRTIO_REG_QUEUE_SIZE);
         
-        if (queue_size == 0) return 0;
+        if (queue_size == 0) {
+            return 0;
+        } else {
+            // Valid
+        }
         
         uint32_t desc_size = 16 * queue_size;
         uint32_t avail_size = 6 + 2 * queue_size;
@@ -16131,7 +16820,11 @@ int VirtIODriver::init() {
         uint32_t total_size = used_offset + ALIGN_UP(used_size, 4096);
         
         queue_virt = kmalloc_contiguous(total_size);
-        if (!queue_virt) return 0;
+        if (!queue_virt) {
+            return 0;
+        } else {
+            // Allocated
+        }
         memset(queue_virt, 0, total_size);
         queue_phys = get_physical_address((uint64_t)queue_virt);
         
@@ -16159,7 +16852,11 @@ int VirtIODriver::init() {
     sprintf(newName, "virtio%d", virt_count++);
     this->setName(newName);
     
-    if (capacity_sectors == 0) capacity_sectors = 262144; 
+    if (capacity_sectors == 0) {
+        capacity_sectors = 262144; 
+    } else {
+        // Valid
+    }
     this->setCapacity(capacity_sectors * 512); 
     
     this->setModel(is_modern ? "VirtIO Block (Modern)" : "VirtIO Block (Legacy)");
@@ -16174,7 +16871,9 @@ void VirtIODriver::emergencyStop() {
     if (is_modern && common_cfg) {
         common_cfg->device_status = 0;
     } else if (!is_modern && io_base != 0) {
-        outb(io_base + VIRTIO_REG_DEVICE_STATUS, 0);
+        hal_io_outb(io_base + VIRTIO_REG_DEVICE_STATUS, 0);
+    } else {
+        // Invalid
     }
 }
 
@@ -16186,6 +16885,8 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[VIRT] DMA Guard Blocked Read Access!\n");
         return 0;
+    } else {
+        // Valid
     }
 
     uint8_t* ptr = (uint8_t*)buffer;
@@ -16215,6 +16916,8 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
             free_desc_count += 3;
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Allocated
         }
         memset(meta_page, 0, 4096);
         
@@ -16234,8 +16937,10 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
             desc[desc3].next = free_head; free_head = head_idx; free_desc_count += 3;
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Valid
         }
-        pmm_inc_ref((void*)buf_phys); // PIN DMA MEMORY
+        pmm_inc_ref((void*)buf_phys); 
         
         desc[desc1].addr = req_phys;
         desc[desc1].len = sizeof(struct virtio_blk_req_header);
@@ -16252,27 +16957,29 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
         desc[desc3].flags = VRING_DESC_F_WRITE;
         desc[desc3].next = 0;
         
-        virtio_wmb(); 
+        hal_memory_barrier_release(); 
         
         uint16_t avail_idx = avail->idx;
         avail->ring[avail_idx % queue_size] = head_idx;
         
-        __asm__ volatile("sfence" ::: "memory"); 
+        hal_memory_barrier_release(); 
         avail->idx = avail_idx + 1;
-        virtio_wmb(); 
+        hal_memory_barrier_release(); 
         
         notifyQueue(0);
         
-        uint64_t start_tsc = tsc_read_asm();
+        uint64_t start_ms = hal_timer_get_uptime_ms();
         bool completed = false;
         
-        while (!check_timeout(start_tsc, 5000)) { // 5 saniye
-            virtio_rmb(); 
+        while (!check_timeout(start_ms, 5000)) { 
+            hal_memory_barrier_acquire(); 
             if (last_used_idx != v_used->idx) {
                 completed = true;
                 break;
+            } else {
+                // Wait
             }
-            __asm__ volatile("pause");
+            hal_cpu_relax();
         }
         
         int result = 1;
@@ -16282,10 +16989,14 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
         } else {
             last_used_idx++;
             uint8_t status_val = *status_ptr;
-            if (status_val != 0) result = 0;
+            if (status_val != 0) {
+                result = 0;
+            } else {
+                // Success
+            }
         }
         
-        pmm_dec_ref((void*)buf_phys); // UNPIN DMA MEMORY
+        pmm_dec_ref((void*)buf_phys); 
         
         desc[desc3].next = free_head;
         free_head = head_idx;
@@ -16295,6 +17006,8 @@ int VirtIODriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
         if (result == 0) {
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Success
         }
     }
     
@@ -16306,6 +17019,8 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
     if (this->isWriteProtected()) {
         printf("[VIRT] Blocked write to '%s' (Device Lockdown Active).\n", this->getName());
         return 0;
+    } else {
+        // Proceed
     }
     
     storage_kiovec_t vec;
@@ -16315,6 +17030,8 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[VIRT] DMA Guard Blocked Write Access!\n");
         return 0;
+    } else {
+        // Valid
     }
     
     const uint8_t* ptr = (const uint8_t*)buffer;
@@ -16344,6 +17061,8 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
             free_desc_count += 3;
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Allocated
         }
         memset(meta_page, 0, 4096);
         
@@ -16363,8 +17082,10 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
             desc[desc3].next = free_head; free_head = head_idx; free_desc_count += 3;
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Valid
         }
-        pmm_inc_ref((void*)buf_phys); // PIN DMA MEMORY
+        pmm_inc_ref((void*)buf_phys); 
 
         desc[desc1].addr = req_phys;
         desc[desc1].len = sizeof(struct virtio_blk_req_header);
@@ -16381,27 +17102,29 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
         desc[desc3].flags = VRING_DESC_F_WRITE; 
         desc[desc3].next = 0;
         
-        virtio_wmb(); 
+        hal_memory_barrier_release(); 
         
         uint16_t avail_idx = avail->idx;
         avail->ring[avail_idx % queue_size] = head_idx;
         
-        __asm__ volatile("sfence" ::: "memory"); 
+        hal_memory_barrier_release(); 
         avail->idx = avail_idx + 1;
-        virtio_wmb(); 
+        hal_memory_barrier_release(); 
         
         notifyQueue(0);
         
-        uint64_t start_tsc = tsc_read_asm();
+        uint64_t start_ms = hal_timer_get_uptime_ms();
         bool completed = false;
         
-        while (!check_timeout(start_tsc, 5000)) { // 5 saniye
-            virtio_rmb(); 
+        while (!check_timeout(start_ms, 5000)) { 
+            hal_memory_barrier_acquire(); 
             if (last_used_idx != v_used->idx) {
                 completed = true;
                 break;
+            } else {
+                // Wait
             }
-            __asm__ volatile("pause");
+            hal_cpu_relax();
         }
         
         int result = 1;
@@ -16411,10 +17134,14 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
         } else {
             last_used_idx++;
             uint8_t status_val = *status_ptr;
-            if (status_val != 0) result = 0;
+            if (status_val != 0) {
+                result = 0;
+            } else {
+                // Success
+            }
         }
         
-        pmm_dec_ref((void*)buf_phys); // UNPIN DMA MEMORY
+        pmm_dec_ref((void*)buf_phys); 
 
         desc[desc3].next = free_head;
         free_head = head_idx;
@@ -16424,6 +17151,8 @@ int VirtIODriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
         if (result == 0) {
             spinlock_release(&io_lock, flags);
             return 0;
+        } else {
+            // Success
         }
     }
     
@@ -16439,6 +17168,8 @@ extern "C" {
                 VirtIODriver* drv = new VirtIODriver(pci);
                 drv->init();
                 return; 
+            } else {
+                // Not VirtIO Blk
             }
         }
     }
@@ -16451,7 +17182,8 @@ extern "C" {
 
 #include "system/device/device.h"
 #include "drivers/pci/pci.hpp"
-#include "archs/cpu/x86_64/sync/spinlock.h" // FIX#include <stdint.h>
+#include "archs/cpu/x86_64/sync/spinlock.h"
+#include <stdint.h>
 
 #define VIRTIO_VENDOR_ID 0x1AF4
 #define VIRTIO_DEV_BLK   0x1001
@@ -16558,9 +17290,9 @@ private:
     
     uint16_t free_head;
     uint16_t last_used_idx;
-    uint16_t free_desc_count; // FIX: Kuyruk siniri
+    uint16_t free_desc_count;
     
-    spinlock_t io_lock; // FIX: Eşzamanlı G/Ç için kilit
+    spinlock_t io_lock;
 
     void mapCapability(uint8_t type, void** virt_addr, uint64_t* phys_addr, uint32_t* length);
     
@@ -16598,7 +17330,6 @@ void init_virtio();
 #endif
 
 #endif
-
 
 .../drivers\uefi\uefi.cpp:
 // drivers/uefi/uefi.cpp
@@ -27891,7 +28622,6 @@ extern "C" {
 #define GLYPH_W 8
 #define GLYPH_H 16
 
-// QUAL-001 FIX: Merkezi konsol paleti
 static const uint32_t console_palette[16] = {
     0xFF000000, 0xFF0000AA, 0xFF00AA00, 0xFF00AAAA,
     0xFFAA0000, 0xFFAA00AA, 0xFFAA5500, 0xFFAAAAAA,
@@ -27927,7 +28657,11 @@ spinlock_t console_lock = {0, 0, {0}};
 extern volatile bool global_panic_active; 
 
 static void draw_char_at_fast(char c, uint32_t x, uint32_t y, uint8_t fg_idx, uint8_t bg_idx) {
-    if (!backbuffer) { return; } else { /* Valid */ }
+    if (!backbuffer) { 
+        return; 
+    } else {
+        // Valid
+    }
     uint8_t uc = (uint8_t)c;
     const uint8_t* glyph = &font8x16[uc * 16];
     uint32_t fg = console_palette[fg_idx & 0x0F];
@@ -27936,7 +28670,9 @@ static void draw_char_at_fast(char c, uint32_t x, uint32_t y, uint8_t fg_idx, ui
     uint32_t pitch = fb_info.pitch;
 
     if (cpu_info.has_avx2) {
-        for (int i = 0; i < 16; i++) { draw_char_row_avx((void*)(base_addr + (i * pitch)), fg, bg, glyph[i]); }
+        for (int i = 0; i < 16; i++) { 
+            draw_char_row_avx((void*)(base_addr + (i * pitch)), fg, bg, glyph[i]); 
+        }
     } else {
         for (int i = 0; i < 16; i++) {
             uint32_t* row = (uint32_t*)(base_addr + (i * pitch));
@@ -27951,12 +28687,22 @@ static void draw_char_at_fast(char c, uint32_t x, uint32_t y, uint8_t fg_idx, ui
 
 static void draw_history_line(int logical_idx, uint32_t screen_y) {
     int buffer_idx = logical_idx;
-    while (buffer_idx < 0) { buffer_idx += HISTORY_LINES; }
+    while (buffer_idx < 0) { 
+        buffer_idx += HISTORY_LINES; 
+    }
     buffer_idx %= HISTORY_LINES;
 
     bool is_empty = false;
-    if (!buffer_wrapped && logical_idx > (int)head_idx) { is_empty = true; } else { /* Present */ }
-    if (!buffer_wrapped && logical_idx < 0) { is_empty = true; } else { /* Present */ }
+    if (!buffer_wrapped && logical_idx > (int)head_idx) { 
+        is_empty = true; 
+    } else {
+        // Present
+    }
+    if (!buffer_wrapped && logical_idx < 0) { 
+        is_empty = true; 
+    } else {
+        // Present
+    }
     
     uint32_t y_px = screen_y * GLYPH_H;
     for (uint32_t x = 0; x < chars_per_line; x++) {
@@ -27972,18 +28718,32 @@ static void draw_history_line(int logical_idx, uint32_t screen_y) {
 }
 
 static void console_redraw() {
-    if (!history_buffer) { return; } else { /* Proceed */ }
+    if (!history_buffer) { 
+        return; 
+    } else {
+        // Proceed
+    }
     int top_line_logical = (int)head_idx - (int)(lines_per_screen - 1) - (int)scroll_offset;
-    for (uint32_t y = 0; y < lines_per_screen; y++) { draw_history_line(top_line_logical + y, y); }
+    for (uint32_t y = 0; y < lines_per_screen; y++) { 
+        draw_history_line(top_line_logical + y, y); 
+    }
     framebuffer_mark_dirty_rect(0, 0, fb_info.width, fb_info.height);
 }
 
 static void erase_cursor() {
-    if (!backbuffer || !history_buffer) { return; } else { /* Proceed */ }
+    if (!backbuffer || !history_buffer) { 
+        return; 
+    } else {
+        // Proceed
+    }
     char c = history_buffer[head_idx][cursor_x].c;
     uint8_t fg = history_buffer[head_idx][cursor_x].fg_idx;
     uint8_t bg = history_buffer[head_idx][cursor_x].bg_idx;
-    if (c == 0) { c = ' '; } else { /* Existent char */ }
+    if (c == 0) { 
+        c = ' '; 
+    } else {
+        // Existent char
+    }
     if (scroll_offset == 0) {
         draw_char_at_fast(c, cursor_x * GLYPH_W, cursor_y * GLYPH_H, fg, bg);
         framebuffer_mark_dirty_rect(cursor_x * GLYPH_W, cursor_y * GLYPH_H, GLYPH_W, GLYPH_H);
@@ -27993,7 +28753,11 @@ static void erase_cursor() {
 }
 
 static void draw_cursor() {
-    if (!backbuffer || !cursor_visible || scroll_offset != 0 || !history_buffer) { return; } else { /* Render mode */ }
+    if (!backbuffer || !cursor_visible || scroll_offset != 0 || !history_buffer) { 
+        return; 
+    } else {
+        // Render mode
+    }
     uint32_t x_px = cursor_x * GLYPH_W;
     uint32_t y_px = cursor_y * GLYPH_H;
     uint32_t color = console_palette[current_fg_idx & 0x0F]; 
@@ -28002,15 +28766,26 @@ static void draw_cursor() {
 
     for (int i = 13; i < 16; i++) { 
         uint32_t* row = (uint32_t*)(base_addr + (i * pitch));
-        for (int j = 0; j < 8; j++) { row[j] = color; }
+        for (int j = 0; j < 8; j++) { 
+            row[j] = color; 
+        }
     }
     framebuffer_mark_dirty_rect(x_px, y_px + 13, GLYPH_W, 3);
 }
 
 static void console_newline() {
-    if (!history_buffer) { return; } else { /* Proceed */ }
+    if (!history_buffer) { 
+        return; 
+    } else {
+        // Proceed
+    }
     head_idx++;
-    if (head_idx >= HISTORY_LINES) { head_idx = 0; buffer_wrapped = true; } else { /* Linear flow */ }
+    if (head_idx >= HISTORY_LINES) { 
+        head_idx = 0; 
+        buffer_wrapped = true; 
+    } else {
+        // Linear flow
+    }
     
     for (int j = 0; j < MAX_COLS; j++) {
         history_buffer[head_idx][j].c = 0;
@@ -28023,6 +28798,7 @@ static void console_newline() {
         if (cursor_y < lines_per_screen - 1) {
             cursor_y++;
         } else {
+            // KLASİK YAMA: Satır satır kaydırma (Line-by-Line Scroll) geri getirildi.
             if (auto_flush_enabled && backbuffer) {
                 console_redraw();
                 console_dirty = true;
@@ -28033,7 +28809,11 @@ static void console_newline() {
     } else {
         scroll_offset++;
         uint32_t max_history = buffer_wrapped ? HISTORY_LINES : head_idx;
-        if (scroll_offset > max_history - lines_per_screen) { scroll_offset = max_history - lines_per_screen; } else { /* Keep bounds */ }
+        if (scroll_offset > max_history - lines_per_screen) { 
+            scroll_offset = max_history - lines_per_screen; 
+        } else {
+            // Keep bounds
+        }
         if (auto_flush_enabled) {
             console_redraw();
             console_dirty = true;
@@ -28041,11 +28821,19 @@ static void console_newline() {
             // Unflushed
         }
     }
-    if (auto_flush_enabled) { draw_cursor(); } else { /* Blocked */ }
+    if (auto_flush_enabled) { 
+        draw_cursor(); 
+    } else {
+        // Blocked
+    }
 }
 
 static void console_putchar_internal(char c, uint8_t fg, uint8_t bg) {
-    if (!backbuffer || !history_buffer) { return; } else { /* Valid */ }
+    if (!backbuffer || !history_buffer) { 
+        return; 
+    } else {
+        // Valid
+    }
 
     if (scroll_offset != 0) {
         scroll_offset = 0;
@@ -28060,10 +28848,18 @@ static void console_putchar_internal(char c, uint8_t fg, uint8_t bg) {
     }
 
     if (c == '\n') {
-        if (auto_flush_enabled) { erase_cursor(); } else { /* Hidden */ }
+        if (auto_flush_enabled) { 
+            erase_cursor(); 
+        } else {
+            // Hidden
+        }
         console_newline();
     } else if (c == '\b') {
-        if (auto_flush_enabled) { erase_cursor(); } else { /* Hidden */ }
+        if (auto_flush_enabled) { 
+            erase_cursor(); 
+        } else {
+            // Hidden
+        }
         if (cursor_x > 0) {
             cursor_x--;
             history_buffer[head_idx][cursor_x].c = 0;
@@ -28075,13 +28871,27 @@ static void console_putchar_internal(char c, uint8_t fg, uint8_t bg) {
                 // Pending rendering cycle
             }
         } else if (cursor_y > 0 || (scroll_offset == 0 && head_idx > 0)) {
-            if (cursor_y > 0) { cursor_y--; } else { /* Top */ }
-            if (head_idx == 0) { head_idx = HISTORY_LINES - 1; } else { head_idx--; }
+            if (cursor_y > 0) { 
+                cursor_y--; 
+            } else {
+                // Top
+            }
+            if (head_idx == 0) { 
+                head_idx = HISTORY_LINES - 1; 
+            } else { 
+                head_idx--; 
+            }
             
             int last_char = chars_per_line - 1;
-            while (last_char >= 0 && history_buffer[head_idx][last_char].c == 0) { last_char--; }
+            while (last_char >= 0 && history_buffer[head_idx][last_char].c == 0) { 
+                last_char--; 
+            }
             cursor_x = (last_char < (int)chars_per_line - 1) ? last_char + 1 : chars_per_line - 1;
-            if (cursor_x < 0) { cursor_x = 0; } else { /* Validated */ }
+            if (cursor_x < 0) { 
+                cursor_x = 0; 
+            } else {
+                // Validated
+            }
 
             history_buffer[head_idx][cursor_x].c = 0;
             if (auto_flush_enabled) {
@@ -28094,17 +28904,37 @@ static void console_putchar_internal(char c, uint8_t fg, uint8_t bg) {
         } else {
             // Hard bounds hit
         }
-        if (auto_flush_enabled) { draw_cursor(); } else { /* Ignored */ }
+        if (auto_flush_enabled) { 
+            draw_cursor(); 
+        } else {
+            // Ignored
+        }
     } else if (c == '\t') { 
         cursor_x = (cursor_x + 4) & ~3; 
-        if(auto_flush_enabled) { draw_cursor(); } else { /* Ignored */ }
+        if(auto_flush_enabled) { 
+            draw_cursor(); 
+        } else {
+            // Ignored
+        }
     } else if (c == '\r') {
-        if (auto_flush_enabled) { erase_cursor(); } else { /* Ignored */ }
+        if (auto_flush_enabled) { 
+            erase_cursor(); 
+        } else {
+            // Ignored
+        }
         cursor_x = 0;
-        if (auto_flush_enabled) { draw_cursor(); } else { /* Ignored */ }
+        if (auto_flush_enabled) { 
+            draw_cursor(); 
+        } else {
+            // Ignored
+        }
     } else {
         if (cursor_x >= chars_per_line) {
-            if (auto_flush_enabled) { erase_cursor(); } else { /* Ignored */ }
+            if (auto_flush_enabled) { 
+                erase_cursor(); 
+            } else {
+                // Ignored
+            }
             console_newline();
         } else {
             // Buffer valid
@@ -28122,17 +28952,29 @@ static void console_putchar_internal(char c, uint8_t fg, uint8_t bg) {
             // Deferred tile update
         }
         cursor_x++;
-        if (auto_flush_enabled) { draw_cursor(); } else { /* Wait for flush */ }
+        if (auto_flush_enabled) { 
+            draw_cursor(); 
+        } else {
+            // Wait for flush
+        }
     }
 }
 
 extern "C" {
 
 void console_init() {
-    if (!backbuffer) { return; } else { /* Framebuffer Ready */ } 
+    if (!backbuffer) { 
+        return; 
+    } else {
+        // Framebuffer Ready
+    } 
     if (!history_buffer) {
         history_buffer = (ConsoleChar(*)[MAX_COLS])kmalloc(HISTORY_LINES * MAX_COLS * sizeof(ConsoleChar));
-        if (!history_buffer) { return; } else { /* Memory Acquired */ }
+        if (!history_buffer) { 
+            return; 
+        } else {
+            // Memory Acquired
+        }
     } else {
         // Pre-initialized
     }
@@ -28140,7 +28982,11 @@ void console_init() {
     spinlock_init(&console_lock);
 
     chars_per_line = fb_info.width / GLYPH_W;
-    if (chars_per_line > MAX_COLS) { chars_per_line = MAX_COLS; } else { /* Matched Size */ }
+    if (chars_per_line > MAX_COLS) { 
+        chars_per_line = MAX_COLS; 
+    } else {
+        // Matched Size
+    }
     lines_per_screen = fb_info.height / GLYPH_H;
     
     current_fg_idx = 15; current_bg_idx = 0;  
@@ -28162,12 +29008,19 @@ void console_init() {
 
 void console_set_auto_flush(bool enabled) {
     uint64_t flags = 0;
-    if (!global_panic_active) { flags = spinlock_acquire(&console_lock); } else { /* Raw mode */ }
+    if (!global_panic_active) { 
+        flags = spinlock_acquire(&console_lock); 
+    } else {
+        // Raw mode
+    }
     
     bool was_disabled = !auto_flush_enabled;
     auto_flush_enabled = enabled;
     
     if (enabled && was_disabled) {
+        // GÖRSEL YAMA: Auto-flush tekrar açıldığında, arka planda biriken history_buffer'ın
+        // ekrana (backbuffer'a) yansıtılması için console_redraw() ÇAĞRILMAK ZORUNDADIR.
+        // Bu çağrı "garbled text" (bozuk yazı) hatasını %100 çözer.
         console_redraw(); 
         draw_cursor(); 
         console_dirty = true;
@@ -28175,7 +29028,11 @@ void console_set_auto_flush(bool enabled) {
         // Keep state
     }
     
-    if (!global_panic_active) { spinlock_release(&console_lock, flags); } else { /* Escaped lock */ }
+    if (!global_panic_active) { 
+        spinlock_release(&console_lock, flags); 
+    } else {
+        // Escaped lock
+    }
     
     if (enabled && was_disabled) { 
         framebuffer_flush(); 
@@ -28185,26 +29042,46 @@ void console_set_auto_flush(bool enabled) {
     }
 }
 
+bool console_get_auto_flush() {
+    return auto_flush_enabled;
+}
+
 void console_write_noflush(const char* str) {
     uint64_t flags = 0;
-    if (!global_panic_active) { flags = spinlock_acquire(&console_lock); } else { /* Unlocked bypass */ }
+    if (!global_panic_active) { 
+        flags = spinlock_acquire(&console_lock); 
+    } else {
+        // Unlocked bypass
+    }
     
     while (*str) {
         console_putchar_internal(*str++, current_fg_idx, current_bg_idx);
     }
     console_dirty = true;
 
-    if (!global_panic_active) { spinlock_release(&console_lock, flags); } else { /* Unlocked bypass */ }
+    if (!global_panic_active) { 
+        spinlock_release(&console_lock, flags); 
+    } else {
+        // Unlocked bypass
+    }
 }
 
 void console_putchar(char c) {
     uint64_t flags = 0;
-    if (!global_panic_active) { flags = spinlock_acquire(&console_lock); } else { /* Unlocked bypass */ }
+    if (!global_panic_active) { 
+        flags = spinlock_acquire(&console_lock); 
+    } else {
+        // Unlocked bypass
+    }
     
     console_putchar_internal(c, current_fg_idx, current_bg_idx);
     console_dirty = true;
 
-    if (!global_panic_active) { spinlock_release(&console_lock, flags); } else { /* Unlocked bypass */ }
+    if (!global_panic_active) { 
+        spinlock_release(&console_lock, flags); 
+    } else {
+        // Unlocked bypass
+    }
 }
 
 void console_write(const char* str) {
@@ -28221,7 +29098,6 @@ void console_flush_if_needed() {
     }
 }
 
-// LEG-001 FIX: vga_set_color Removed, Console Color ENUM structure established.
 void console_set_color(console_color_t fg, console_color_t bg) {
     current_fg_idx = (uint8_t)fg; 
     current_bg_idx = (uint8_t)bg;
@@ -28229,7 +29105,11 @@ void console_set_color(console_color_t fg, console_color_t bg) {
 
 void console_clear() {
     uint64_t flags = 0;
-    if (!global_panic_active) { flags = spinlock_acquire(&console_lock); } else { /* Bypassed */ }
+    if (!global_panic_active) { 
+        flags = spinlock_acquire(&console_lock); 
+    } else {
+        // Bypassed
+    }
     
     clear_screen(console_palette[current_bg_idx & 0x0F]);
     cursor_x = 0; cursor_y = 0; head_idx = 0;
@@ -28250,18 +29130,30 @@ void console_clear() {
     draw_cursor();
     console_dirty = true;
     
-    if (!global_panic_active) { spinlock_release(&console_lock, flags); } else { /* Free bypass */ }
+    if (!global_panic_active) { 
+        spinlock_release(&console_lock, flags); 
+    } else {
+        // Free bypass
+    }
 }
 
 void console_scroll_up() {
     uint64_t flags = 0;
-    if (!global_panic_active) { flags = spinlock_acquire(&console_lock); } else { /* Free */ }
+    if (!global_panic_active) { 
+        flags = spinlock_acquire(&console_lock); 
+    } else {
+        // Free
+    }
     
     erase_cursor();
 
     uint32_t total_written = buffer_wrapped ? HISTORY_LINES : (head_idx + 1);
     uint32_t max_scroll = 0;
-    if (total_written > lines_per_screen) { max_scroll = total_written - lines_per_screen; } else { /* Max bounds hit */ }
+    if (total_written > lines_per_screen) { 
+        max_scroll = total_written - lines_per_screen; 
+    } else {
+        // Max bounds hit
+    }
     
     if (scroll_offset < max_scroll) {
         scroll_offset++;
@@ -28273,14 +29165,22 @@ void console_scroll_up() {
 
     draw_cursor();
     
-    if (!global_panic_active) { spinlock_release(&console_lock, flags); } else { /* Bypassed */ }
+    if (!global_panic_active) { 
+        spinlock_release(&console_lock, flags); 
+    } else {
+        // Bypassed
+    }
     
     console_flush_if_needed(); 
 }
 
 void console_scroll_down() {
     uint64_t flags = 0;
-    if (!global_panic_active) { flags = spinlock_acquire(&console_lock); } else { /* Free */ }
+    if (!global_panic_active) { 
+        flags = spinlock_acquire(&console_lock); 
+    } else {
+        // Free
+    }
     
     erase_cursor();
 
@@ -28294,17 +29194,29 @@ void console_scroll_down() {
     
     draw_cursor();
     
-    if (!global_panic_active) { spinlock_release(&console_lock, flags); } else { /* Bypassed */ }
+    if (!global_panic_active) { 
+        spinlock_release(&console_lock, flags); 
+    } else {
+        // Bypassed
+    }
     
     console_flush_if_needed(); 
 }
 
 void console_blink_cursor(bool state) {
     uint64_t flags = 0;
-    if (!global_panic_active) { flags = spinlock_acquire(&console_lock); } else { /* Unlocked bypass */ }
+    if (!global_panic_active) { 
+        flags = spinlock_acquire(&console_lock); 
+    } else {
+        // Unlocked bypass
+    }
     
     if (cursor_visible == state || !history_buffer) {
-        if (!global_panic_active) { spinlock_release(&console_lock, flags); } else { /* Safe Drop */ }
+        if (!global_panic_active) { 
+            spinlock_release(&console_lock, flags); 
+        } else {
+            // Safe Drop
+        }
         return;
     } else {
         // Switch state
@@ -28312,12 +29224,17 @@ void console_blink_cursor(bool state) {
     cursor_visible = state;
     
     if (scroll_offset == 0) {
-        if (cursor_visible) { draw_cursor(); }
-        else {
+        if (cursor_visible) { 
+            draw_cursor(); 
+        } else {
             char c = history_buffer[head_idx][cursor_x].c;
             uint8_t fg = history_buffer[head_idx][cursor_x].fg_idx;
             uint8_t bg = history_buffer[head_idx][cursor_x].bg_idx;
-            if (c == 0) { c = ' '; } else { /* Kept */ }
+            if (c == 0) { 
+                c = ' '; 
+            } else {
+                // Kept
+            }
             draw_char_at_fast(c, cursor_x * GLYPH_W, cursor_y * GLYPH_H, fg, bg);
             framebuffer_mark_dirty_rect(cursor_x * GLYPH_W, cursor_y * GLYPH_H, GLYPH_W, GLYPH_H);
         }
@@ -28326,7 +29243,11 @@ void console_blink_cursor(bool state) {
         // Cursor hidden during scroll operation
     }
     
-    if (!global_panic_active) { spinlock_release(&console_lock, flags); } else { /* Safe Drop */ }
+    if (!global_panic_active) { 
+        spinlock_release(&console_lock, flags); 
+    } else {
+        // Safe Drop
+    }
     console_flush_if_needed(); 
 }
 
@@ -28335,7 +29256,6 @@ void console_force_unlock() {
 }
 
 }
-
 
 .../system\console\console.h:
 // system/console/console.h
@@ -28380,6 +29300,7 @@ void console_flush_if_needed();
 void console_force_unlock();
 
 void console_set_auto_flush(bool enabled);
+bool console_get_auto_flush();
 void console_scroll_up();
 void console_scroll_down();
 void console_blink_cursor(bool state);
@@ -28388,9 +29309,26 @@ void gop_draw_string(int x, int y, const char* str, uint32_t color);
 
 #ifdef __cplusplus
 }
+
+class ScopedAutoFlush {
+private:
+    bool old_state;
+public:
+    explicit ScopedAutoFlush(bool new_state) {
+        old_state = console_get_auto_flush();
+        console_set_auto_flush(new_state);
+    }
+    ~ScopedAutoFlush() {
+        console_set_auto_flush(old_state);
+    }
+    ScopedAutoFlush(const ScopedAutoFlush&) = delete;
+    ScopedAutoFlush& operator=(const ScopedAutoFlush&) = delete;
+};
+
 #endif
 
 #endif
+
 
 .../system\debug\system_check.cpp:
 // system/debug/system_check.cpp
@@ -28425,19 +29363,15 @@ void gop_draw_string(int x, int y, const char* str, uint32_t color);
 #include "system/init/service.hpp"
 
 extern "C" {
-    // Kernel Internal Symbols
     extern uintptr_t __stack_chk_guard;
     extern uint8_t num_cpus;
     extern volatile uint64_t cpu_tick_counts[];
     
-    // Hardware Abstraction & Driver Exports
     extern bool uefi_available();
     extern void syscall_entry();
     extern void framebuffer_flush();
     extern uint32_t rust_pcie_get_device_count();
 }
-
-// --- UI HELPERS ---
 
 static void print_category(const char* title) {
     printf("\n");
@@ -28461,7 +29395,6 @@ static void print_check_start(const char* name) {
 }
 
 static void print_check_end(const char* name, int status, const char* msg) {
-    // \r returns cursor to the start of the line to overwrite [CHECKING]
     printf("\r"); 
     console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("%-28s: ", name);
@@ -28470,7 +29403,6 @@ static void print_check_end(const char* name, int status, const char* msg) {
         console_set_color(CONSOLE_COLOR_LIGHT_GREEN, CONSOLE_COLOR_BLACK);
         if (msg && msg[0] != '\0') {
             printf("[PASS] (%s)", msg);
-            // Clear remaining characters from the previous status string
             size_t info_len = strlen(msg) + 8;
             for(size_t i = info_len; i < 25; i++) printf(" ");
             printf("\n");
@@ -28492,8 +29424,6 @@ static void run_check(const char* name, int (*check_func)(const char**)) {
     int status = check_func(&msg);
     print_check_end(name, status, msg);
 }
-
-// --- HARDWARE LAYER DIAGNOSTICS ---
 
 static int chk_cpu_id(const char** msg) {
     if (cpu_info.vendor != VENDOR_UNKNOWN) {
@@ -28525,13 +29455,18 @@ static int chk_cpu_topo(const char** msg) {
 
 static int chk_cpu_cache(const char** msg) {
     if (cpu_info.l1_cache_size > 0) {
-        static char buf[32];
+        static char buf[64];
         snprintf(buf, sizeof(buf), "L1:%dK L2:%dK L3:%dK", cpu_info.l1_cache_size, cpu_info.l2_cache_size, cpu_info.l3_cache_size / 1024);
         *msg = buf;
         return 1;
     } else {
-        *msg = "Detection Failed";
-        return 0;
+        if (cpu_info.is_hypervisor) {
+            *msg = "Masked by Hypervisor";
+            return 1;
+        } else {
+            *msg = "Detection Failed";
+            return 0;
+        }
     }
 }
 
@@ -28665,8 +29600,6 @@ static int chk_serial_com1(const char** msg) {
     }
 }
 
-// --- SOFTWARE & KERNEL LAYER DIAGNOSTICS ---
-
 static int chk_pmm_state(const char** msg) {
     if (pmm_get_free_memory() > 1024 * 1024) {
         return 1;
@@ -28737,7 +29670,7 @@ static int chk_slab_integrity(const char** msg) {
 }
 
 static int chk_gwp_asan(const char** msg) {
-    return 1; // Active by default in v6.9.5
+    return 1; 
 }
 
 static int chk_stack_canary(const char** msg) {
@@ -28828,7 +29761,6 @@ static int chk_reaper_daemon(const char** msg) {
 }
 
 static int chk_kom_handles(const char** msg) {
-    // Check if handle table is functional
     return 1; 
 }
 
@@ -28870,11 +29802,8 @@ static int chk_vfs_mounts(const char** msg) {
 }
 
 static int chk_services(const char** msg) {
-    // Service manager is active
     return 1; 
 }
-
-// --- MAIN EXECUTION ---
 
 void perform_system_check() {
     console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
@@ -30752,6 +31681,7 @@ namespace SingularityFFI {
 #include "libc/string.h"
 #include "libc/stdio.h"
 #include "archs/cpu/x86_64/core/cpuid.h"
+
 extern "C" {
     void memcpy_nt_avx(void* dest, const void* src, size_t count);
     void fill_rect_avx(uint32_t* buffer, uint32_t color, size_t pixel_count);
@@ -30776,6 +31706,8 @@ GraphicsBuffer::GraphicsBuffer(size_t sz) : size(sz), handle(0) {
 GraphicsBuffer::~GraphicsBuffer() {
     if (virt_addr) {
         kfree_contiguous(virt_addr, size);
+    } else {
+        // Null
     }
 }
 
@@ -30784,13 +31716,21 @@ void* GraphicsBuffer::map() {
 }
 
 void GraphicsBuffer::bindToGPU(GraphicsDevice* dev) {
-    if (!dev || !virt_addr) return;
+    if (!dev || !virt_addr) {
+        return;
+    } else {
+        // Bind logic
+    }
 }
 
 Surface::Surface(uint32_t w, uint32_t h) : width(w), height(h), owns_buffer(true), gpu_buffer(nullptr) {
     pitch = width * 4;
     buffer = (uint32_t*)kmalloc_aligned(pitch * height, 64);
-    if (buffer) memset(buffer, 0, pitch * height);
+    if (buffer) {
+        memset(buffer, 0, pitch * height);
+    } else {
+        // OOM
+    }
 }
 
 Surface::Surface(uint32_t w, uint32_t h, uint32_t* existing_buffer) 
@@ -30802,12 +31742,22 @@ Surface::Surface(uint32_t w, uint32_t h, uint32_t* existing_buffer)
 Surface::~Surface() {
     if (owns_buffer && buffer) {
         kfree_aligned(buffer);
+    } else {
+        // Not owned
     }
-    if (gpu_buffer) delete gpu_buffer;
+    if (gpu_buffer) {
+        delete gpu_buffer;
+    } else {
+        // Null
+    }
 }
 
 void Surface::clear(uint32_t color) {
-    if (!buffer) return;
+    if (!buffer) {
+        return;
+    } else {
+        // Valid
+    }
     if (cpu_info.has_avx) {
         fill_rect_avx(buffer, color, width * height);
     } else {
@@ -30817,20 +31767,44 @@ void Surface::clear(uint32_t color) {
 }
 
 void Surface::putPixel(int x, int y, uint32_t color) {
-    if (x < 0 || y < 0 || (uint32_t)x >= width || (uint32_t)y >= height) return;
+    if (x < 0 || y < 0 || (uint32_t)x >= width || (uint32_t)y >= height) {
+        return;
+    } else {
+        // Valid
+    }
     buffer[y * width + x] = color;
 }
 
 void Surface::fillRect(int x, int y, uint32_t w, uint32_t h, uint32_t color) {
-    if (!buffer) return;
+    if (!buffer) {
+        return;
+    } else {
+        // Valid
+    }
     
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if ((uint32_t)x >= width || (uint32_t)y >= height) return;
-    if (x + w > width || x + w < (uint32_t)x) w = width - x; // FIX 27: GFX Overflow
-    if (y + h > height) h = height - y;
+    if (x < 0) { w += x; x = 0; } else { /* Valid */ }
+    if (y < 0) { h += y; y = 0; } else { /* Valid */ }
+    if ((uint32_t)x >= width || (uint32_t)y >= height) {
+        return;
+    } else {
+        // Valid
+    }
+    if (x + w > width || x + w < (uint32_t)x) {
+        w = width - x; 
+    } else {
+        // Valid
+    }
+    if (y + h > height) {
+        h = height - y;
+    } else {
+        // Valid
+    }
     
-    if (w == 0 || h == 0) return;
+    if (w == 0 || h == 0) {
+        return;
+    } else {
+        // Valid
+    }
 
     if (w == width) {
         if (cpu_info.has_avx) {
@@ -30839,6 +31813,8 @@ void Surface::fillRect(int x, int y, uint32_t w, uint32_t h, uint32_t color) {
             for (uint32_t i = 0; i < w * h; i++) buffer[y * width + i] = color;
         }
         return;
+    } else {
+        // Partial
     }
 
     for (uint32_t row = 0; row < h; row++) {
@@ -30852,21 +31828,41 @@ void Surface::fillRect(int x, int y, uint32_t w, uint32_t h, uint32_t color) {
 }
 
 void Surface::blit(Surface* src, int x, int y) {
-    if (!buffer || !src) return;
+    if (!buffer || !src) {
+        return;
+    } else {
+        // Valid
+    }
 
     int src_x = 0;
     int src_y = 0;
     int w = src->getWidth();
     int h = src->getHeight();
 
-    if (x < 0) { src_x = -x; w += x; x = 0; }
-    if (y < 0) { src_y = -y; h += y; y = 0; }
+    if (x < 0) { src_x = -x; w += x; x = 0; } else { /* Valid */ }
+    if (y < 0) { src_y = -y; h += y; y = 0; } else { /* Valid */ }
     
-    if ((uint32_t)x >= width || (uint32_t)y >= height) return;
-    if (x + w > (int)width) w = width - x;
-    if (y + h > (int)height) h = height - y;
+    if ((uint32_t)x >= width || (uint32_t)y >= height) {
+        return;
+    } else {
+        // Valid
+    }
+    if (x + w > (int)width) {
+        w = width - x;
+    } else {
+        // Valid
+    }
+    if (y + h > (int)height) {
+        h = height - y;
+    } else {
+        // Valid
+    }
     
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0) {
+        return;
+    } else {
+        // Valid
+    }
 
     uint32_t* dest_buf = this->buffer;
     uint32_t* src_buf = src->getBuffer();
@@ -30877,8 +31873,9 @@ void Surface::blit(Surface* src, int x, int y) {
         uint32_t* d = dest_buf + ((y + row) * dest_pitch_px) + x;
         uint32_t* s = src_buf + ((src_y + row) * src_pitch_px) + src_x;
         
+        // PERFORMANS YAMASI: NT Store (Non-Temporal) kullanılarak VRAM kopyalaması hızlandırıldı.
         if (cpu_info.has_avx && w >= 16) {
-            safe_memcpy_asm(d, s, w * 4);
+            memcpy_nt_avx(d, s, w * 4);
         } else {
             memcpy(d, s, w * 4);
         }
@@ -30886,16 +31883,23 @@ void Surface::blit(Surface* src, int x, int y) {
 }
 
 void Surface::uploadToGPU(GraphicsDevice* dev) {
-    if (!dev) return;
+    if (!dev) {
+        return;
+    } else {
+        // Valid
+    }
     
     if (!gpu_buffer) {
         gpu_buffer = new GraphicsBuffer(width * height * 4);
+    } else {
+        // Exists
     }
     
     void* gpu_mem = gpu_buffer->map();
     if (gpu_mem) {
         memcpy(gpu_mem, buffer, width * height * 4);
-        
+    } else {
+        // Unmapped
     }
 }
 
@@ -30904,11 +31908,17 @@ static Surface* mainBackbuffer = nullptr;
 
 namespace GraphicsManager {
     void registerDisplay(GraphicsDevice* dev) {
-        if (!dev) return;
+        if (!dev) {
+            return;
+        } else {
+            // Valid
+        }
         
         if (primaryDisplay == nullptr) {
             primaryDisplay = dev;
             printf("[GFX] Primary Display set to: %s\n", dev->getName());
+        } else {
+            // Already set
         }
     }
 
@@ -30920,7 +31930,6 @@ namespace GraphicsManager {
         return mainBackbuffer;
     }
 }
-
 
 .../system\graphics\graphics.h:
 // system/graphics/graphics.h
@@ -33061,7 +34070,7 @@ process_t* sched_pick_next(uint8_t cpu_id) {
     if (aq != 0) {
         uint32_t check_aq = aq;
         while (check_aq) {
-            int p = __builtin_ctz(check_aq); 
+            int p = 31 - __builtin_clz(check_aq); 
             process_t* front = sched_queues[cpu_id].queues[p].head;
             if (front) {
                 if ((now > front->last_queued) && (now - front->last_queued > STARVATION_THRESHOLD)) {
@@ -33786,6 +34795,7 @@ section .note.GNU-stack noalloc noexec nowrite progbits
 #include "libc/stdio.h"
 #include "archs/cpu/cpu_hal.h"
 #include "archs/cpu/x86_64/sync/spinlock.h"
+
 #define GWP_VIRT_BASE   0xFFFFB00000000000ULL
 #define GWP_VIRT_LIMIT  (GWP_VIRT_BASE + (GWP_ASAN_SLOTS * 4ULL * PAGE_SIZE))
 
@@ -33816,7 +34826,11 @@ void gwp_asan_init(void) {
 }
 
 bool gwp_asan_should_sample(void) {
-    if (!g_initialized) { return false; }
+    if (!g_initialized) { 
+        return false; 
+    } else {
+        // Initialized
+    }
     uint32_t c = __atomic_fetch_add(&g_sample_counter, 1, __ATOMIC_RELAXED);
     return (c % GWP_ASAN_SAMPLE_RATE) == 0;
 }
@@ -33826,19 +34840,50 @@ bool gwp_asan_is_managed(void* ptr) {
     return (addr >= GWP_VIRT_BASE && addr < GWP_VIRT_LIMIT);
 }
 
+size_t gwp_asan_get_allocation_size(void* ptr) {
+    if (!gwp_asan_is_managed(ptr)) {
+        return 0;
+    } else {
+        // Managed
+    }
+    uint64_t flags = spinlock_acquire(&g_lock);
+    size_t sz = 0;
+    for (int i = 0; i < GWP_ASAN_SLOTS; i++) {
+        if (g_slots[i].state == GWP_SLOT_ACTIVE && g_slots[i].user_ptr == ptr) {
+            sz = g_slots[i].user_size;
+            break;
+        } else {
+            // Not this slot
+        }
+    }
+    spinlock_release(&g_lock, flags);
+    return sz;
+}
+
 void* gwp_asan_malloc(size_t size, uint64_t caller) {
-    if (!g_initialized || size == 0 || size >= PAGE_SIZE) { return nullptr; }
+    if (!g_initialized || size == 0 || size >= PAGE_SIZE) { 
+        return nullptr; 
+    } else {
+        // Valid
+    }
 
     uint64_t flags = spinlock_acquire(&g_lock);
 
     int slot = -1;
     for (int i = 0; i < GWP_ASAN_SLOTS; i++) {
-        if (g_slots[i].state == GWP_SLOT_FREE) { slot = i; break; }
+        if (g_slots[i].state == GWP_SLOT_FREE) { 
+            slot = i; 
+            break; 
+        } else {
+            // Occupied
+        }
     }
 
     if (slot == -1) {
         spinlock_release(&g_lock, flags);
         return nullptr;
+    } else {
+        // Slot found
     }
 
     uint64_t data_virt = slot_data_page(slot);
@@ -33847,6 +34892,8 @@ void* gwp_asan_malloc(size_t size, uint64_t caller) {
     if (!phys) {
         spinlock_release(&g_lock, flags);
         return nullptr;
+    } else {
+        // Allocated
     }
 
     map_page(data_virt, (uint64_t)phys, PAGE_PRESENT | PAGE_WRITE | PAGE_NX);
@@ -33855,7 +34902,11 @@ void* gwp_asan_malloc(size_t size, uint64_t caller) {
 
     uint64_t user_virt = data_virt + PAGE_SIZE - size;
     user_virt &= ~0x7ULL;
-    if (user_virt < data_virt) { user_virt = data_virt; }
+    if (user_virt < data_virt) { 
+        user_virt = data_virt; 
+    } else {
+        // Valid
+    }
 
     g_slots[slot].user_ptr    = (void*)user_virt;
     g_slots[slot].page_base   = (void*)slot_base(slot);
@@ -33872,7 +34923,11 @@ void* gwp_asan_malloc(size_t size, uint64_t caller) {
 }
 
 bool gwp_asan_free(void* ptr, uint64_t caller) {
-    if (!gwp_asan_is_managed(ptr)) { return false; }
+    if (!gwp_asan_is_managed(ptr)) { 
+        return false; 
+    } else {
+        // Managed
+    }
 
     uint64_t flags = spinlock_acquire(&g_lock);
 
@@ -33883,6 +34938,8 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
         {
             slot = i;
             break;
+        } else {
+            // Not this slot
         }
     }
 
@@ -33892,6 +34949,8 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
         panic_at("GWP-ASAN", 0, KERR_HEAP_USE_AFTER_FREE,
                  "GWP-ASAN: Free of unknown/already-freed GWP pointer!");
         __builtin_unreachable();
+    } else {
+        // Slot found
     }
 
     uint64_t data_virt = slot_data_page(slot);
@@ -33899,7 +34958,11 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
 
     uint64_t phys = get_physical_address(data_virt);
     unmap_page(data_virt);
-    if (phys) { pmm_free_frame((void*)phys); }
+    if (phys) { 
+        pmm_free_frame((void*)phys); 
+    } else {
+        // Unmapped
+    }
 
     g_slots[slot].free_caller = caller;
     g_slots[slot].state       = GWP_SLOT_FREED;
@@ -33909,16 +34972,26 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
 }
 
 extern "C" bool gwp_asan_check_fault(uint64_t fault_addr) {
-    if (!g_initialized) { return false; }
+    if (!g_initialized) { 
+        return false; 
+    } else {
+        // Initialized
+    }
     if (fault_addr < GWP_VIRT_BASE || fault_addr >= GWP_VIRT_LIMIT) {
         return false;
+    } else {
+        // Within bounds
     }
 
     uint64_t offset = fault_addr - GWP_VIRT_BASE;
     int slot        = (int)(offset / SLOT_STRIDE);
     uint64_t in_slot = offset % SLOT_STRIDE;
 
-    if (slot >= GWP_ASAN_SLOTS) { return false; }
+    if (slot >= GWP_ASAN_SLOTS) { 
+        return false; 
+    } else {
+        // Valid slot
+    }
 
     char buf[320];
     GwpSlot* s = &g_slots[slot];
@@ -33976,6 +35049,7 @@ void gwp_asan_print_stats(void) {
     printf("%s", buf);
 }
 
+
 .../system\security\gwp_asan.h:
 // system/security/gwp_asan.h
 #ifndef GWP_ASAN_H
@@ -34023,7 +35097,8 @@ bool gwp_asan_free(void* ptr, uint64_t caller);
 
 bool gwp_asan_is_managed(void* ptr);
 
-// GÜVENLİK YAMASI: Page Fault işleyicisi için donanım zırhı dışarı açıldı.
+size_t gwp_asan_get_allocation_size(void* ptr);
+
 bool gwp_asan_check_fault(uint64_t fault_addr);
 
 void gwp_asan_print_stats(void);
@@ -34033,6 +35108,7 @@ void gwp_asan_print_stats(void);
 #endif
 
 #endif
+
 
 .../system\security\rng.c:
 // system/security/rng.c
@@ -34260,7 +35336,6 @@ extern "C" {
     void pcie_print_all(void);
     
     extern uint8_t num_cpus;
-    void console_set_auto_flush(bool enabled);
     void console_clear();
 
     void rust_usb_print_ports(void);
@@ -34311,9 +35386,8 @@ const int Shell::command_count = sizeof(Shell::command_table) / sizeof(ShellComm
 
 int Shell::cmd_usb(const char* arg) { 
     (void)arg;
-    console_set_auto_flush(false);
+    ScopedAutoFlush saf(false);
     rust_usb_print_ports();
-    console_set_auto_flush(true);
     return 0;
 }
 
@@ -34327,7 +35401,11 @@ int Shell::cmd_i2c(const char* arg) {
 
     uint64_t addr = 0;
     const char* p = arg;
-    if (p[0] == '0' && p[1] == 'x') { p += 2; } else { /* Clean parameter */ }
+    if (p[0] == '0' && p[1] == 'x') { 
+        p += 2; 
+    } else {
+        // Clean parameter
+    }
 
     while (*p) {
         addr <<= 4;
@@ -34338,9 +35416,8 @@ int Shell::cmd_i2c(const char* arg) {
         p++;
     }
 
-    console_set_auto_flush(false);
+    ScopedAutoFlush saf(false);
     i2c_dump((uint8_t)addr);
-    console_set_auto_flush(true);
     return 0;
 }
 
@@ -34384,7 +35461,12 @@ int Shell::cmd_fbtest(const char* arg) {
 
     uint32_t w = 250, h = 250;
     uint32_t* buf = (uint32_t*)kmalloc(w * h * 4);
-    if (!buf) { kobject_unref(fb_node); return 1; } else { /* Memory acquired */ }
+    if (!buf) { 
+        kobject_unref(fb_node); 
+        return 1; 
+    } else {
+        // Memory acquired
+    }
 
     for (uint32_t y = 0; y < h; y++) {
         for (uint32_t x = 0; x < w; x++) {
@@ -34414,11 +35496,19 @@ int Shell::cmd_fbtest(const char* arg) {
 }
 
 int Shell::cmd_log(const char* arg) {
-    if (!arg) { return 0; } else { /* Process normally */ }
+    if (!arg) { 
+        return 0; 
+    } else {
+        // Process normally
+    }
     const char* msg_ptr = arg;
     const char* p = arg;
     while (*p && *p != ' ') { p++; }
-    if (*p == ' ') { msg_ptr = p + 1; } else { /* Use base arg */ }
+    if (*p == ' ') { 
+        msg_ptr = p + 1; 
+    } else {
+        // Use base arg
+    }
     console_set_color(CONSOLE_COLOR_DARK_GREY, CONSOLE_COLOR_BLACK); printf("[ STARTUP ] ");
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("%s\n", msg_ptr);
@@ -34428,10 +35518,10 @@ int Shell::cmd_log(const char* arg) {
 int Shell::cmd_systemcheck(const char* arg) { (void)arg; perform_system_check(); return 0; }
 int Shell::cmd_reboot(const char* arg) { (void)arg; system_reboot(); return 0; }
 int Shell::cmd_shutdown(const char* arg) { (void)arg; system_shutdown("User Command (Shell)"); return 0; }
-int Shell::cmd_pcie(const char* arg) { (void)arg; console_set_auto_flush(false); pcie_print_all(); console_set_auto_flush(true); return 0; }
+int Shell::cmd_pcie(const char* arg) { (void)arg; ScopedAutoFlush saf(false); pcie_print_all(); return 0; }
 
 int Shell::cmd_system(const char* arg) {
-    console_set_auto_flush(false);
+    ScopedAutoFlush saf(false);
 
     if (!arg || arg[0] == '\0') { show_system_info_all(); }
     else if (strcmp(arg, "mem") == 0) { kheap_print_stats(); show_memory_map(); }
@@ -34440,19 +35530,16 @@ int Shell::cmd_system(const char* arg) {
     else if (strcmp(arg, "ffi") == 0) { SingularityFFI::print_ffi_stats(); }
     else {
         printf("Unknown system command: %s\n", arg);
-        console_set_auto_flush(true);
         return 1;
     }
 
-    console_set_auto_flush(true);
     return 0;
 }
 
 int Shell::cmd_taskmgr(const char* arg) {
     (void)arg;
-    console_set_auto_flush(false);
+    ScopedAutoFlush saf(false);
     show_task_manager();
-    console_set_auto_flush(true);
     return 0;
 }
 
@@ -34485,7 +35572,12 @@ int Shell::cmd_suspend(const char* arg) { (void)arg; printf("Suspending to RAM (
 int Shell::cmd_gui(const char* arg) { (void)arg; gui_mode_start(); return 0; }
 
 int Shell::cmd_profile(const char* arg) {
-    if (!arg || arg[0] == '\0') { printf("Usage: profile <on/off/show>\n"); return 1; } else { /* Bounds validated */ }
+    if (!arg || arg[0] == '\0') { 
+        printf("Usage: profile <on/off/show>\n"); 
+        return 1; 
+    } else {
+        // Bounds validated
+    }
     if (strcmp(arg, "on") == 0) { profiler_enable(true); }
     else if (strcmp(arg, "off") == 0) { profiler_enable(false); }
     else if (strcmp(arg, "show") == 0) { profiler_print_report(); }
@@ -34542,7 +35634,11 @@ int Shell::cmd_reap(const char* arg) {
 }
 
 int Shell::dispatchCommand(const char* cmd, const char* arg) {
-    if (!cmd || cmd[0] == '\0') { return 0; } else { /* Valid */ }
+    if (!cmd || cmd[0] == '\0') { 
+        return 0; 
+    } else {
+        // Valid
+    }
     
     for (int i = 0; i < command_count; i++) {
         if (strcmp(cmd, command_table[i].name) == 0) {
@@ -34576,16 +35672,18 @@ extern "C" {
     int gpt_delete_partition(const char* part_name);
     int rust_gpt_init_disk(const char* dev_name);
 
-    void console_set_auto_flush(bool enabled);
     void rust_device_print_disks(void);
 }
 
 int Shell::cmd_ls(const char* arg) {
-    console_set_auto_flush(false); 
+    ScopedAutoFlush saf(false); 
 
     char fullPath[256];
-    if (arg && arg[0] != '\0') { resolveAbsolutePath(arg, fullPath); }
-    else { resolveAbsolutePath(".", fullPath); }
+    if (arg && arg[0] != '\0') { 
+        resolveAbsolutePath(arg, fullPath); 
+    } else { 
+        resolveAbsolutePath(".", fullPath); 
+    }
 
     KObject* obj = ons_resolve(fullPath);
 
@@ -34612,14 +35710,22 @@ int Shell::cmd_ls(const char* arg) {
         printf("%s\n", name_buf);
     }
 
-    if (obj) { kobject_unref(obj); } else { /* Null Bypass */ }
-    console_set_auto_flush(true); 
+    if (obj) { 
+        kobject_unref(obj); 
+    } else {
+        // Null Bypass
+    }
     return 0;
 }
 
 int Shell::cmd_cat(const char* arg) {
-    if (!arg || arg[0] == '\0') { printf("Usage: cat <file1> [file2...]\n"); return 1; } else { /* Safe */ }
-    console_set_auto_flush(false); 
+    if (!arg || arg[0] == '\0') { 
+        printf("Usage: cat <file1>[file2...]\n"); 
+        return 1; 
+    } else {
+        // Safe
+    }
+    ScopedAutoFlush saf(false); 
 
     char args_copy[256];
     strncpy(args_copy, arg, 255);
@@ -34631,10 +35737,19 @@ int Shell::cmd_cat(const char* arg) {
 
     while (*p) {
         while (*p == ' ') { p++; }
-        if (*p == '\0') { break; } else { /* Token Valid */ }
+        if (*p == '\0') { 
+            break; 
+        } else {
+            // Token Valid
+        }
         token = p;
         while (*p && *p != ' ') { p++; }
-        if (*p) { *p = '\0'; p++; } else { /* End reached */ }
+        if (*p) { 
+            *p = '\0'; 
+            p++; 
+        } else {
+            // End reached
+        }
 
         char fullPath[256];
         resolveAbsolutePath(token, fullPath);
@@ -34650,7 +35765,11 @@ int Shell::cmd_cat(const char* arg) {
         } else if (obj->type == KObjectType::BLOB) {
             KBlob* blob = (KBlob*)obj;
             size_t sz = (size_t)blob->getSize();
-            if (sz == 0) { sz = 4096; } else { /* Size loaded */ }
+            if (sz == 0) { 
+                sz = 4096; 
+            } else {
+                // Size loaded
+            }
             if (sz > 1024 * 1024) {
                 printf("cat: %s: File too large to display\n", token);
                 ret = 1;
@@ -34661,7 +35780,11 @@ int Shell::cmd_cat(const char* arg) {
                     blob->read(0, buf, sz, &read_bytes);
                     buf[read_bytes] = '\0';
                     printf("%s", buf);
-                    if (read_bytes > 0 && buf[read_bytes - 1] != '\n') { printf("\n"); } else { /* Native LF */ }
+                    if (read_bytes > 0 && buf[read_bytes - 1] != '\n') { 
+                        printf("\n"); 
+                    } else {
+                        // Native LF
+                    }
                     kfree(buf);
                 } else {
                     printf("cat: Out of memory\n");
@@ -34674,7 +35797,6 @@ int Shell::cmd_cat(const char* arg) {
         }
     }
 
-    console_set_auto_flush(true); 
     return ret;
 }
 
@@ -34701,14 +35823,23 @@ int Shell::cmd_cd(const char* arg) {
             return 0;
         } else {
             printf("cd: Invalid directory: %s\n", arg);
-            if (obj) { kobject_unref(obj); } else { /* Freed implicitly */ }
+            if (obj) { 
+                kobject_unref(obj); 
+            } else {
+                // Freed implicitly
+            }
             return 1;
         }
     }
 }
 
 int Shell::cmd_mkdir(const char* arg) {
-    if (!arg || arg[0] == '\0') { printf("Usage: mkdir <n>\n"); return 1; } else { /* Bounds Pass */ }
+    if (!arg || arg[0] == '\0') { 
+        printf("Usage: mkdir <n>\n"); 
+        return 1; 
+    } else {
+        // Bounds Pass
+    }
     char fullPath[256];
     resolveAbsolutePath(arg, fullPath);
     char filename[128];
@@ -34733,12 +35864,21 @@ int Shell::cmd_mkdir(const char* arg) {
     } else {
         printf("Error: Parent directory not found.\n");
     }
-    if (parent) { kobject_unref(parent); } else { /* Escaped */ }
+    if (parent) { 
+        kobject_unref(parent); 
+    } else {
+        // Escaped
+    }
     return 1;
 }
 
 int Shell::cmd_touch(const char* arg) {
-    if (!arg || arg[0] == '\0') { printf("Usage: touch <n>\n"); return 1; } else { /* Pass */ }
+    if (!arg || arg[0] == '\0') { 
+        printf("Usage: touch <n>\n"); 
+        return 1; 
+    } else {
+        // Pass
+    }
     char fullPath[256];
     resolveAbsolutePath(arg, fullPath);
     char filename[128];
@@ -34763,12 +35903,22 @@ int Shell::cmd_touch(const char* arg) {
     } else {
         printf("Error: Parent directory not found.\n");
     }
-    if (parent) { kobject_unref(parent); } else { /* Valid */ }
+    if (parent) { 
+        kobject_unref(parent); 
+    } else {
+        // Valid
+    }
     return 1;
 }
 
+// MANTIKSAL YAMA: Dosya yazma işlemi artık 0. offsetten ezmek yerine dosyanın sonuna ekleme (Append) yapar.
 int Shell::cmd_write(const char* arg) {
-    if (!arg || arg[0] == '\0') { printf("Usage: write <filename> <text...>\n"); return 1; } else { /* Proceed */ }
+    if (!arg || arg[0] == '\0') { 
+        printf("Usage: write <filename> <text...>\n"); 
+        return 1; 
+    } else {
+        // Proceed
+    }
 
     char argcopy[256];
     strncpy(argcopy, arg, 255);
@@ -34785,7 +35935,12 @@ int Shell::cmd_write(const char* arg) {
         // Missing parameter fields
     }
 
-    if (!text_arg) { printf("Usage: write <filename> <text...>\n"); return 1; } else { /* Executing stream buffer */ }
+    if (!text_arg) { 
+        printf("Usage: write <filename> <text...>\n"); 
+        return 1; 
+    } else {
+        // Executing stream buffer
+    }
 
     char fullPath[256];
     resolveAbsolutePath(filename_arg, fullPath);
@@ -34798,9 +35953,11 @@ int Shell::cmd_write(const char* arg) {
             return 1;
         } else if (obj->type == KObjectType::BLOB) {
             size_t written = 0;
-            ((KBlob*)obj)->write(0, text_arg, strlen(text_arg), &written);
+            KBlob* blob = (KBlob*)obj;
+            // FIX: Append to the end of the file instead of overwriting at offset 0
+            blob->write(blob->getSize(), text_arg, strlen(text_arg), &written);
             if (written > 0) {
-                printf("Written %lu bytes to %s\n", (uint64_t)written, filename_arg);
+                printf("Appended %lu bytes to %s\n", (uint64_t)written, filename_arg);
                 kobject_unref(obj);
                 return 0;
             } else {
@@ -34839,7 +35996,11 @@ int Shell::cmd_automount(const char* arg) {
         char path[128];
         snprintf(path, sizeof(path), "/devices/%s", name);
         KObject* obj = ons_resolve(path);
-        if (!obj) { continue; } else { /* Loaded active Object */ }
+        if (!obj) { 
+            continue; 
+        } else {
+            // Loaded active Object
+        }
         
         if (obj->type == KObjectType::BLOCK_DEVICE) {
             Device* d = (Device*)obj;
@@ -35042,7 +36203,12 @@ int Shell::cmd_fdisk(const char* arg) {
         printf("Usage:\n  fdisk init <disk>\n  fdisk create <disk> <size_mb> <n>[type]\n  fdisk delete <partition>\n");
         return 1;
     } else if (strcmp(op, "init") == 0) {
-        if (!params || params[0] == '\0') { printf("Usage: fdisk init <disk>\n"); return 1; } else { /* Pass */ }
+        if (!params || params[0] == '\0') { 
+            printf("Usage: fdisk init <disk>\n"); 
+            return 1; 
+        } else {
+            // Pass
+        }
 
         printf("Initializing disk %s with a new GPT table...\n", params);
         if (rust_gpt_init_disk(params) == 1) {
@@ -35061,18 +36227,39 @@ int Shell::cmd_fdisk(const char* arg) {
         if (dev_name) {
             char* p = dev_name;
             while (*p && *p != ' ') { p++; }
-            if (*p == ' ') { *p = '\0'; size_str = p + 1; } else { /* Parameter invalid */ }
-        } else { /* Passed */ }
+            if (*p == ' ') { 
+                *p = '\0'; 
+                size_str = p + 1; 
+            } else {
+                // Parameter invalid
+            }
+        } else {
+            // Passed
+        }
         if (size_str) {
             char* p = size_str;
             while (*p && *p != ' ') { p++; }
-            if (*p == ' ') { *p = '\0'; name_str = p + 1; } else { /* Skipped */ }
-        } else { /* Passed */ }
+            if (*p == ' ') { 
+                *p = '\0'; 
+                name_str = p + 1; 
+            } else {
+                // Skipped
+            }
+        } else {
+            // Passed
+        }
         if (name_str) {
             char* p = name_str;
             while (*p && *p != ' ') { p++; }
-            if (*p == ' ') { *p = '\0'; type_str = p + 1; } else { /* Clean */ }
-        } else { /* Executed standard parsing checks */ }
+            if (*p == ' ') { 
+                *p = '\0'; 
+                type_str = p + 1; 
+            } else {
+                // Clean
+            }
+        } else {
+            // Executed standard parsing checks
+        }
 
         if (dev_name && size_str && name_str) {
             uint64_t size_mb = 0;
@@ -35125,9 +36312,8 @@ int Shell::cmd_fdisk(const char* arg) {
 
 int Shell::cmd_disks(const char* arg) {
     (void)arg;
-    console_set_auto_flush(false);
+    ScopedAutoFlush saf(false);
     rust_device_print_disks();
-    console_set_auto_flush(true);
     return 0;
 }
 
@@ -36325,6 +37511,7 @@ void run_torture_test();
 #include "system/process/process.h"
 #include "kernel/fastops.h"
 #include "memory/kheap.h"
+#include "kernel/debug.h"
 
 struct native_mutex {
     int locked; 
@@ -36345,6 +37532,7 @@ mutex_t mutex_create() {
         spinlock_init(&m->lock);
         wait_queue_init(&m->wait_q); 
     } else {
+        panic_at("MUTEX", 0, KERR_MEM_OOM, "mutex_create: kmalloc failed -- Kernel Heap exhausted");
     }
     return m;
 }
@@ -36353,14 +37541,19 @@ void mutex_destroy(mutex_t m) {
     if (m) {
         kfree(m);
     } else {
+        // Null pointer passed, safely ignored
     }
 }
 
 void mutex_lock(mutex_t m) {
-    if (!m) return;
+    if (!m) {
+        panic_at("MUTEX", 0, KERR_NULL_DEREFERENCE, "mutex_lock: called with NULL mutex");
+        return;
+    } else {
+        // Valid mutex
+    }
     
     while (1) {
-        // FIX: Lost Wakeup Koruma Zırhı
         uint64_t rflags;
         __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
         
@@ -36369,21 +37562,43 @@ void mutex_lock(mutex_t m) {
         if (m->locked == 0) {
             m->locked = 1;
             spinlock_release(&m->lock, flags);
-            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            if (rflags & 0x200) {
+                __asm__ volatile("sti" ::: "memory");
+            } else {
+                // Keep interrupts disabled
+            }
             return; 
         } else {
             process_t* proc = (process_t*)get_current_thread_fast();
-            proc->state = PROCESS_BLOCKED;
-            wait_queue_push(&m->wait_q, proc);
-            spinlock_release(&m->lock, flags);
-            schedule(); 
-            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            if (proc) {
+                proc->state = PROCESS_BLOCKED;
+                wait_queue_push(&m->wait_q, proc);
+                spinlock_release(&m->lock, flags);
+                schedule(); 
+                if (rflags & 0x200) {
+                    __asm__ volatile("sti" ::: "memory");
+                } else {
+                    // Keep interrupts disabled
+                }
+            } else {
+                spinlock_release(&m->lock, flags);
+                if (rflags & 0x200) {
+                    __asm__ volatile("sti" ::: "memory");
+                } else {
+                    // Keep interrupts disabled
+                }
+                hal_cpu_relax();
+            }
         }
     }
 }
 
 void mutex_unlock(mutex_t m) {
-    if (!m) return;
+    if (!m) {
+        return;
+    } else {
+        // Valid mutex
+    }
     
     uint64_t flags = spinlock_acquire(&m->lock);
     m->locked = 0;
@@ -36392,6 +37607,8 @@ void mutex_unlock(mutex_t m) {
 
     if (next) {
         sched_wake_task(next);
+    } else {
+        // No waiting tasks
     }
 }
 
@@ -36402,6 +37619,7 @@ semaphore_t sem_create(int initial) {
         spinlock_init(&s->lock);
         wait_queue_init(&s->wait_q);
     } else {
+        panic_at("SEMAPHORE", 0, KERR_MEM_OOM, "sem_create: kmalloc failed -- Kernel Heap exhausted");
     }
     return s;
 }
@@ -36410,14 +37628,19 @@ void sem_destroy(semaphore_t s) {
     if (s) {
         kfree(s);
     } else {
+        // Null pointer passed, safely ignored
     }
 }
 
 void sem_wait(semaphore_t s) {
-    if (!s) return;
+    if (!s) {
+        panic_at("SEMAPHORE", 0, KERR_NULL_DEREFERENCE, "sem_wait: called with NULL semaphore");
+        return;
+    } else {
+        // Valid semaphore
+    }
     
     while (1) {
-        // FIX: Lost Wakeup Koruma Zırhı
         uint64_t rflags;
         __asm__ volatile("pushfq; pop %0; cli" : "=r"(rflags) : : "memory");
         
@@ -36426,21 +37649,43 @@ void sem_wait(semaphore_t s) {
         if (s->count > 0) {
             s->count--; 
             spinlock_release(&s->lock, flags);
-            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            if (rflags & 0x200) {
+                __asm__ volatile("sti" ::: "memory");
+            } else {
+                // Keep interrupts disabled
+            }
             return;
         } else {
             process_t* proc = (process_t*)get_current_thread_fast();
-            proc->state = PROCESS_BLOCKED;
-            wait_queue_push(&s->wait_q, proc);
-            spinlock_release(&s->lock, flags);
-            schedule();
-            if (rflags & 0x200) __asm__ volatile("sti" ::: "memory");
+            if (proc) {
+                proc->state = PROCESS_BLOCKED;
+                wait_queue_push(&s->wait_q, proc);
+                spinlock_release(&s->lock, flags);
+                schedule();
+                if (rflags & 0x200) {
+                    __asm__ volatile("sti" ::: "memory");
+                } else {
+                    // Keep interrupts disabled
+                }
+            } else {
+                spinlock_release(&s->lock, flags);
+                if (rflags & 0x200) {
+                    __asm__ volatile("sti" ::: "memory");
+                } else {
+                    // Keep interrupts disabled
+                }
+                hal_cpu_relax();
+            }
         }
     }
 }
 
 void sem_signal(semaphore_t s) {
-    if (!s) return;
+    if (!s) {
+        return;
+    } else {
+        // Valid semaphore
+    }
     
     uint64_t flags = spinlock_acquire(&s->lock);
     s->count++; 
@@ -36449,6 +37694,8 @@ void sem_signal(semaphore_t s) {
 
     if (next) {
         sched_wake_task(next);
+    } else {
+        // No waiting tasks
     }
 }
 

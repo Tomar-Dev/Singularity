@@ -39,7 +39,11 @@ alignas(KernelHeap) static uint8_t heap_instance_buffer[sizeof(KernelHeap)];
 extern "C" void memzero_nt_avx(void* dest, size_t count);
 
 static inline void fast_poison(void* ptr, size_t size) {
-    if (size == 0) { return; } else { /* Execute */ }
+    if (size == 0) { 
+        return; 
+    } else {
+        // Execute
+    }
     
     if (size < ASM_THRESHOLD) { 
         memset(ptr, POISON_VALUE, size); 
@@ -77,8 +81,16 @@ uint64_t KernelHeap::getAslrOffset() {
 void KernelHeap::init() {
     magic  = get_secure_random();
     canary = get_secure_random();
-    if (!magic)  { magic  = 0xC0FFEE1234567890ULL; } else { /* Seed loaded */ }
-    if (!canary) { canary = 0xDEADBEEFCAFEBABEULL; } else { /* Seed loaded */ }
+    if (!magic)  { 
+        magic  = 0xC0FFEE1234567890ULL; 
+    } else {
+        // Seed loaded
+    }
+    if (!canary) { 
+        canary = 0xDEADBEEFCAFEBABEULL; 
+    } else {
+        // Seed loaded
+    }
 
     kheap_magic  = magic;
     kheap_canary = canary;
@@ -98,17 +110,33 @@ void KernelHeap::init() {
 }
 
 int KernelHeap::getBucketIndex(size_t size) {
-    if (size == 0 || size > 4096) { return -1; } else { /* Size validated */ }
-    if (size <= 32) { return 0; } else { /* Proceed to calculate tree */ }
+    if (size == 0 || size > 4096) { 
+        return -1; 
+    } else {
+        // Size validated
+    }
+    if (size <= 32) { 
+        return 0; 
+    } else {
+        // Proceed to calculate tree
+    }
     
     int log2 = 32 - __builtin_clz(static_cast<unsigned int>(size - 1));
     int idx  = log2 - 5;
-    if (idx < 0) { return 0; } else { return idx; }
+    if (idx < 0) { 
+        return 0; 
+    } else { 
+        return idx; 
+    }
 }
 
 void* KernelHeap::vmm_alloc(size_t pages) {
     uint64_t virt = vm_arena.alloc(pages);
-    if (unlikely(!virt)) { return nullptr; } else { /* Virtual block reserved */ }
+    if (unlikely(!virt)) { 
+        return nullptr; 
+    } else {
+        // Virtual block reserved
+    }
 
     bool use_huge = (pages >= 512) && ((virt & 0x1FFFFF) == 0);
     size_t align_req = use_huge ? 512 : 1;
@@ -116,7 +144,11 @@ void* KernelHeap::vmm_alloc(size_t pages) {
     void* phys = pmm_alloc_contiguous_aligned(pages, align_req);
     if (likely(phys)) {
         uint64_t flags = PAGE_PRESENT | PAGE_WRITE | PAGE_NX;
-        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) { flags |= PAGE_HUGE; } else { /* Excluded */ }
+        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) { 
+            flags |= PAGE_HUGE; 
+        } else {
+            // Excluded
+        }
 
         if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages, flags)) {
             pmm_free_contiguous(phys, pages);
@@ -135,7 +167,11 @@ void* KernelHeap::vmm_alloc(size_t pages) {
                     uint64_t v  = virt + j * PAGE_SIZE;
                     uint64_t pa = get_physical_address(v);
                     unmap_page(v);
-                    if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Corrupt mapping */ }
+                    if (pa) { 
+                        pmm_free_frame(reinterpret_cast<void*>(pa)); 
+                    } else {
+                        // Corrupt mapping
+                    }
                 }
                 vm_arena.free(virt, pages);
                 return nullptr;
@@ -148,7 +184,11 @@ void* KernelHeap::vmm_alloc(size_t pages) {
                     uint64_t v  = virt + j * PAGE_SIZE;
                     uint64_t pa = get_physical_address(v);
                     unmap_page(v);
-                    if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Bad mapping tree */ }
+                    if (pa) { 
+                        pmm_free_frame(reinterpret_cast<void*>(pa)); 
+                    } else {
+                        // Bad mapping tree
+                    }
                 }
                 vm_arena.free(virt, pages);
                 return nullptr;
@@ -163,22 +203,29 @@ void* KernelHeap::vmm_alloc(size_t pages) {
 
 void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
     uint64_t virt = vm_arena.alloc_aligned(pages, align_pages);
-    if (unlikely(!virt)) { return nullptr; } else { /* Executing */ }
+    if (unlikely(!virt)) { 
+        return nullptr; 
+    } else {
+        // Executing
+    }
 
     bool use_huge = (pages >= 512) && ((virt & 0x1FFFFF) == 0);
     
-    // BUG-002 FIX: Do not silently downgrade requested alignment!
     size_t align_req = align_pages;
     if (use_huge && align_pages < 512) {
         align_req = 512;
     } else {
-        // Honor the larger requested alignment (e.g. 1024 pages for VRAM/DMA)
+        // Honor the larger requested alignment
     }
 
     void* phys = pmm_alloc_contiguous_aligned(pages, align_req);
     if (likely(phys)) {
         uint64_t flags = PAGE_PRESENT | PAGE_WRITE | PAGE_NX;
-        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) { flags |= PAGE_HUGE; } else { /* Safe */ }
+        if (use_huge && (((uint64_t)phys & 0x1FFFFF) == 0)) { 
+            flags |= PAGE_HUGE; 
+        } else {
+            // Safe
+        }
 
         if (!map_pages_bulk(virt, reinterpret_cast<uint64_t>(phys), pages, flags)) {
             pmm_free_contiguous(phys, pages);
@@ -197,7 +244,11 @@ void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
                     uint64_t v  = virt + j * PAGE_SIZE;
                     uint64_t pa = get_physical_address(v);
                     unmap_page(v);
-                    if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Erroneous free */ }
+                    if (pa) { 
+                        pmm_free_frame(reinterpret_cast<void*>(pa)); 
+                    } else {
+                        // Erroneous free
+                    }
                 }
                 vm_arena.free(virt, pages);
                 return nullptr;
@@ -210,7 +261,11 @@ void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
                     uint64_t v  = virt + j * PAGE_SIZE;
                     uint64_t pa = get_physical_address(v);
                     unmap_page(v);
-                    if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Erroneous drop */ }
+                    if (pa) { 
+                        pmm_free_frame(reinterpret_cast<void*>(pa)); 
+                    } else {
+                        // Erroneous drop
+                    }
                 }
                 vm_arena.free(virt, pages);
                 return nullptr;
@@ -224,12 +279,20 @@ void* KernelHeap::vmm_alloc_aligned(size_t pages, size_t align_pages) {
 }
 
 void* KernelHeap::malloc(size_t size, uint64_t caller) {
-    if (unlikely(size == 0)) { return nullptr; } else { /* Validate bounds */ }
+    if (unlikely(size == 0)) { 
+        return nullptr; 
+    } else {
+        // Validate bounds
+    }
     
     if (likely(size < PAGE_SIZE)) {
         if (unlikely(gwp_asan_should_sample())) {
             void* gwp_ptr = gwp_asan_malloc(size, caller);
-            if (gwp_ptr) { return gwp_ptr; } else { /* Fallback to normal allocation */ }
+            if (gwp_ptr) { 
+                return gwp_ptr; 
+            } else {
+                // Fallback to normal allocation
+            }
         } else {
             // Out of bounds sample metric
         }
@@ -238,7 +301,11 @@ void* KernelHeap::malloc(size_t size, uint64_t caller) {
     }
 
     size_t total_req = HEAP_HEADER_SIZE + size + HEAP_FOOTER_SIZE;
-    if (unlikely(total_req < size)) { return nullptr; } else { /* Integer safety passed */ }
+    if (unlikely(total_req < size)) { 
+        return nullptr; 
+    } else {
+        // Integer safety passed
+    }
 
     if (likely(total_req <= 4096)) {
         int idx = getBucketIndex(total_req);
@@ -281,7 +348,11 @@ void* KernelHeap::malloc(size_t size, uint64_t caller) {
 }
 
 void KernelHeap::free(void* ptr) {
-    if (unlikely(!ptr)) { return; } else { /* Dereference checking */ }
+    if (unlikely(!ptr)) { 
+        return; 
+    } else {
+        // Dereference checking
+    }
     
     uint64_t caller = reinterpret_cast<uint64_t>(__builtin_return_address(0));
     
@@ -296,8 +367,16 @@ void KernelHeap::free(void* ptr) {
     uint64_t  h_start = KHEAP_START_VIRTUAL;
     uint64_t  h_end   = KHEAP_START_VIRTUAL + KHEAP_MAX_SIZE + HEAP_ASLR_MASK;
 
-    if (unlikely(addr < h_start || addr > h_end)) { return; } else { /* Bounds mapped */ }
-    if (unlikely((addr & 0x7) != 0)) { return; } else { /* SSE Misalignment guard passed */ }
+    if (unlikely(addr < h_start || addr > h_end)) { 
+        return; 
+    } else {
+        // Bounds mapped
+    }
+    if (unlikely((addr & 0x7) != 0)) { 
+        return; 
+    } else {
+        // SSE Misalignment guard passed
+    }
 
     void*    real_ptr   = reinterpret_cast<void*>(addr - HEAP_HEADER_SIZE);
     uint64_t bucket_size = *reinterpret_cast<uint64_t*>(real_ptr);
@@ -350,7 +429,11 @@ void KernelHeap::free(void* ptr) {
         uint64_t v  = reinterpret_cast<uintptr_t>(real_ptr) + i * PAGE_SIZE;
         uint64_t pa = get_physical_address(v);
         unmap_page(v);
-        if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Unknown pointer footprint */ }
+        if (pa) { 
+            pmm_free_frame(reinterpret_cast<void*>(pa)); 
+        } else {
+            // Unknown pointer footprint
+        }
     }
     vm_arena.free(reinterpret_cast<uint64_t>(real_ptr), pages);
     big_alloc_bytes -= bucket_size;
@@ -358,20 +441,38 @@ void KernelHeap::free(void* ptr) {
 }
 
 void* KernelHeap::calloc(size_t num, size_t size, uint64_t caller) {
-    if (num != 0 && size > (static_cast<size_t>(-1)) / num) { return nullptr; } else { /* Proceed without math overflows */ }
+    if (num != 0 && size > (static_cast<size_t>(-1)) / num) { 
+        return nullptr; 
+    } else {
+        // Proceed without math overflows
+    }
     void* p = malloc(num * size, caller);
-    if (p) { memset(p, 0, num * size); } else { /* Ignore null assignment */ }
+    if (p) { 
+        memset(p, 0, num * size); 
+    } else {
+        // Ignore null assignment
+    }
     return p;
 }
 
 void* KernelHeap::realloc(void* ptr, size_t new_size, uint64_t caller) {
-    if (!ptr) { return malloc(new_size, caller); } else { /* Pointers are active */ }
-    if (!new_size) { free(ptr); return nullptr; } else { /* Size is acceptable */ }
+    if (!ptr) { 
+        return malloc(new_size, caller); 
+    } else {
+        // Pointers are active
+    }
+    if (!new_size) { 
+        free(ptr); 
+        return nullptr; 
+    } else {
+        // Size is acceptable
+    }
     
     if (unlikely(gwp_asan_is_managed(ptr))) {
+        size_t old_sz = gwp_asan_get_allocation_size(ptr);
         void* np = malloc(new_size, caller);
         if (np) {
-            memcpy(np, ptr, new_size); 
+            memcpy(np, ptr, (old_sz < new_size) ? old_sz : new_size); 
             free(ptr);
         } else {
             // OOM failure during GWP ASAN resize operation
@@ -402,7 +503,11 @@ void* KernelHeap::mallocAligned(size_t size, size_t alignment, uint64_t caller) 
         // Alignment boundary matches system specifications
     }
     
-    if (alignment >= static_cast<size_t>(PAGE_SIZE)) { return mallocDma(size, alignment, caller); } else { /* Fallback to granular alignment block */ }
+    if (alignment >= static_cast<size_t>(PAGE_SIZE)) { 
+        return mallocDma(size, alignment, caller); 
+    } else {
+        // Fallback to granular alignment block
+    }
     
     size_t total = size + alignment + sizeof(void*);
     if (total < size) { 
@@ -413,7 +518,11 @@ void* KernelHeap::mallocAligned(size_t size, size_t alignment, uint64_t caller) 
     }
     
     void* raw = malloc(total, caller);
-    if (!raw) { return nullptr; } else { /* Valid raw memory segment allocated */ }
+    if (!raw) { 
+        return nullptr; 
+    } else {
+        // Valid raw memory segment allocated
+    }
     
     uintptr_t aligned = ALIGN_UP(reinterpret_cast<uintptr_t>(raw) + sizeof(void*), alignment);
     *reinterpret_cast<void**>(aligned - sizeof(void*)) = raw;
@@ -421,7 +530,11 @@ void* KernelHeap::mallocAligned(size_t size, size_t alignment, uint64_t caller) 
 }
 
 void KernelHeap::freeAligned(void* ptr) {
-    if (!ptr) { return; } else { /* Proceed */ }
+    if (!ptr) { 
+        return; 
+    } else {
+        // Proceed
+    }
     if ((reinterpret_cast<uintptr_t>(ptr) & (static_cast<size_t>(PAGE_SIZE) - 1)) == 0) { 
         free(ptr); 
         return; 
@@ -434,21 +547,37 @@ void KernelHeap::freeAligned(void* ptr) {
 
 void* KernelHeap::mallocDma(size_t size, size_t alignment, uint64_t caller) {
     (void)caller;
-    if (!size || !alignment) { return nullptr; } else { /* Bounds verified */ }
-    if (alignment < static_cast<size_t>(PAGE_SIZE)) { alignment = PAGE_SIZE; } else { /* Alignment strictly enforces page borders */ }
+    if (!size || !alignment) { 
+        return nullptr; 
+    } else {
+        // Bounds verified
+    }
+    if (alignment < static_cast<size_t>(PAGE_SIZE)) { 
+        alignment = PAGE_SIZE; 
+    } else {
+        // Alignment strictly enforces page borders
+    }
     
     size_t pages     = ALIGN_UP(size, PAGE_SIZE) / PAGE_SIZE;
     size_t align_pgs = alignment / PAGE_SIZE;
     
     uint64_t flags   = spinlock_acquire(&vm_lock);
     void* ptr = vmm_alloc_aligned(pages, align_pgs);
-    if (likely(ptr)) { big_alloc_bytes += pages * PAGE_SIZE; } else { /* DMA Request has completely starved */ }
+    if (likely(ptr)) { 
+        big_alloc_bytes += pages * PAGE_SIZE; 
+    } else {
+        // DMA Request has completely starved
+    }
     spinlock_release(&vm_lock, flags);
     return ptr;
 }
 
 void KernelHeap::freeDma(void* ptr, size_t size) {
-    if (!ptr || !size) { return; } else { /* Proceed to destroy physical links */ }
+    if (!ptr || !size) { 
+        return; 
+    } else {
+        // Proceed to destroy physical links
+    }
     size_t   pages = ALIGN_UP(size, PAGE_SIZE) / PAGE_SIZE;
     uint64_t virt  = reinterpret_cast<uintptr_t>(ptr);
     
@@ -459,16 +588,28 @@ void KernelHeap::freeDma(void* ptr, size_t size) {
         uint64_t v  = virt + i * PAGE_SIZE;
         uint64_t pa = get_physical_address(v);
         unmap_page(v);
-        if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Frame dropped previously */ }
+        if (pa) { 
+            pmm_free_frame(reinterpret_cast<void*>(pa)); 
+        } else {
+            // Frame dropped previously
+        }
     }
     vm_arena.free(virt, pages);
-    if (big_alloc_bytes >= pages * PAGE_SIZE) { big_alloc_bytes -= pages * PAGE_SIZE; } else { /* Mathematical underflow prevented */ }
+    if (big_alloc_bytes >= pages * PAGE_SIZE) { 
+        big_alloc_bytes -= pages * PAGE_SIZE; 
+    } else {
+        // Mathematical underflow prevented
+    }
     spinlock_release(&vm_lock, flags);
 }
 
 void* KernelHeap::mallocContiguous(size_t size, uint64_t caller) {
     (void)caller;
-    if (!size) { return nullptr; } else { /* Proceed to allocate physical linear segment */ }
+    if (!size) { 
+        return nullptr; 
+    } else {
+        // Proceed to allocate physical linear segment
+    }
     size_t pages = ALIGN_UP(size, PAGE_SIZE) / PAGE_SIZE;
     
     uint64_t flags = spinlock_acquire(&vm_lock);
@@ -506,7 +647,11 @@ void* KernelHeap::mallocContiguous(size_t size, uint64_t caller) {
 }
 
 void KernelHeap::freeContiguous(void* ptr, size_t size) {
-    if (!ptr || !size) { return; } else { /* Target pointer acquired */ }
+    if (!ptr || !size) { 
+        return; 
+    } else {
+        // Target pointer acquired
+    }
     size_t   pages = ALIGN_UP(size, PAGE_SIZE) / PAGE_SIZE;
     uint64_t virt  = reinterpret_cast<uintptr_t>(ptr);
     
@@ -517,10 +662,18 @@ void KernelHeap::freeContiguous(void* ptr, size_t size) {
         uint64_t v  = virt + i * PAGE_SIZE;
         uint64_t pa = get_physical_address(v);
         unmap_page(v);
-        if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); } else { /* Ghost frame handled safely */ }
+        if (pa) { 
+            pmm_free_frame(reinterpret_cast<void*>(pa)); 
+        } else {
+            // Ghost frame handled safely
+        }
     }
     vm_arena.free(virt, pages);
-    if (big_alloc_bytes >= pages * PAGE_SIZE) { big_alloc_bytes -= pages * PAGE_SIZE; } else { /* Accounting mismatch avoided */ }
+    if (big_alloc_bytes >= pages * PAGE_SIZE) { 
+        big_alloc_bytes -= pages * PAGE_SIZE; 
+    } else {
+        // Accounting mismatch avoided
+    }
     spinlock_release(&vm_lock, flags);
 }
 
@@ -610,23 +763,43 @@ void kfree_contiguous(void* ptr, size_t size) {
 }
 
 void kheap_print_stats() {
-    if (g_Heap) { g_Heap->printStats(); } else { /* Ignore if heap is corrupted */ }
+    if (g_Heap) { 
+        g_Heap->printStats(); 
+    } else {
+        // Ignore if heap is corrupted
+    }
 }
 
 void kheap_trim() {
-    if (g_Heap) { g_Heap->trim(); } else { /* System state degraded */ }
+    if (g_Heap) { 
+        g_Heap->trim(); 
+    } else {
+        // System state degraded
+    }
 }
 
 size_t kheap_get_cached_size() {
-    if (g_Heap) { return g_Heap->getCachedSize(); } else { return 0; }
+    if (g_Heap) { 
+        return g_Heap->getCachedSize(); 
+    } else { 
+        return 0; 
+    }
 }
 
 size_t kheap_get_payload_size() {
-    if (g_Heap) { return g_Heap->getUsedPayload(); } else { return 0; }
+    if (g_Heap) { 
+        return g_Heap->getUsedPayload(); 
+    } else { 
+        return 0; 
+    }
 }
 
 size_t kheap_get_reserved_size() {
-    if (g_Heap) { return g_Heap->getTotalReserved(); } else { return 0; }
+    if (g_Heap) { 
+        return g_Heap->getTotalReserved(); 
+    } else { 
+        return 0; 
+    }
 }
 
 }

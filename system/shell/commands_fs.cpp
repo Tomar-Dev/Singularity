@@ -17,16 +17,18 @@ extern "C" {
     int gpt_delete_partition(const char* part_name);
     int rust_gpt_init_disk(const char* dev_name);
 
-    void console_set_auto_flush(bool enabled);
     void rust_device_print_disks(void);
 }
 
 int Shell::cmd_ls(const char* arg) {
-    console_set_auto_flush(false); 
+    ScopedAutoFlush saf(false); 
 
     char fullPath[256];
-    if (arg && arg[0] != '\0') { resolveAbsolutePath(arg, fullPath); }
-    else { resolveAbsolutePath(".", fullPath); }
+    if (arg && arg[0] != '\0') { 
+        resolveAbsolutePath(arg, fullPath); 
+    } else { 
+        resolveAbsolutePath(".", fullPath); 
+    }
 
     KObject* obj = ons_resolve(fullPath);
 
@@ -53,14 +55,22 @@ int Shell::cmd_ls(const char* arg) {
         printf("%s\n", name_buf);
     }
 
-    if (obj) { kobject_unref(obj); } else { /* Null Bypass */ }
-    console_set_auto_flush(true); 
+    if (obj) { 
+        kobject_unref(obj); 
+    } else {
+        // Null Bypass
+    }
     return 0;
 }
 
 int Shell::cmd_cat(const char* arg) {
-    if (!arg || arg[0] == '\0') { printf("Usage: cat <file1> [file2...]\n"); return 1; } else { /* Safe */ }
-    console_set_auto_flush(false); 
+    if (!arg || arg[0] == '\0') { 
+        printf("Usage: cat <file1>[file2...]\n"); 
+        return 1; 
+    } else {
+        // Safe
+    }
+    ScopedAutoFlush saf(false); 
 
     char args_copy[256];
     strncpy(args_copy, arg, 255);
@@ -72,10 +82,19 @@ int Shell::cmd_cat(const char* arg) {
 
     while (*p) {
         while (*p == ' ') { p++; }
-        if (*p == '\0') { break; } else { /* Token Valid */ }
+        if (*p == '\0') { 
+            break; 
+        } else {
+            // Token Valid
+        }
         token = p;
         while (*p && *p != ' ') { p++; }
-        if (*p) { *p = '\0'; p++; } else { /* End reached */ }
+        if (*p) { 
+            *p = '\0'; 
+            p++; 
+        } else {
+            // End reached
+        }
 
         char fullPath[256];
         resolveAbsolutePath(token, fullPath);
@@ -91,7 +110,11 @@ int Shell::cmd_cat(const char* arg) {
         } else if (obj->type == KObjectType::BLOB) {
             KBlob* blob = (KBlob*)obj;
             size_t sz = (size_t)blob->getSize();
-            if (sz == 0) { sz = 4096; } else { /* Size loaded */ }
+            if (sz == 0) { 
+                sz = 4096; 
+            } else {
+                // Size loaded
+            }
             if (sz > 1024 * 1024) {
                 printf("cat: %s: File too large to display\n", token);
                 ret = 1;
@@ -102,7 +125,11 @@ int Shell::cmd_cat(const char* arg) {
                     blob->read(0, buf, sz, &read_bytes);
                     buf[read_bytes] = '\0';
                     printf("%s", buf);
-                    if (read_bytes > 0 && buf[read_bytes - 1] != '\n') { printf("\n"); } else { /* Native LF */ }
+                    if (read_bytes > 0 && buf[read_bytes - 1] != '\n') { 
+                        printf("\n"); 
+                    } else {
+                        // Native LF
+                    }
                     kfree(buf);
                 } else {
                     printf("cat: Out of memory\n");
@@ -115,7 +142,6 @@ int Shell::cmd_cat(const char* arg) {
         }
     }
 
-    console_set_auto_flush(true); 
     return ret;
 }
 
@@ -142,14 +168,23 @@ int Shell::cmd_cd(const char* arg) {
             return 0;
         } else {
             printf("cd: Invalid directory: %s\n", arg);
-            if (obj) { kobject_unref(obj); } else { /* Freed implicitly */ }
+            if (obj) { 
+                kobject_unref(obj); 
+            } else {
+                // Freed implicitly
+            }
             return 1;
         }
     }
 }
 
 int Shell::cmd_mkdir(const char* arg) {
-    if (!arg || arg[0] == '\0') { printf("Usage: mkdir <n>\n"); return 1; } else { /* Bounds Pass */ }
+    if (!arg || arg[0] == '\0') { 
+        printf("Usage: mkdir <n>\n"); 
+        return 1; 
+    } else {
+        // Bounds Pass
+    }
     char fullPath[256];
     resolveAbsolutePath(arg, fullPath);
     char filename[128];
@@ -174,12 +209,21 @@ int Shell::cmd_mkdir(const char* arg) {
     } else {
         printf("Error: Parent directory not found.\n");
     }
-    if (parent) { kobject_unref(parent); } else { /* Escaped */ }
+    if (parent) { 
+        kobject_unref(parent); 
+    } else {
+        // Escaped
+    }
     return 1;
 }
 
 int Shell::cmd_touch(const char* arg) {
-    if (!arg || arg[0] == '\0') { printf("Usage: touch <n>\n"); return 1; } else { /* Pass */ }
+    if (!arg || arg[0] == '\0') { 
+        printf("Usage: touch <n>\n"); 
+        return 1; 
+    } else {
+        // Pass
+    }
     char fullPath[256];
     resolveAbsolutePath(arg, fullPath);
     char filename[128];
@@ -204,12 +248,22 @@ int Shell::cmd_touch(const char* arg) {
     } else {
         printf("Error: Parent directory not found.\n");
     }
-    if (parent) { kobject_unref(parent); } else { /* Valid */ }
+    if (parent) { 
+        kobject_unref(parent); 
+    } else {
+        // Valid
+    }
     return 1;
 }
 
+// MANTIKSAL YAMA: Dosya yazma işlemi artık 0. offsetten ezmek yerine dosyanın sonuna ekleme (Append) yapar.
 int Shell::cmd_write(const char* arg) {
-    if (!arg || arg[0] == '\0') { printf("Usage: write <filename> <text...>\n"); return 1; } else { /* Proceed */ }
+    if (!arg || arg[0] == '\0') { 
+        printf("Usage: write <filename> <text...>\n"); 
+        return 1; 
+    } else {
+        // Proceed
+    }
 
     char argcopy[256];
     strncpy(argcopy, arg, 255);
@@ -226,7 +280,12 @@ int Shell::cmd_write(const char* arg) {
         // Missing parameter fields
     }
 
-    if (!text_arg) { printf("Usage: write <filename> <text...>\n"); return 1; } else { /* Executing stream buffer */ }
+    if (!text_arg) { 
+        printf("Usage: write <filename> <text...>\n"); 
+        return 1; 
+    } else {
+        // Executing stream buffer
+    }
 
     char fullPath[256];
     resolveAbsolutePath(filename_arg, fullPath);
@@ -239,9 +298,11 @@ int Shell::cmd_write(const char* arg) {
             return 1;
         } else if (obj->type == KObjectType::BLOB) {
             size_t written = 0;
-            ((KBlob*)obj)->write(0, text_arg, strlen(text_arg), &written);
+            KBlob* blob = (KBlob*)obj;
+            // FIX: Append to the end of the file instead of overwriting at offset 0
+            blob->write(blob->getSize(), text_arg, strlen(text_arg), &written);
             if (written > 0) {
-                printf("Written %lu bytes to %s\n", (uint64_t)written, filename_arg);
+                printf("Appended %lu bytes to %s\n", (uint64_t)written, filename_arg);
                 kobject_unref(obj);
                 return 0;
             } else {
@@ -280,7 +341,11 @@ int Shell::cmd_automount(const char* arg) {
         char path[128];
         snprintf(path, sizeof(path), "/devices/%s", name);
         KObject* obj = ons_resolve(path);
-        if (!obj) { continue; } else { /* Loaded active Object */ }
+        if (!obj) { 
+            continue; 
+        } else {
+            // Loaded active Object
+        }
         
         if (obj->type == KObjectType::BLOCK_DEVICE) {
             Device* d = (Device*)obj;
@@ -483,7 +548,12 @@ int Shell::cmd_fdisk(const char* arg) {
         printf("Usage:\n  fdisk init <disk>\n  fdisk create <disk> <size_mb> <n>[type]\n  fdisk delete <partition>\n");
         return 1;
     } else if (strcmp(op, "init") == 0) {
-        if (!params || params[0] == '\0') { printf("Usage: fdisk init <disk>\n"); return 1; } else { /* Pass */ }
+        if (!params || params[0] == '\0') { 
+            printf("Usage: fdisk init <disk>\n"); 
+            return 1; 
+        } else {
+            // Pass
+        }
 
         printf("Initializing disk %s with a new GPT table...\n", params);
         if (rust_gpt_init_disk(params) == 1) {
@@ -502,18 +572,39 @@ int Shell::cmd_fdisk(const char* arg) {
         if (dev_name) {
             char* p = dev_name;
             while (*p && *p != ' ') { p++; }
-            if (*p == ' ') { *p = '\0'; size_str = p + 1; } else { /* Parameter invalid */ }
-        } else { /* Passed */ }
+            if (*p == ' ') { 
+                *p = '\0'; 
+                size_str = p + 1; 
+            } else {
+                // Parameter invalid
+            }
+        } else {
+            // Passed
+        }
         if (size_str) {
             char* p = size_str;
             while (*p && *p != ' ') { p++; }
-            if (*p == ' ') { *p = '\0'; name_str = p + 1; } else { /* Skipped */ }
-        } else { /* Passed */ }
+            if (*p == ' ') { 
+                *p = '\0'; 
+                name_str = p + 1; 
+            } else {
+                // Skipped
+            }
+        } else {
+            // Passed
+        }
         if (name_str) {
             char* p = name_str;
             while (*p && *p != ' ') { p++; }
-            if (*p == ' ') { *p = '\0'; type_str = p + 1; } else { /* Clean */ }
-        } else { /* Executed standard parsing checks */ }
+            if (*p == ' ') { 
+                *p = '\0'; 
+                type_str = p + 1; 
+            } else {
+                // Clean
+            }
+        } else {
+            // Executed standard parsing checks
+        }
 
         if (dev_name && size_str && name_str) {
             uint64_t size_mb = 0;
@@ -566,8 +657,7 @@ int Shell::cmd_fdisk(const char* arg) {
 
 int Shell::cmd_disks(const char* arg) {
     (void)arg;
-    console_set_auto_flush(false);
+    ScopedAutoFlush saf(false);
     rust_device_print_disks();
-    console_set_auto_flush(true);
     return 0;
 }

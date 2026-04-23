@@ -30,19 +30,15 @@
 #include "system/init/service.hpp"
 
 extern "C" {
-    // Kernel Internal Symbols
     extern uintptr_t __stack_chk_guard;
     extern uint8_t num_cpus;
     extern volatile uint64_t cpu_tick_counts[];
     
-    // Hardware Abstraction & Driver Exports
     extern bool uefi_available();
     extern void syscall_entry();
     extern void framebuffer_flush();
     extern uint32_t rust_pcie_get_device_count();
 }
-
-// --- UI HELPERS ---
 
 static void print_category(const char* title) {
     printf("\n");
@@ -66,7 +62,6 @@ static void print_check_start(const char* name) {
 }
 
 static void print_check_end(const char* name, int status, const char* msg) {
-    // \r returns cursor to the start of the line to overwrite [CHECKING]
     printf("\r"); 
     console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     printf("%-28s: ", name);
@@ -75,7 +70,6 @@ static void print_check_end(const char* name, int status, const char* msg) {
         console_set_color(CONSOLE_COLOR_LIGHT_GREEN, CONSOLE_COLOR_BLACK);
         if (msg && msg[0] != '\0') {
             printf("[PASS] (%s)", msg);
-            // Clear remaining characters from the previous status string
             size_t info_len = strlen(msg) + 8;
             for(size_t i = info_len; i < 25; i++) printf(" ");
             printf("\n");
@@ -97,8 +91,6 @@ static void run_check(const char* name, int (*check_func)(const char**)) {
     int status = check_func(&msg);
     print_check_end(name, status, msg);
 }
-
-// --- HARDWARE LAYER DIAGNOSTICS ---
 
 static int chk_cpu_id(const char** msg) {
     if (cpu_info.vendor != VENDOR_UNKNOWN) {
@@ -130,13 +122,18 @@ static int chk_cpu_topo(const char** msg) {
 
 static int chk_cpu_cache(const char** msg) {
     if (cpu_info.l1_cache_size > 0) {
-        static char buf[32];
+        static char buf[64];
         snprintf(buf, sizeof(buf), "L1:%dK L2:%dK L3:%dK", cpu_info.l1_cache_size, cpu_info.l2_cache_size, cpu_info.l3_cache_size / 1024);
         *msg = buf;
         return 1;
     } else {
-        *msg = "Detection Failed";
-        return 0;
+        if (cpu_info.is_hypervisor) {
+            *msg = "Masked by Hypervisor";
+            return 1;
+        } else {
+            *msg = "Detection Failed";
+            return 0;
+        }
     }
 }
 
@@ -270,8 +267,6 @@ static int chk_serial_com1(const char** msg) {
     }
 }
 
-// --- SOFTWARE & KERNEL LAYER DIAGNOSTICS ---
-
 static int chk_pmm_state(const char** msg) {
     if (pmm_get_free_memory() > 1024 * 1024) {
         return 1;
@@ -342,7 +337,7 @@ static int chk_slab_integrity(const char** msg) {
 }
 
 static int chk_gwp_asan(const char** msg) {
-    return 1; // Active by default in v6.9.5
+    return 1; 
 }
 
 static int chk_stack_canary(const char** msg) {
@@ -433,7 +428,6 @@ static int chk_reaper_daemon(const char** msg) {
 }
 
 static int chk_kom_handles(const char** msg) {
-    // Check if handle table is functional
     return 1; 
 }
 
@@ -475,11 +469,8 @@ static int chk_vfs_mounts(const char** msg) {
 }
 
 static int chk_services(const char** msg) {
-    // Service manager is active
     return 1; 
 }
-
-// --- MAIN EXECUTION ---
 
 void perform_system_check() {
     console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
