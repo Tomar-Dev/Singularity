@@ -83,11 +83,8 @@ void* PagingManager::allocStack(size_t pages) {
     uint64_t vstack = vbase + PAGE_SIZE;
     spinlock_release(&vmm_lock, f);
 
-    unmapPage(vbase); // Guard page
+    unmapPage(vbase); 
 
-    // GÜVENLİK YAMASI: Yığınlar (Stacks) ASLA Demand Paged (Tembel) olamaz!
-    // Eğer yığın bellekte yoksa, işlemci Page Fault fırlatmak için yığına yazmaya çalışır
-    // ve yığın olmadığı için Double Fault yer. Bu yüzden yığınlara anında fiziksel RAM veriyoruz.
     void* phys = pmm_alloc_contiguous(pages);
     if (phys) {
         if (!mapPagesBulk(vstack, reinterpret_cast<uint64_t>(phys), pages, PAGE_PRESENT | PAGE_WRITE | PAGE_NX)) {
@@ -102,7 +99,6 @@ void* PagingManager::allocStack(size_t pages) {
         return reinterpret_cast<void*>(vstack);
     }
 
-    // Ardışık RAM bulunamazsa parça parça tahsis et
     for (size_t i = 0; i < pages; i++) {
         void* p = pmm_alloc_frame();
         if (unlikely(!p)) {

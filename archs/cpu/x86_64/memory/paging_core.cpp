@@ -496,6 +496,14 @@ abort:
 // YENİ: Demand Paging (Tembel Tahsis) İşleyicisi
 bool PagingManager::handleDemandFault(uint64_t fault_addr) {
     uint64_t page = fault_addr & ~0xFFFULL;
+    
+    void* frame = pmm_alloc_frame();
+    if (!frame) {
+        return false;
+    }
+    
+    memset(frame, 0, PAGE_SIZE);
+    
     uint64_t irq = spinlock_acquire(&paging_lock);
     
     uint64_t current_cr3;
@@ -506,27 +514,34 @@ bool PagingManager::handleDemandFault(uint64_t fault_addr) {
     getIndexes(page, p4, p3, p2, p1);
     
     PageTable* pdp = active_pml4->getNextLevel(p4); 
-    if(!pdp){ spinlock_release(&paging_lock, irq); return false; }
+    if(!pdp){ 
+        spinlock_release(&paging_lock, irq); 
+        pmm_free_frame(frame); 
+        return false; 
+    }
     
     PageTable* pd = pdp->getNextLevel(p3);   
-    if(!pd) { spinlock_release(&paging_lock, irq); return false; }
+    if(!pd) { 
+        spinlock_release(&paging_lock, irq); 
+        pmm_free_frame(frame);
+        return false; 
+    }
     
     PageTable* pt = pd->getNextLevel(p2);    
-    if(!pt) { spinlock_release(&paging_lock, irq); return false; }
+    if(!pt) { 
+        spinlock_release(&paging_lock, irq); 
+        pmm_free_frame(frame);
+        return false; 
+    }
     
     PageEntry* e = &pt->entries[p1];
+    
     if (e->getFlag(PAGE_PRESENT) || !e->getFlag(PAGE_DEMAND)) {
         spinlock_release(&paging_lock, irq); 
-        return false;
+        pmm_free_frame(frame); 
+        return true; 
     }
     
-    void* frame = pmm_alloc_frame();
-    if (!frame) {
-        spinlock_release(&paging_lock, irq);
-        return false;
-    }
-    
-    // Mevcut bayrakları (R/W, NX, User, Global) koru
     uint64_t flags = e->raw() & (0xFFFULL | PAGE_NX | PAGE_GLOBAL);
     flags &= ~PAGE_DEMAND;
     flags |= PAGE_PRESENT;
@@ -536,22 +551,23 @@ bool PagingManager::handleDemandFault(uint64_t fault_addr) {
     spinlock_release(&paging_lock, irq);
     tlbInvalidate(page, 1);
     
-    // Bilgi sızıntısını önlemek için yeni sayfayı sıfırla
-    memset(reinterpret_cast<void*>(page), 0, PAGE_SIZE);
-    
     return true;
 }
 
-extern "C" void init_paging(void) {
+extern "C" {
+
+void init_paging(void) {
     g_Paging = new (paging_buf) PagingManager();
     g_Paging->init();
     register_interrupt_handler(0xFD, tlb_flush_handler);
 }
 
-extern "C" void paging_init_pcid(void)      { if(g_Paging) { g_Paging->initPcid(); } }
-extern "C" int  map_page(uint64_t v,uint64_t p,uint64_t f) { return g_Paging ? g_Paging->mapPage(v,p,f) : 0; }
-extern "C" int  map_pages_bulk(uint64_t vs,uint64_t ps,size_t c,uint64_t f){ return g_Paging ? g_Paging->mapPagesBulk(vs,ps,c,f) : 0; }
-extern "C" int  map_page_1g(uint64_t v,uint64_t p,uint64_t f){ return g_Paging ? g_Paging->mapPage1G(v,p,f) : 0; }
-extern "C" void unmap_page(uint64_t v)           { if(g_Paging) { g_Paging->unmapPage(v); } }
-extern "C" uint64_t get_physical_address(uint64_t v){ return g_Paging ? g_Paging->getPhysicalAddress(v) : 0; }
-extern "C" void paging_check_tlb_flush(uint8_t id){ if(g_Paging) { g_Paging->checkTlbFlush(id); } }
+void paging_init_pcid(void)      { if(g_Paging) { g_Paging->initPcid(); } }
+int  map_page(uint64_t v,uint64_t p,uint64_t f) { return g_Paging ? g_Paging->mapPage(v,p,f) : 0; }
+int  map_pages_bulk(uint64_t vs,uint64_t ps,size_t c,uint64_t f){ return g_Paging ? g_Paging->mapPagesBulk(vs,ps,c,f) : 0; }
+int  map_page_1g(uint64_t v,uint64_t p,uint64_t f){ return g_Paging ? g_Paging->mapPage1G(v,p,f) : 0; }
+void unmap_page(uint64_t v)           { if(g_Paging) { g_Paging->unmapPage(v); } }
+uint64_t get_physical_address(uint64_t v){ return g_Paging ? g_Paging->getPhysicalAddress(v) : 0; }
+void paging_check_tlb_flush(uint8_t id){ if(g_Paging) { g_Paging->checkTlbFlush(id); } }
+
+}
