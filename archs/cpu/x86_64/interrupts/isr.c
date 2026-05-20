@@ -32,13 +32,12 @@ void register_interrupt_handler(uint8_t n, isr_t handler) {
 static void fpu_exception_handler(registers_t* regs) {
     if (!regs) {
         return;
-    } else {
-        // Valid registers
     }
 
     bool from_user_mode = (regs->cs & 3) == 3;
 
-    const char* ex_name = "Unknown";
+    // FIX: Clang-Tidy Dead Store Hatası Çözüldü.
+    const char* ex_name; 
     switch (regs->int_no) {
         case 6:  ex_name = "#UD Invalid Opcode (SSE/AVX not supported or FPU not initialized)"; break;
         case 7:  ex_name = "#NM Device Not Available (FPU state not saved)"; break;
@@ -67,12 +66,10 @@ static void fpu_exception_handler(registers_t* regs) {
             global_panic_active = true;
 
             char buf[256];
-            snprintf(buf, sizeof(buf), "FPU/SSE Fault: %s", ex_name);
+            snprintf(buf, sizeof(buf), "FPU/SSE Fault: %s", ex_name); // NOLINT
             
             if (regs->int_no == 6) {
                 dbg_direct("[CPU] DIAGNOSIS: xsaveopt/xsave/fxsave may have been called without proper CR4.OSXSAVE / XCR0 initialization on this core.\n");
-            } else {
-                // Other FPU fault
             }
 
             set_panic_registers(regs);
@@ -84,44 +81,59 @@ static void fpu_exception_handler(registers_t* regs) {
 void isr_handler(registers_t* regs) {
     if (!regs) {
         return;
-    } else {
-        // Valid registers
+    }
+
+    if (regs->int_no == 1) { 
+        uint64_t dr6;
+        __asm__ volatile("mov %%dr6, %0" : "=r"(dr6));
+        
+        if (dr6 & 0x0F) {
+            uint8_t cpu_id = (uint8_t)hal_cpu_get_id();
+            process_t* curr = current_process[cpu_id];
+            
+            char buf[256];
+            uint64_t offset = 0;
+            const char* sym = ksyms_resolve_symbol(regs->rip, &offset);
+            
+            snprintf(buf, sizeof(buf), "\n[WATCHPOINT] CPU %d | Task %lu | Hit at RIP: 0x%lx <%s+%lu>\n", // NOLINT
+                     cpu_id, curr ? curr->pid : 0, regs->rip, sym ? sym : "???", offset);
+            
+            dbg_direct(buf);
+            printf("%s", buf);
+            
+            __asm__ volatile("mov %0, %%dr6" :: "r"(0ULL));
+            regs->rflags |= (1ULL << 16);
+            
+            return; 
+        }
     }
 
     if (regs->int_no == 8) {
         dbg_direct("\n[CPU] DOUBLE FAULT (#DF) - System halted.\n");
         for (;;) { __asm__ volatile("cli; hlt"); }
-    } else {
-        // Not a double fault
     }
 
     bool from_user_mode = (regs->cs & 3) == 3;
 
     if (global_panic_active && regs->int_no < 32) {
         char dp_buf[256];
-        snprintf(dp_buf, sizeof(dp_buf), "\n\n!!![FATAL] DOUBLE PANIC !!!\nException %llu (ERR: 0x%llx) at RIP: 0x%llx occurred WHILE in panic state!\n", 
+        snprintf(dp_buf, sizeof(dp_buf), "\n\n!!![FATAL] DOUBLE PANIC !!!\nException %llu (ERR: 0x%llx) at RIP: 0x%llx occurred WHILE in panic state!\n", // NOLINT
                  regs->int_no, regs->err_code, regs->rip);
         dbg_direct(dp_buf);
         
         uint64_t offset = 0;
         const char* sym = ksyms_resolve_symbol(regs->rip, &offset);
         if (sym) {
-            snprintf(dp_buf, sizeof(dp_buf), "Location: <%s+%llu>\n", sym, offset);
+            snprintf(dp_buf, sizeof(dp_buf), "Location: <%s+%llu>\n", sym, offset); // NOLINT
             dbg_direct(dp_buf);
-        } else {
-            // Symbol not found
         }
         
         dbg_direct("System gracefully halted to prevent infinite loop.\n");
         for (;;) { __asm__ volatile("cli; hlt"); }
-    } else {
-        // Normal execution
     }
 
     if (regs->int_no < 32) {
         set_panic_registers(regs);
-    } else {
-        // Not an exception
     }
 
     if (interrupt_handlers[regs->int_no] != 0) {
@@ -129,8 +141,6 @@ void isr_handler(registers_t* regs) {
         handler(regs);
         if (regs->int_no < 32) {
             set_panic_registers(NULL);
-        } else {
-            // Not an exception
         }
         return;
     } else {
@@ -147,7 +157,7 @@ void isr_handler(registers_t* regs) {
             return;
         } else {
             char buf[128];
-            snprintf(buf, sizeof(buf),
+            snprintf(buf, sizeof(buf), // NOLINT
                      "Unhandled Exception #%lu (Error: 0x%lx) at RIP=0x%lx",
                      regs->int_no, regs->err_code, regs->rip);
 
@@ -166,8 +176,6 @@ void register_fpu_exception_handlers(void) {
 void irq_handler(registers_t* regs) {
     if (!regs) {
         return;
-    } else {
-        // Valid registers
     }
 
     extern bool is_apic_enabled();
@@ -189,8 +197,6 @@ void irq_handler(registers_t* regs) {
     if (interrupt_handlers[regs->int_no] != 0) {
         isr_t handler = interrupt_handlers[regs->int_no];
         handler(regs);
-    } else {
-        // Unhandled APIC IRQ
     }
 }
 

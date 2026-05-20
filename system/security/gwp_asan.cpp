@@ -8,7 +8,6 @@
 #include "libc/stdio.h"
 #include "archs/cpu/cpu_hal.h"
 #include "archs/cpu/x86_64/sync/spinlock.h"
-
 #define GWP_VIRT_BASE   0xFFFFB00000000000ULL
 #define GWP_VIRT_LIMIT  (GWP_VIRT_BASE + (GWP_ASAN_SLOTS * 4ULL * PAGE_SIZE))
 
@@ -39,11 +38,7 @@ void gwp_asan_init(void) {
 }
 
 bool gwp_asan_should_sample(void) {
-    if (!g_initialized) { 
-        return false; 
-    } else {
-        // Initialized
-    }
+    if (!g_initialized) { return false; }
     uint32_t c = __atomic_fetch_add(&g_sample_counter, 1, __ATOMIC_RELAXED);
     return (c % GWP_ASAN_SAMPLE_RATE) == 0;
 }
@@ -53,50 +48,19 @@ bool gwp_asan_is_managed(void* ptr) {
     return (addr >= GWP_VIRT_BASE && addr < GWP_VIRT_LIMIT);
 }
 
-size_t gwp_asan_get_allocation_size(void* ptr) {
-    if (!gwp_asan_is_managed(ptr)) {
-        return 0;
-    } else {
-        // Managed
-    }
-    uint64_t flags = spinlock_acquire(&g_lock);
-    size_t sz = 0;
-    for (int i = 0; i < GWP_ASAN_SLOTS; i++) {
-        if (g_slots[i].state == GWP_SLOT_ACTIVE && g_slots[i].user_ptr == ptr) {
-            sz = g_slots[i].user_size;
-            break;
-        } else {
-            // Not this slot
-        }
-    }
-    spinlock_release(&g_lock, flags);
-    return sz;
-}
-
 void* gwp_asan_malloc(size_t size, uint64_t caller) {
-    if (!g_initialized || size == 0 || size >= PAGE_SIZE) { 
-        return nullptr; 
-    } else {
-        // Valid
-    }
+    if (!g_initialized || size == 0 || size >= PAGE_SIZE) { return nullptr; }
 
     uint64_t flags = spinlock_acquire(&g_lock);
 
     int slot = -1;
     for (int i = 0; i < GWP_ASAN_SLOTS; i++) {
-        if (g_slots[i].state == GWP_SLOT_FREE) { 
-            slot = i; 
-            break; 
-        } else {
-            // Occupied
-        }
+        if (g_slots[i].state == GWP_SLOT_FREE) { slot = i; break; }
     }
 
     if (slot == -1) {
         spinlock_release(&g_lock, flags);
         return nullptr;
-    } else {
-        // Slot found
     }
 
     uint64_t data_virt = slot_data_page(slot);
@@ -105,8 +69,6 @@ void* gwp_asan_malloc(size_t size, uint64_t caller) {
     if (!phys) {
         spinlock_release(&g_lock, flags);
         return nullptr;
-    } else {
-        // Allocated
     }
 
     map_page(data_virt, (uint64_t)phys, PAGE_PRESENT | PAGE_WRITE | PAGE_NX);
@@ -115,11 +77,7 @@ void* gwp_asan_malloc(size_t size, uint64_t caller) {
 
     uint64_t user_virt = data_virt + PAGE_SIZE - size;
     user_virt &= ~0x7ULL;
-    if (user_virt < data_virt) { 
-        user_virt = data_virt; 
-    } else {
-        // Valid
-    }
+    if (user_virt < data_virt) { user_virt = data_virt; }
 
     g_slots[slot].user_ptr    = (void*)user_virt;
     g_slots[slot].page_base   = (void*)slot_base(slot);
@@ -136,11 +94,7 @@ void* gwp_asan_malloc(size_t size, uint64_t caller) {
 }
 
 bool gwp_asan_free(void* ptr, uint64_t caller) {
-    if (!gwp_asan_is_managed(ptr)) { 
-        return false; 
-    } else {
-        // Managed
-    }
+    if (!gwp_asan_is_managed(ptr)) { return false; }
 
     uint64_t flags = spinlock_acquire(&g_lock);
 
@@ -151,8 +105,6 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
         {
             slot = i;
             break;
-        } else {
-            // Not this slot
         }
     }
 
@@ -162,8 +114,6 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
         panic_at("GWP-ASAN", 0, KERR_HEAP_USE_AFTER_FREE,
                  "GWP-ASAN: Free of unknown/already-freed GWP pointer!");
         __builtin_unreachable();
-    } else {
-        // Slot found
     }
 
     uint64_t data_virt = slot_data_page(slot);
@@ -171,11 +121,7 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
 
     uint64_t phys = get_physical_address(data_virt);
     unmap_page(data_virt);
-    if (phys) { 
-        pmm_free_frame((void*)phys); 
-    } else {
-        // Unmapped
-    }
+    if (phys) { pmm_free_frame((void*)phys); }
 
     g_slots[slot].free_caller = caller;
     g_slots[slot].state       = GWP_SLOT_FREED;
@@ -185,26 +131,16 @@ bool gwp_asan_free(void* ptr, uint64_t caller) {
 }
 
 extern "C" bool gwp_asan_check_fault(uint64_t fault_addr) {
-    if (!g_initialized) { 
-        return false; 
-    } else {
-        // Initialized
-    }
+    if (!g_initialized) { return false; }
     if (fault_addr < GWP_VIRT_BASE || fault_addr >= GWP_VIRT_LIMIT) {
         return false;
-    } else {
-        // Within bounds
     }
 
     uint64_t offset = fault_addr - GWP_VIRT_BASE;
     int slot        = (int)(offset / SLOT_STRIDE);
     uint64_t in_slot = offset % SLOT_STRIDE;
 
-    if (slot >= GWP_ASAN_SLOTS) { 
-        return false; 
-    } else {
-        // Valid slot
-    }
+    if (slot >= GWP_ASAN_SLOTS) { return false; }
 
     char buf[320];
     GwpSlot* s = &g_slots[slot];

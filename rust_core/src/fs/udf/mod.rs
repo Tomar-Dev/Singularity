@@ -6,7 +6,7 @@ use alloc::vec;
 use alloc::sync::Arc;
 use alloc::boxed::Box;
 use core::ffi::c_void;
-use crate::fs::traits::{FsNode, FsBackend};
+use crate::fs::traits::{FsNode, FsBackend, DeviceHandle};
 use crate::fs::utils::{read_u8, read_u16_le, read_u32_le, read_u64_le};
 
 unsafe extern "C" {
@@ -75,13 +75,10 @@ struct LongAd {
 }
 
 pub struct UdfMount {
-    device: *mut c_void,
+    device: DeviceHandle,
     partition_start: u32,
     block_size: u32,
 }
-
-unsafe impl Send for UdfMount {}
-unsafe impl Sync for UdfMount {}
 
 pub struct UdfNode {
     mount: Arc<UdfMount>,
@@ -89,9 +86,6 @@ pub struct UdfNode {
     size: u64,
     is_dir: bool,
 }
-
-unsafe impl Send for UdfNode {}
-unsafe impl Sync for UdfNode {}
 
 fn read_sector(dev: *mut c_void, lba: u64, count: u32) -> Option<Vec<u8>> {
     let bs = unsafe { cpp_device_get_block_size(dev) };
@@ -132,7 +126,7 @@ fn read_node_data(node: &UdfNode, offset: u64, size: u32) -> Option<Vec<u8>> {
     let mult = node.mount.block_size / 512;
     let sector = (node.mount.partition_start + node.icb_loc.loc) * mult;
     
-    let buf = read_sector(node.mount.device, sector as u64, 4)?;
+    let buf = read_sector(node.mount.device.0, sector as u64, 4)?;
     let tag_id = read_u16_le(&buf, 0);
     
     let (info_len, ad_len_off, base_off) = if tag_id == TAGID_ICB {
@@ -185,7 +179,7 @@ fn read_node_data(node: &UdfNode, offset: u64, size: u32) -> Option<Vec<u8>> {
                 let offset_in_sector = (rel_off % 512) as usize;
                 let sectors = (offset_in_sector + to_read).div_ceil(512); 
                 
-                if let Some(data) = read_sector(node.mount.device, start_sector as u64, sectors as u32) {
+                if let Some(data) = read_sector(node.mount.device.0, start_sector as u64, sectors as u32) {
                     let mut res = vec![0u8; to_read];
                     res.copy_from_slice(&data[offset_in_sector..offset_in_sector+to_read]);
                     return Some(res);
@@ -208,7 +202,7 @@ fn initialize_node(mount: Arc<UdfMount>, icb_loc: LongAd) -> Option<UdfNode> {
     let mult = mount.block_size / 512;
     let sector = (mount.partition_start + icb_loc.loc) * mult;
     
-    if let Some(buf) = read_sector(mount.device, sector as u64, 4) {
+    if let Some(buf) = read_sector(mount.device.0, sector as u64, 4) {
         let tag_id = read_u16_le(&buf, 0);
         let (icb_tag_off, info_len) = if tag_id == TAGID_ICB {
             (16, read_u64_le(&buf, 56))
@@ -390,7 +384,7 @@ pub unsafe extern "C" fn rust_udf_mount(dev: *mut c_void) -> *mut c_void {
                         };
                         
                         let mount = Arc::new(UdfMount {
-                            device: dev,
+                            device: DeviceHandle(dev),
                             partition_start: part_start,
                             block_size: bs,
                         });
@@ -421,6 +415,6 @@ pub unsafe extern "C" fn rust_udf_mount(dev: *mut c_void) -> *mut c_void {
 
 impl Drop for UdfMount {
     fn drop(&mut self) {
-        unsafe { crate::ffi::exports::device_release(self.device); }
+        unsafe { crate::ffi::exports::device_release(self.device.0); }
     }
 }

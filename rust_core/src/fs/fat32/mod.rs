@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::boxed::Box;
 use core::ffi::c_void;
-use crate::fs::traits::{FsNode, FsBackend};
+use crate::fs::traits::{FsNode, FsBackend, DeviceHandle};
 use crate::fs::utils::{read_u8, read_u16_le, read_u32_le};
 use crate::ffi::bindings::StorageKioVec;
 
@@ -16,19 +16,16 @@ unsafe extern "C" {
 }
 
 pub struct Fat32Mount {
-    dev: *mut c_void,
+    dev: DeviceHandle,
     first_data_sector: u32,
     sectors_per_cluster: u32,
     bytes_per_cluster: u32,
     fat_start_sector: u32,
 }
 
-unsafe impl Send for Fat32Mount {}
-unsafe impl Sync for Fat32Mount {}
-
 impl Drop for Fat32Mount {
     fn drop(&mut self) {
-        unsafe { crate::ffi::exports::device_release(self.dev); }
+        unsafe { crate::ffi::exports::device_release(self.dev.0); }
     }
 }
 
@@ -39,23 +36,19 @@ pub struct Fat32Node {
     is_dir: bool,
 }
 
-unsafe impl Send for Fat32Node {}
-unsafe impl Sync for Fat32Node {}
-
 impl Fat32Mount {
     fn cluster_to_lba(&self, cluster: u32) -> u64 {
-        // FIX: Cluster Underflow Koruması
         if cluster < 2 { return 0; }
         self.first_data_sector as u64 + ((cluster - 2) as u64 * self.sectors_per_cluster as u64)
     }
 
     fn get_next_cluster(&self, cluster: u32) -> u32 {
-        if cluster < 2 { return 0x0FFFFFFF; } // FIX: Geçersiz küme araması engellendi
+        if cluster < 2 { return 0x0FFFFFFF; } 
         let sector = self.fat_start_sector + (cluster * 4 / 512);
         let offset = (cluster * 4) % 512;
         let mut buf = alloc::vec![0u8; 4096];
         
-        let ret = unsafe { disk_cache_read_block(self.dev, sector as u64, 1, buf.as_mut_ptr()) };
+        let ret = unsafe { disk_cache_read_block(self.dev.0, sector as u64, 1, buf.as_mut_ptr()) };
         if ret != 1 {
             crate::ffi::debug_print("Error: Failed to read FAT sector.\n\0");
             return 0x0FFFFFFF;
@@ -154,7 +147,7 @@ impl FsNode for Fat32Node {
                     virt_addr: dest_ptr as *mut c_void,
                     size: bytes_to_transfer as usize,
                 };
-                let ret = unsafe { disk_cache_read_vector(self.mount.dev, start_lba, &vec, 1) };
+                let ret = unsafe { disk_cache_read_vector(self.mount.dev.0, start_lba, &vec, 1) };
                 if ret != 1 { return Err(8); }
             } else {
                 let sectors_to_read = (bytes_to_transfer + 511) / 512;
@@ -163,7 +156,7 @@ impl FsNode for Fat32Node {
                 let bounce_buf = unsafe { kmalloc_contiguous(bounce_size) as *mut u8 };
                 if bounce_buf.is_null() { return Err(4); }
 
-                let ret = unsafe { disk_cache_read_block(self.mount.dev, start_lba, sectors_to_read, bounce_buf) };
+                let ret = unsafe { disk_cache_read_block(self.mount.dev.0, start_lba, sectors_to_read, bounce_buf) };
                 if ret != 1 {
                     unsafe { kfree_contiguous(bounce_buf as *mut c_void, bounce_size); }
                     return Err(8);
@@ -198,7 +191,7 @@ impl FsNode for Fat32Node {
 
         while cluster >= 2 && cluster < 0x0FFFFFF8 {
             let lba = self.mount.cluster_to_lba(cluster);
-            let ret = unsafe { disk_cache_read_block(self.mount.dev, lba, self.mount.sectors_per_cluster, cl_buf.as_mut_ptr()) };
+            let ret = unsafe { disk_cache_read_block(self.mount.dev.0, lba, self.mount.sectors_per_cluster, cl_buf.as_mut_ptr()) };
             if ret != 1 { 
                 crate::ffi::debug_print("Error: Directory cluster read failed.\n\0");
                 return None; 
@@ -246,7 +239,6 @@ impl FsNode for Fat32Node {
                         }));
                     }
                     current_lfn.clear();
-                } else {
                 }
                 offset += 32;
             }
@@ -265,7 +257,7 @@ impl FsNode for Fat32Node {
 
         while cluster >= 2 && cluster < 0x0FFFFFF8 {
             let lba = self.mount.cluster_to_lba(cluster);
-            let ret = unsafe { disk_cache_read_block(self.mount.dev, lba, self.mount.sectors_per_cluster, cl_buf.as_mut_ptr()) };
+            let ret = unsafe { disk_cache_read_block(self.mount.dev.0, lba, self.mount.sectors_per_cluster, cl_buf.as_mut_ptr()) };
             if ret != 1 { return None; }
 
             let mut offset = 0;
@@ -334,7 +326,7 @@ pub unsafe extern "C" fn rust_fat32_mount(dev: *mut c_void) -> *mut c_void {
         let first_data_sector = reserved_sectors + (fats_count * sectors_per_fat_32);
 
         let mount = Arc::new(Fat32Mount {
-            dev,
+            dev: DeviceHandle(dev),
             first_data_sector,
             sectors_per_cluster,
             bytes_per_cluster: bytes_per_sector * sectors_per_cluster,

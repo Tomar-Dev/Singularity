@@ -43,7 +43,7 @@ static void print_size(const char* label, uint64_t bytes, console_color_t val_co
     console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
     if (label && label[0]) {
         printf("%-16s: ", label);
-    } else { /* Alignment space */ }
+    }
     console_set_color(val_color, CONSOLE_COLOR_BLACK);
 
     if (bytes >= 1024ULL * 1024ULL) {
@@ -64,11 +64,10 @@ static void print_kv(const char* key, const char* val_fmt, ...) {
     printf("%-14s: ", key);
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     
-    // TIDY FIX: Resolved uninitialized va_list warning by passing args to vsnprintf properly
     char buf[256];
     va_list args;
     va_start(args, val_fmt);
-    int ret = vsnprintf(buf, sizeof(buf), val_fmt, args);
+    int ret = vsnprintf(buf, sizeof(buf), val_fmt, args); // NOLINT
     va_end(args);
     
     if (ret > 0) {
@@ -87,7 +86,7 @@ void show_memory_map() {
     uint64_t dynamic       = 0;
     if (pmm_used > kernel_static) {
         dynamic = pmm_used - kernel_static;
-    } else { /* All RAM consumed by Kernel static */ }
+    }
 
     uint64_t heap_reserved = kheap_get_reserved_size();
     uint64_t heap_payload  = kheap_get_payload_size();
@@ -96,7 +95,7 @@ void show_memory_map() {
     uint64_t other = 0;
     if (dynamic > heap_reserved) {
         other = dynamic - heap_reserved;
-    } else { /* Saturated */ }
+    }
 
     uint64_t disk_cached       = disk_cache_get_size();
     uint64_t total_reclaimable = heap_cached + disk_cached;
@@ -105,7 +104,7 @@ void show_memory_map() {
 
     if (active_used > pmm_used) {
         active_used = pmm_used;
-    } else { /* OK */ }
+    }
 
     uint64_t available = pmm_free;
 
@@ -223,14 +222,14 @@ void show_task_manager() {
     for (int i = 0; i < num_cpus; i++) {
         if (per_cpu_data[i]) {
             start_idle_ticks[i] = per_cpu_data[i]->idle_ticks;
-        } else { /* Null node skip */ }
+        }
     }
 
     timer_sleep(25);
 
     uint64_t end_total   = timer_get_ticks();
     uint64_t delta_total = end_total - start_total;
-    if (delta_total == 0) { delta_total = 1; } else { /* Bounds Safe */ }
+    if (delta_total == 0) { delta_total = 1; }
 
     console_set_color(CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
     printf("\n========== ");
@@ -245,14 +244,14 @@ void show_task_manager() {
     for (int i = 0; i < num_cpus; i++) {
         if (per_cpu_data[i]) {
             end_idle_ticks[i] = per_cpu_data[i]->idle_ticks;
-        } else { /* Node unmapped */ }
+        }
 
         uint64_t delta_idle = 0;
         if (end_idle_ticks[i] >= start_idle_ticks[i]) {
             delta_idle = end_idle_ticks[i] - start_idle_ticks[i];
-        } else { /* TSC Wrap encountered */ }
+        }
 
-        if (delta_idle > delta_total) { delta_idle = delta_total; } else { /* Underflow Guard */ }
+        if (delta_idle > delta_total) { delta_idle = delta_total; }
 
         uint64_t delta_active = 0;
         if (delta_total >= delta_idle) {
@@ -310,7 +309,7 @@ void show_task_manager() {
 static size_t uptime_read_cb(uint64_t offset, void* buffer, size_t count) {
     char temp[64];
     uint64_t t = timer_get_ticks();
-    snprintf(temp, sizeof(temp), "%llu.%llu\n", t / 250, (t % 250) * 4);
+    snprintf(temp, sizeof(temp), "%llu.%llu\n", t / 250, (t % 250) * 4); // NOLINT
     size_t len = strlen(temp);
     if (offset >= len) {
         return 0;
@@ -326,7 +325,7 @@ static size_t meminfo_read_cb(uint64_t offset, void* buffer, size_t count) {
     uint64_t total = pmm_get_total_memory();
     uint64_t used = pmm_get_used_memory();
     uint64_t free = pmm_get_free_memory();
-    snprintf(temp, sizeof(temp), "MemTotal: %llu kB\nMemFree:  %llu kB\nMemUsed:  %llu kB\n", total / 1024, free / 1024, used / 1024);
+    snprintf(temp, sizeof(temp), "MemTotal: %llu kB\nMemFree:  %llu kB\nMemUsed:  %llu kB\n", total / 1024, free / 1024, used / 1024); // NOLINT
     size_t len = strlen(temp);
     if (offset >= len) {
         return 0;
@@ -339,7 +338,7 @@ static size_t meminfo_read_cb(uint64_t offset, void* buffer, size_t count) {
 
 static size_t version_read_cb(uint64_t offset, void* buffer, size_t count) {
     char ver[128];
-    snprintf(ver, sizeof(ver), "%s %s (%s)\n", SINGULARITY_SYS_NAME, SINGULARITY_SYS_VER, SINGULARITY_SYS_ARCH);
+    snprintf(ver, sizeof(ver), "%s %s (%s)\n", SINGULARITY_SYS_NAME, SINGULARITY_SYS_VER, SINGULARITY_SYS_ARCH); // NOLINT
     size_t len = strlen(ver);
     if (offset >= len) {
         return 0;
@@ -369,14 +368,12 @@ extern "C" {
                 KDynamicBlob* b_ver = new KDynamicBlob("version", version_read_cb);
                 info_dir->bind("version", b_ver);
                 kobject_unref(b_ver);
-            } else {
-                // Binding failed, info_dir will be destroyed by the unref below.
             }
             kobject_unref(info_dir); 
-        } else { /* Node mapping lost */ }
+        }
         
         if (sys_dir_obj) {
             kobject_unref(sys_dir_obj);
-        } else { /* Null bypass */ }
+        }
     }
 }

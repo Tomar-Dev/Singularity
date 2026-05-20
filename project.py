@@ -13,7 +13,7 @@ CUSTOM_FILE_MESSAGES = {
         'This file creates the “project.txt” file. (The contents of files with the following extensions are written: .c, .h, .cpp, .hpp, .txt, .json, .rs, .asm, .py, .ld, .cfg, .toml)',
     
     'backup_creator.py': 
-        'This file copies the current state of the project to an external folder named “MeowOS_Backup.” This creates a backup of the project.',
+        'This file copies the current state of the project to an external folder named “Singularity_Backup.” This creates a backup of the project.',
     
     'project.txt': 
         "This file contains all the project's code and directory structure.",

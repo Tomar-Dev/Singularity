@@ -89,12 +89,12 @@ IRQ 255, 255
 
 isr_common_stub:
     cld
-    ; FIX: User Mode'dan gelindiyse GS yazmacını Kernela çevir.
     test qword [rsp + 24], 3
     jz .kernel_mode
     swapgs
 .kernel_mode:
 
+    ; 1. Genel Amaçlı Yazmaçları (GPR) Kaydet
     push rax
     push rbx
     push rcx
@@ -111,20 +111,20 @@ isr_common_stub:
     push r14
     push r15
 
-    mov rdi, rsp      
-    
-    test rsp, 0xF
-    jz .aligned
-    
-    sub rsp, 8
-    call isr_handler
-    add rsp, 8
-    jmp .restore
+    ; 2. FPU/SSE Yazmaçlarını Kaydet (GÜVENLİK YAMASI)
+    mov rbp, rsp      ; Mevcut yığın işaretçisini RBP'ye yedekle
+    and rsp, -16      ; fxsave için yığını 16-byte hizasına çek
+    sub rsp, 512      ; FPU durumu için 512 bayt yer ayır
+    fxsave [rsp]      ; Tüm XMM ve FPU yazmaçlarını yığına kaydet
 
-.aligned:
+    mov rdi, rbp      ; C fonksiyonuna argüman olarak GPR yapısını (registers_t*) gönder
     call isr_handler  
 
-.restore:
+    ; 3. FPU/SSE Yazmaçlarını Geri Yükle
+    fxrstor [rsp]     ; XMM ve FPU yazmaçlarını eski haline getir
+    mov rsp, rbp      ; Yığını eski hizasına ve GPR'lerin olduğu yere geri çek
+
+    ; 4. Genel Amaçlı Yazmaçları Geri Yükle
     pop r15
     pop r14
     pop r13
@@ -143,8 +143,7 @@ isr_common_stub:
 
     add rsp, 16       
     
-    ; FIX: Kernel'a User Mode'dan geldiysen geri donerken GS'i eski haline cevir.
-    test qword[rsp + 8], 3
+    test qword [rsp + 8], 3
     jz .kernel_mode_ret
     swapgs
 .kernel_mode_ret:
@@ -157,6 +156,7 @@ irq_common_stub:
     swapgs
 .kernel_mode_irq:
 
+    ; 1. Genel Amaçlı Yazmaçları (GPR) Kaydet
     push rax
     push rbx
     push rcx
@@ -173,20 +173,20 @@ irq_common_stub:
     push r14
     push r15
 
-    mov rdi, rsp      
-    
-    test rsp, 0xF
-    jz .aligned_irq
-    
-    sub rsp, 8
-    call irq_handler
-    add rsp, 8
-    jmp .restore_irq
+    ; 2. FPU/SSE Yazmaçlarını Kaydet (GÜVENLİK YAMASI)
+    mov rbp, rsp      
+    and rsp, -16      
+    sub rsp, 512      
+    fxsave [rsp]      
 
-.aligned_irq:
+    mov rdi, rbp      
     call irq_handler  
 
-.restore_irq:
+    ; 3. FPU/SSE Yazmaçlarını Geri Yükle
+    fxrstor [rsp]     
+    mov rsp, rbp      
+
+    ; 4. Genel Amaçlı Yazmaçları Geri Yükle
     pop r15
     pop r14
     pop r13

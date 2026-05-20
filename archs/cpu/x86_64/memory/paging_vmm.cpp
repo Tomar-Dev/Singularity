@@ -14,8 +14,6 @@
 static spinlock_t vmm_lock  = {0, 0, {0}};
 static uint8_t*   vmm_bitmap = nullptr;
 
-// OPTİMİZASYON YAMASI: 64-bitlik (QWORD) bloklar halinde bellek arama algoritması
-// Bu sayede VMM bellek tahsisi işlemleri (Stack, DMA) 64 kat hızlanmıştır.
 static int64_t vmm_find_free(size_t count) {
     uint64_t* bitmap64 = (uint64_t*)vmm_bitmap;
     size_t total_qwords = VMM_BITMAP_SIZE / 8;
@@ -25,13 +23,11 @@ static int64_t vmm_find_free(size_t count) {
     for (size_t i = 0; i < total_qwords; i++) {
         uint64_t val = bitmap64[i];
         
-        // Eğer 64 sayfanın tamamı doluysa direkt atla (Fast Path)
         if (val == 0xFFFFFFFFFFFFFFFFULL) {
             found = 0;
             continue;
         }
         
-        // Eğer 64 sayfanın tamamı boşsa ve bize de en az 64 lazımsa hızlıca topla
         if (val == 0 && found == 0 && count >= 64) {
             start = i * 64;
             found += 64;
@@ -39,7 +35,6 @@ static int64_t vmm_find_free(size_t count) {
             continue;
         }
         
-        // Kısmi dolu bloklar veya küçük tahsisler için bit-bit arama
         for (int bit = 0; bit < 64; bit++) {
             if (!(val & (1ULL << bit))) {
                 if (found == 0) start = i * 64 + bit;
@@ -88,8 +83,11 @@ void* PagingManager::allocStack(size_t pages) {
     uint64_t vstack = vbase + PAGE_SIZE;
     spinlock_release(&vmm_lock, f);
 
-    unmapPage(vbase); 
+    unmapPage(vbase); // Guard page
 
+    // GÜVENLİK YAMASI: Yığınlar (Stacks) ASLA Demand Paged (Tembel) olamaz!
+    // Eğer yığın bellekte yoksa, işlemci Page Fault fırlatmak için yığına yazmaya çalışır
+    // ve yığın olmadığı için Double Fault yer. Bu yüzden yığınlara anında fiziksel RAM veriyoruz.
     void* phys = pmm_alloc_contiguous(pages);
     if (phys) {
         if (!mapPagesBulk(vstack, reinterpret_cast<uint64_t>(phys), pages, PAGE_PRESENT | PAGE_WRITE | PAGE_NX)) {
@@ -99,18 +97,20 @@ void* PagingManager::allocStack(size_t pages) {
             spinlock_release(&vmm_lock, f);
             return nullptr;
         }
-        memset(reinterpret_cast<void*>(vstack), 0, pages * PAGE_SIZE);
+        extern void memzero_nt_avx(void* dest, size_t count);
+        memzero_nt_avx(reinterpret_cast<void*>(vstack), pages * PAGE_SIZE);
         return reinterpret_cast<void*>(vstack);
     }
 
+    // Ardışık RAM bulunamazsa parça parça tahsis et
     for (size_t i = 0; i < pages; i++) {
         void* p = pmm_alloc_frame();
         if (unlikely(!p)) {
             for (size_t j = 0; j < i; j++) {
-                uint64_t v = vstack + static_cast<uint64_t>(j) * PAGE_SIZE;
+                uint64_t v  = vstack + static_cast<uint64_t>(j) * PAGE_SIZE;
                 uint64_t pa = get_physical_address(v);
                 unmapPage(v);
-                if (pa) pmm_free_frame(reinterpret_cast<void*>(pa));
+                if (pa) { pmm_free_frame(reinterpret_cast<void*>(pa)); }
             }
             f = spinlock_acquire(&vmm_lock);
             vmm_set(static_cast<size_t>(idx), total, 0);
@@ -134,8 +134,8 @@ void PagingManager::freeStack(void* base, size_t pages) {
         uint64_t pa = get_physical_address(a);
         if (pa) { 
             pmm_free_frame(reinterpret_cast<void*>(pa)); 
-            unmapPage(a); 
         }
+        unmapPage(a); 
     }
     tlbInvalidate(vaddr, pages);
     uint64_t f = spinlock_acquire(&vmm_lock);

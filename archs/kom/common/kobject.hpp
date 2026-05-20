@@ -5,15 +5,17 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define KOM_OK               0
-#define KOM_ERR_STALE_HANDLE 1
-#define KOM_ERR_CAP_DENIED   2
-#define KOM_ERR_INVALID_TYPE 3
-#define KOM_ERR_NO_MEMORY    4
-#define KOM_ERR_UNSUPPORTED  5
-#define KOM_ERR_NOT_FOUND    6
-#define KOM_ERR_COLLISION    7
-#define KOM_ERR_IO           8 
+#define KOM_OK                   0
+#define KOM_ERR_STALE_HANDLE     1
+#define KOM_ERR_CAP_DENIED       2
+#define KOM_ERR_INVALID_TYPE     3
+#define KOM_ERR_NO_MEMORY        4
+#define KOM_ERR_UNSUPPORTED      5
+#define KOM_ERR_NOT_FOUND        6
+#define KOM_ERR_COLLISION        7
+#define KOM_ERR_IO               8 
+#define KOM_ERR_PEER_CLOSED      9  
+#define KOM_ERR_BUFFER_TOO_SMALL 10 
 
 #ifdef __cplusplus
 #include "archs/cpu/x86_64/sync/spinlock.h"
@@ -25,10 +27,10 @@ enum class KObjectType : uint8_t {
     PROCESS = 1,
     THREAD,
     MEMORY_OBJECT,
-    EVENT,       // <-- EKLENDİ
-    INTERRUPT,   // <-- EKLENDİ
+    EVENT,       
+    INTERRUPT,   
     TIMER,
-    CHANNEL,
+    CHANNEL,     
     PORT,
     BLOB,
     CONTAINER,
@@ -61,14 +63,14 @@ void kobject_unref(KObject* obj);
 
 typedef uint64_t handle_t;
 
-#define KAP_READ    (1ULL << 63)
-#define KAP_WRITE   (1ULL << 62)
-#define KAP_EXEC    (1ULL << 61)
-#define KAP_CTRL    (1ULL << 60)
-#define KAP_DUP     (1ULL << 59)
-#define KAP_XFER    (1ULL << 58)
-#define KAP_WAIT    (1ULL << 57)
-#define KAP_DESTROY (1ULL << 56)
+#define KAP_READ    ((uint16_t)(1 << 15))
+#define KAP_WRITE   ((uint16_t)(1 << 14))
+#define KAP_EXEC    ((uint16_t)(1 << 13))
+#define KAP_CTRL    ((uint16_t)(1 << 12))
+#define KAP_DUP     ((uint16_t)(1 << 11))
+#define KAP_XFER    ((uint16_t)(1 << 10))
+#define KAP_WAIT    ((uint16_t)(1 << 9))
+#define KAP_DESTROY ((uint16_t)(1 << 8))
 
 struct HandleEntry {
     KObject* obj;
@@ -92,6 +94,9 @@ public:
     KObject* resolve(handle_t h, uint16_t req_caps);
     handle_t dup(handle_t h, uint16_t new_caps);
     void close(handle_t h);
+    
+    // YENİ: Move Semantics için Transfer fonksiyonu
+    handle_t transfer(handle_t h);
 };
 
 #endif

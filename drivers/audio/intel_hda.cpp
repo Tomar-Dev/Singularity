@@ -246,12 +246,10 @@ void IntelHDADriver::setupStream(uint32_t frequency, uint8_t channels) {
 
 void IntelHDADriver::playAudio(void* buffer, uint32_t size) {
     if (!buffer || size == 0 || !bdl_virt) return;
-    if (size > 1048576) size = 1048576; // FIX 23: HDA 1MB Bound
+    if (size > 1048576) size = 1048576; 
 
     write32(HDA_REG_SD0_CTL, 0);
     
-    // FIX: Scatter-Gather DMA uyumsuzlugu ve RAM tasmasi onlendi.
-    // Eger veri sayfa sinirlarini tasiyorsa parcalanarak (Chunking) birden fazla BDL entry olusturulur.
     uint32_t bdl_idx = 0;
     uint64_t current_virt = (uint64_t)buffer;
     uint32_t bytes_left = size;
@@ -273,12 +271,12 @@ void IntelHDADriver::playAudio(void* buffer, uint32_t size) {
     }
     
     if (bdl_idx > 0) {
-        bdl_virt[bdl_idx - 1].flags = 1; // IOC bit
+        bdl_virt[bdl_idx - 1].flags = 1; 
     }
     
     uint64_t bdl_phys = get_physical_address((uint64_t)bdl_virt);
     
-    write32(HDA_REG_SD0_CBL, size - bytes_left); // Gercekte haritalanabilen miktar
+    write32(HDA_REG_SD0_CBL, size - bytes_left); 
     write16(HDA_REG_SD0_LVI, bdl_idx > 0 ? (bdl_idx - 1) : 0); 
     write32(HDA_REG_SD0_BDPL, (uint32_t)bdl_phys);
     write32(HDA_REG_SD0_BDPU, (uint32_t)(bdl_phys >> 32));
@@ -292,6 +290,9 @@ void IntelHDADriver::playAudio(void* buffer, uint32_t size) {
 int IntelHDADriver::init() {
     pciDev->enableBusMaster();
     pciDev->enableMemorySpace();
+    
+    // YENİ: Intel HDA için MSI Aktif (Vector 46, CPU 0)
+    pciDev->enable_msi(46, 0);
     
     uint32_t bar0 = pciDev->getBAR(0);
     uint64_t bar0_phys = bar0 & 0xFFFFFFF0;

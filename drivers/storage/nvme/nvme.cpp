@@ -17,6 +17,12 @@ extern bool scheduler_active;
 
 #define PAGE_SIZE 4096
 
+static inline uint64_t rdtsc() {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 NVMeDriver::NVMeDriver(PCIeDevice* pci)
     : Device("NVMe_INIT", DEV_BLOCK), pciDev(pci) 
 {
@@ -34,42 +40,35 @@ NVMeDriver::NVMeDriver(PCIeDevice* pci)
 }
 
 void NVMeDriver::writeDoorbell(uint16_t index, uint16_t val) {
-    hal_memory_barrier_release();
+    __asm__ volatile("sfence" ::: "memory");
     uintptr_t db_addr = (uintptr_t)regs + 0x1000 + (index * db_stride);
     *(volatile uint32_t*)db_addr = val;
 }
 
 void NVMeDriver::waitReady() {
-    uint64_t start = hal_timer_get_uptime_ms();
-    uint64_t timeout_ms = 1000; 
+    uint64_t start = rdtsc();
+    uint64_t timeout_cycles = 1000000000ULL; 
     
-    while((hal_timer_get_uptime_ms() - start) < timeout_ms) {
-        if (regs->csts & NVME_CSTS_RDY) {
-            return;
-        } else {
-            hal_cpu_relax();
-        }
+    while((rdtsc() - start) < timeout_cycles) {
+        if (regs->csts & NVME_CSTS_RDY) return;
+        __asm__ volatile("pause");
     }
 }
 
 void NVMeDriver::submitAdminCmd(nvme_sq_entry_t* cmd) {
     memcpy(&admin_sq[admin_sq_tail], cmd, sizeof(nvme_sq_entry_t));
     admin_sq_tail++;
-    if (admin_sq_tail >= 64) {
-        admin_sq_tail = 0;
-    } else {
-        // Within bounds
-    }
+    if (admin_sq_tail >= 64) admin_sq_tail = 0;
     writeDoorbell(0, admin_sq_tail); 
 }
 
 bool NVMeDriver::waitForAdminCompletion(uint16_t cid) {
-    uint64_t start = hal_timer_get_uptime_ms();
-    uint64_t timeout_ms = 1000; 
+    uint64_t start = rdtsc();
+    uint64_t timeout_cycles = 1000000000ULL; 
 
-    while ((hal_timer_get_uptime_ms() - start) < timeout_ms) {
+    while ((rdtsc() - start) < timeout_cycles) {
         volatile nvme_cq_entry_t* cqe = (volatile nvme_cq_entry_t*)&admin_cq[admin_cq_head];
-        hal_memory_barrier_acquire();
+        __asm__ volatile("lfence" ::: "memory");
         
         uint8_t pt = (cqe->status >> 0) & 1;
         if (pt == admin_phase) {
@@ -78,16 +77,10 @@ bool NVMeDriver::waitForAdminCompletion(uint16_t cid) {
                 if (admin_cq_head >= 64) {
                     admin_cq_head = 0;
                     admin_phase = !admin_phase;
-                } else {
-                    // Within bounds
                 }
                 writeDoorbell(1, admin_cq_head); 
                 return true;
-            } else {
-                // Not our command
             }
-        } else {
-            // Ignore phase mismatch
         }
         
         hal_cpu_relax(); 
@@ -97,17 +90,9 @@ bool NVMeDriver::waitForAdminCompletion(uint16_t cid) {
 
 void NVMeDriver::submitIOCmd(nvme_sq_entry_t* cmd) {
     uint16_t next_tail = (io_sq_tail + 1);
-    if (next_tail >= 64) {
-        next_tail = 0;
-    } else {
-        // Within bounds
-    }
+    if (next_tail >= 64) next_tail = 0;
     
-    if (next_tail == io_cq_head) {
-        return;
-    } else {
-        // Queue has space
-    }
+    if (next_tail == io_cq_head) return;
 
     memcpy(&io_sq[io_sq_tail], cmd, sizeof(nvme_sq_entry_t));
     io_sq_tail = next_tail;
@@ -115,12 +100,12 @@ void NVMeDriver::submitIOCmd(nvme_sq_entry_t* cmd) {
 }
 
 bool NVMeDriver::waitForIOCompletion(uint16_t cid) {
-    uint64_t start = hal_timer_get_uptime_ms();
-    uint64_t timeout_ms = 2000;
+    uint64_t start = rdtsc();
+    uint64_t timeout_cycles = 2000000000ULL;
 
-    while ((hal_timer_get_uptime_ms() - start) < timeout_ms) {
+    while ((rdtsc() - start) < timeout_cycles) {
         volatile nvme_cq_entry_t* cqe = (volatile nvme_cq_entry_t*)&io_cq[io_cq_head];
-        hal_memory_barrier_acquire();
+        __asm__ volatile("lfence" ::: "memory");
         
         uint8_t pt = (cqe->status >> 0) & 1;
         if (pt == io_phase) {
@@ -129,16 +114,10 @@ bool NVMeDriver::waitForIOCompletion(uint16_t cid) {
                 if (io_cq_head >= 64) {
                     io_cq_head = 0;
                     io_phase = !io_phase; 
-                } else {
-                    // Within bounds
                 }
                 writeDoorbell(3, io_cq_head); 
                 return true;
-            } else {
-                // Not our command
             }
-        } else {
-            // Ignore phase mismatch
         }
         
         hal_cpu_relax(); 
@@ -154,17 +133,11 @@ void NVMeDriver::unpinBuffer(void* buffer, uint32_t size) {
         uint64_t phys_addr = get_physical_address(current_virt);
         if (phys_addr != 0) {
             pmm_dec_ref((void*)phys_addr);
-        } else {
-            // Unmapped
         }
         
         uint32_t page_offset = current_virt & (PAGE_SIZE - 1);
         uint32_t chunk_size = PAGE_SIZE - page_offset;
-        if (chunk_size > bytes_left) {
-            chunk_size = bytes_left;
-        } else {
-            // Chunk fits
-        }
+        if (chunk_size > bytes_left) chunk_size = bytes_left;
         
         bytes_left -= chunk_size;
         current_virt += chunk_size;
@@ -185,8 +158,6 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
     if (size <= first_page_cap) {
         cmd->prp2 = 0;
         return 0;
-    } else {
-        // Needs PRP list
     }
     
     uint32_t bytes_left = size - first_page_cap;
@@ -197,8 +168,6 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
         cmd->prp2 = p2;
         pmm_inc_ref((void*)p2); 
         return 0;
-    } else {
-        // Needs PRP list
     }
     
     uint32_t data_pages_needed = (bytes_left + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -208,8 +177,6 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
     if (!prp_block_virt) {
         unpinBuffer(buffer, size - bytes_left);
         return 0;
-    } else {
-        // Allocated
     }
     memset(prp_block_virt, 0, prp_list_pages * PAGE_SIZE);
     
@@ -229,19 +196,14 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
             current_prp_list[511] = next_page_phys;
             current_prp_list = (uint64_t*)next_page_virt;
             prp_idx = 0;
-        } else {
-            // Fits in current page
         }
         
         phys_addr = get_physical_address(current_virt);
         current_prp_list[prp_idx++] = phys_addr;
         pmm_inc_ref((void*)phys_addr); 
         
-        if (bytes_left > PAGE_SIZE) {
-            bytes_left -= PAGE_SIZE;
-        } else {
-            bytes_left = 0;
-        }
+        if (bytes_left > PAGE_SIZE) bytes_left -= PAGE_SIZE;
+        else bytes_left = 0;
         
         current_virt += PAGE_SIZE;
     }
@@ -250,23 +212,11 @@ uint64_t NVMeDriver::setupPRPs(nvme_sq_entry_t* cmd, void* buffer, uint32_t size
 }
 
 void NVMeDriver::freePRPChain(void* prp_head_virt, uint32_t total_size) {
-    if (!prp_head_virt) {
-        return;
-    } else {
-        // Valid
-    }
+    if (!prp_head_virt) return;
     uint32_t first_page_cap = PAGE_SIZE; 
-    if (total_size <= first_page_cap) {
-        return; 
-    } else {
-        // Has PRP2
-    }
+    if (total_size <= first_page_cap) return; 
     uint32_t bytes_left = total_size - first_page_cap;
-    if (bytes_left <= PAGE_SIZE) {
-        return; 
-    } else {
-        // Has PRP list
-    }
+    if (bytes_left <= PAGE_SIZE) return; 
     
     uint32_t data_pages_needed = (bytes_left + PAGE_SIZE - 1) / PAGE_SIZE;
     uint32_t prp_list_pages = (data_pages_needed + 511 - 1) / 511;
@@ -282,8 +232,6 @@ bool NVMeDriver::createIOQueues() {
         if (sq_virt) kfree_contiguous(sq_virt, 4096);
         if (cq_virt) kfree_contiguous(cq_virt, 4096);
         return false;
-    } else {
-        // Allocated
     }
     
     io_sq = (nvme_sq_entry_t*)sq_virt;
@@ -303,11 +251,7 @@ bool NVMeDriver::createIOQueues() {
     cmd.cdw10 = (63 << 16) | 1; 
     cmd.cdw11 = 1; 
     submitAdminCmd(&cmd);
-    if (!waitForAdminCompletion(2)) {
-        return false;
-    } else {
-        // Success
-    }
+    if (!waitForAdminCompletion(2)) return false;
 
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_OP_ADMIN_CREATE_SQ;
@@ -323,17 +267,16 @@ bool NVMeDriver::createIOQueues() {
 int NVMeDriver::earlyInit() {
     pciDev->enableBusMaster();
     pciDev->enableMemorySpace();
+    
+    // YENİ: NVMe için MSI Aktif (Vector 45, CPU 0)
+    pciDev->enable_msi(45, 0);
 
     uint32_t bar0 = pciDev->getBAR(0);
     uint32_t bar1 = pciDev->getBAR(1);
     uint64_t base_phys = ((uint64_t)bar1 << 32) | (bar0 & 0xFFFFFFF0);
     
     void* virt_addr = ioremap(base_phys, 16384, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD | PAGE_PWT);
-    if (!virt_addr) {
-        return 0;
-    } else {
-        // Mapped
-    }
+    if (!virt_addr) return 0;
     
     regs = (volatile nvme_registers_t*)virt_addr;
     
@@ -341,10 +284,8 @@ int NVMeDriver::earlyInit() {
     db_stride = 1 << (2 + dstrd);
     
     regs->cc &= ~NVME_CC_EN;
-    uint64_t start = hal_timer_get_uptime_ms();
-    while ((regs->csts & NVME_CSTS_RDY) && (hal_timer_get_uptime_ms() - start) < 1000) { 
-        hal_cpu_relax(); 
-    }
+    uint64_t start = rdtsc();
+    while ((regs->csts & NVME_CSTS_RDY) && (rdtsc() - start) < 1000000000ULL) { hal_cpu_relax(); }
     
     regs->intms = 0xFFFFFFFF;
 
@@ -355,8 +296,6 @@ int NVMeDriver::earlyInit() {
         if (sq_virt) kfree_contiguous(sq_virt, 4096);
         if (cq_virt) kfree_contiguous(cq_virt, 4096);
         return 0;
-    } else {
-        // Allocated
     }
     
     memset(sq_virt, 0, 4096);
@@ -376,26 +315,14 @@ int NVMeDriver::earlyInit() {
 }
 
 int NVMeDriver::finalize() {
-    if (!initialized_early) {
-        return 0;
-    } else {
-        // Proceed
-    }
+    if (!initialized_early) return 0;
     
     waitReady(); 
 
-    if (!createIOQueues()) {
-        return 0;
-    } else {
-        // Created
-    }
+    if (!createIOQueues()) return 0;
     
     void* id_buf = kmalloc_contiguous(4096);
-    if (!id_buf) {
-        return 0;
-    } else {
-        // Allocated
-    }
+    if (!id_buf) return 0;
     memset(id_buf, 0, 4096);
     
     nvme_sq_entry_t cmd;
@@ -412,13 +339,7 @@ int NVMeDriver::finalize() {
         char model[41];
         memcpy(model, (char*)id_buf + 24, 40); 
         model[40] = '\0';
-        for (int i=39; i>=0; i--) { 
-            if (model[i] == ' ') {
-                model[i] = 0; 
-            } else {
-                break; 
-            }
-        }
+        for (int i=39; i>=0; i--) { if (model[i] == ' ') model[i] = 0; else break; }
         
         char newName[32];
         DeviceManager::getNextNvmeName(newName); 
@@ -443,11 +364,7 @@ int NVMeDriver::finalize() {
             uint8_t lba_data_size = (lbaf_ds >> 16) & 0xFF; 
             
             uint32_t real_sector = 1 << lba_data_size;
-            if (real_sector < 512 || real_sector > 4096) {
-                real_sector = 512;
-            } else {
-                // Valid
-            }
+            if (real_sector < 512 || real_sector > 4096) real_sector = 512;
             
             this->setCapacity(nsze * real_sector);
         } else {
@@ -459,8 +376,6 @@ int NVMeDriver::finalize() {
         
         kfree_contiguous(id_buf, 4096); 
         return 1;
-    } else {
-        // Failed
     }
     
     kfree_contiguous(id_buf, 4096); 
@@ -468,21 +383,14 @@ int NVMeDriver::finalize() {
 }
 
 int NVMeDriver::init() {
-    if (earlyInit()) { 
-        return finalize(); 
-    } else { 
-        return 0; 
-    }
+    if (earlyInit()) { return finalize(); }
+    return 0;
 }
 
 int NVMeDriver::shutdown() {
-    if (regs) {
-        regs->cc &= ~NVME_CC_EN; 
-        while (regs->csts & NVME_CSTS_RDY) {
-            hal_cpu_relax();
-        }
-    } else {
-        // Null
+    regs->cc &= ~NVME_CC_EN; 
+    while (regs->csts & NVME_CSTS_RDY) {
+        __asm__ volatile("pause");
     }
     return 1;
 }
@@ -490,17 +398,11 @@ int NVMeDriver::shutdown() {
 void NVMeDriver::emergencyStop() {
     if (regs) {
         regs->cc &= ~NVME_CC_EN;
-    } else {
-        // Null
     }
 }
 
 int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
-    if (count == 0) {
-        return 0;
-    } else {
-        // Proceed
-    }
+    if (count == 0) return 0;
 
     storage_kiovec_t vec;
     vec.virt_addr = buffer;
@@ -509,8 +411,6 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[NVMe] DMA Guard Blocked Read Access!\n");
         return 0;
-    } else {
-        // Valid
     }
 
     uint64_t flags = spinlock_acquire(&this->lock);
@@ -522,11 +422,7 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
 
     while (sectors_read < count) {
         uint32_t chunk = count - sectors_read;
-        if (chunk > MAX_SECTORS_PER_CMD) {
-            chunk = MAX_SECTORS_PER_CMD;
-        } else {
-            // Fits
-        }
+        if (chunk > MAX_SECTORS_PER_CMD) chunk = MAX_SECTORS_PER_CMD;
 
         nvme_sq_entry_t cmd;
         memset(&cmd, 0, sizeof(cmd));
@@ -541,8 +437,6 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
         if (prp_res == 0 && cmd.prp1 == 0) { 
             spinlock_release(&this->lock, flags);
             return 0;
-        } else {
-            // Valid
         }
         
         cmd.cdw10 = (uint32_t)(lba + sectors_read);
@@ -554,28 +448,18 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
         if (!waitForIOCompletion(100)) {
             emergencyStop(); 
             unpinBuffer(user_buf + (sectors_read * 512), bytes);
-            if(prp_page) {
-                freePRPChain(prp_page, bytes);
-            } else {
-                // No chain
-            }
+            if(prp_page) freePRPChain(prp_page, bytes);
             spinlock_release(&this->lock, flags);
             return 0;
-        } else {
-            // Success
         }
         
         unpinBuffer(user_buf + (sectors_read * 512), bytes);
-        if(prp_page) {
-            freePRPChain(prp_page, bytes);
-        } else {
-            // No chain
-        }
+        if(prp_page) freePRPChain(prp_page, bytes);
         
         for(uint32_t i=0; i < bytes; i += 64) {
-            hal_cache_flush_line((const void*)((uint64_t)user_buf + (sectors_read * 512) + i));
+            __asm__ volatile("clflush (%0)" :: "r"((uint64_t)user_buf + (sectors_read * 512) + i));
         }
-        hal_memory_barrier_release();
+        __asm__ volatile("sfence" ::: "memory");
 
         sectors_read += chunk;
     }
@@ -585,17 +469,11 @@ int NVMeDriver::readBlock(uint64_t lba, uint32_t count, void* buffer) {
 }
 
 int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
-    if (count == 0) {
-        return 0;
-    } else {
-        // Proceed
-    }
+    if (count == 0) return 0;
 
     if (this->isWriteProtected()) {
         printf("[NVMe] Blocked write to '%s' (Device Lockdown Active).\n", this->getName());
         return 0;
-    } else {
-        // Proceed
     }
 
     storage_kiovec_t vec;
@@ -605,8 +483,6 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
     if (!rust_dma_guard_validate(&vec, 1, 0)) {
         serial_printf("[NVMe] DMA Guard Blocked Write Access!\n");
         return 0;
-    } else {
-        // Valid
     }
 
     uint64_t flags = spinlock_acquire(&this->lock);
@@ -617,18 +493,14 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
 
     while (sectors_written < count) {
         uint32_t chunk = count - sectors_written;
-        if (chunk > MAX_SECTORS_PER_CMD) {
-            chunk = MAX_SECTORS_PER_CMD;
-        } else {
-            // Fits
-        }
+        if (chunk > MAX_SECTORS_PER_CMD) chunk = MAX_SECTORS_PER_CMD;
         
         uint32_t bytes = chunk * 512;
 
         for(uint32_t i=0; i < bytes; i += 64) {
-            hal_cache_flush_line((const void*)((uint64_t)user_buf + (sectors_written * 512) + i));
+            __asm__ volatile("clflush (%0)" :: "r"((uint64_t)user_buf + (sectors_written * 512) + i));
         }
-        hal_memory_barrier_full();
+        __asm__ volatile("mfence" ::: "memory");
 
         nvme_sq_entry_t cmd;
         memset(&cmd, 0, sizeof(cmd));
@@ -641,8 +513,6 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
         if (prp_res == 0 && cmd.prp1 == 0) {
             spinlock_release(&this->lock, flags);
             return 0;
-        } else {
-            // Valid
         }
         
         cmd.cdw10 = (uint32_t)(lba + sectors_written);
@@ -654,23 +524,13 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
         if (!waitForIOCompletion(101)) {
             emergencyStop();
             unpinBuffer((void*)(user_buf + (sectors_written * 512)), bytes);
-            if(prp_page) {
-                freePRPChain(prp_page, bytes);
-            } else {
-                // No chain
-            }
+            if(prp_page) freePRPChain(prp_page, bytes);
             spinlock_release(&this->lock, flags);
             return 0;
-        } else {
-            // Success
         }
         
         unpinBuffer((void*)(user_buf + (sectors_written * 512)), bytes);
-        if(prp_page) {
-            freePRPChain(prp_page, bytes);
-        } else {
-            // No chain
-        }
+        if(prp_page) freePRPChain(prp_page, bytes);
         
         sectors_written += chunk;
     }
@@ -680,17 +540,11 @@ int NVMeDriver::writeBlock(uint64_t lba, uint32_t count, const void* buffer) {
 }
 
 int NVMeDriver::read_vector(uint64_t lba, kiovec_t* vectors, int vector_count) {
-    if (vector_count == 0) {
-        return 0;
-    } else {
-        // Proceed
-    }
+    if (vector_count == 0) return 0;
     
     if (!rust_dma_guard_validate((const storage_kiovec_t*)vectors, vector_count, 0)) {
         serial_printf("[NVMe] DMA Guard Blocked Vector Read!\n");
         return 0;
-    } else {
-        // Valid
     }
     
     bool is_aligned = true;
@@ -702,18 +556,12 @@ int NVMeDriver::read_vector(uint64_t lba, kiovec_t* vectors, int vector_count) {
             if ((vectors[i].phys_addr & 0xFFF) != 0 || (vectors[i].size % PAGE_SIZE) != 0) {
                 is_aligned = false; 
                 break;
-            } else {
-                // Aligned
             }
-        } else {
-            // First
         }
     }
     
     if (!is_aligned) {
         return Device::read_vector(lba, vectors, vector_count);
-    } else {
-        // Proceed
     }
     
     uint64_t flags = spinlock_acquire(&this->lock);
@@ -730,8 +578,6 @@ int NVMeDriver::read_vector(uint64_t lba, kiovec_t* vectors, int vector_count) {
     if (!chain.is_valid) {
         spinlock_release(&this->lock, flags);
         return 0;
-    } else {
-        // Valid
     }
     
     cmd.prp1 = chain.prp1;
@@ -744,11 +590,7 @@ int NVMeDriver::read_vector(uint64_t lba, kiovec_t* vectors, int vector_count) {
     submitIOCmd(&cmd);
     bool success = waitForIOCompletion(102);
 
-    if (!success) {
-        emergencyStop();
-    } else {
-        // Success
-    }
+    if (!success) emergencyStop();
 
     rust_storage_free_sg_list(&chain, (const storage_kiovec_t*)vectors, vector_count);
     
@@ -760,21 +602,13 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
     if (this->isWriteProtected()) {
         printf("[NVMe] Blocked vector write to '%s' (Lockdown).\n", this->getName());
         return 0;
-    } else {
-        // Proceed
     }
     
-    if (vector_count == 0) {
-        return 0;
-    } else {
-        // Proceed
-    }
+    if (vector_count == 0) return 0;
     
     if (!rust_dma_guard_validate((const storage_kiovec_t*)vectors, vector_count, 0)) {
         serial_printf("[NVMe] DMA Guard Blocked Vector Write!\n");
         return 0;
-    } else {
-        // Valid
     }
     
     bool is_aligned = true;
@@ -785,18 +619,12 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
             if ((vectors[i].phys_addr & 0xFFF) != 0 || (vectors[i].size % PAGE_SIZE) != 0) {
                 is_aligned = false; 
                 break;
-            } else {
-                // Aligned
             }
-        } else {
-            // First
         }
     }
     
     if (!is_aligned) {
         return Device::write_vector(lba, vectors, vector_count);
-    } else {
-        // Proceed
     }
     
     uint64_t flags = spinlock_acquire(&this->lock);
@@ -813,8 +641,6 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
     if (!chain.is_valid) {
         spinlock_release(&this->lock, flags);
         return 0;
-    } else {
-        // Valid
     }
     
     cmd.prp1 = chain.prp1;
@@ -827,11 +653,7 @@ int NVMeDriver::write_vector(uint64_t lba, kiovec_t* vectors, int vector_count) 
     submitIOCmd(&cmd);
     bool success = waitForIOCompletion(103);
 
-    if (!success) {
-        emergencyStop();
-    } else {
-        // Success
-    }
+    if (!success) emergencyStop();
 
     rust_storage_free_sg_list(&chain, (const storage_kiovec_t*)vectors, vector_count);
     
@@ -855,11 +677,7 @@ extern "C" {
                     } else {
                         delete drv;
                     }
-                } else {
-                    // Limit reached
                 }
-            } else {
-                // Not NVMe
             }
         }
     }
@@ -871,11 +689,7 @@ extern "C" {
             if (g_nvme_drivers[i]) {
                 if (g_nvme_drivers[i]->finalize()) {
                     initialized++;
-                } else {
-                    // Failed
                 }
-            } else {
-                // Null
             }
         }
         return initialized > 0 ? 1 : 0;

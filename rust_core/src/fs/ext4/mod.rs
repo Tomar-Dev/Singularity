@@ -5,7 +5,7 @@ use alloc::vec;
 use alloc::sync::Arc;
 use alloc::boxed::Box;
 use core::ffi::c_void;
-use crate::fs::traits::{FsNode, FsBackend};
+use crate::fs::traits::{FsNode, FsBackend, DeviceHandle};
 use crate::fs::utils::{read_u8, read_u16_le, read_u32_le};
 use crate::ffi::bindings::StorageKioVec;
 
@@ -28,15 +28,12 @@ struct ExtInodeData {
 }
 
 pub struct ExtMount {
-    dev: *mut c_void,
+    dev: DeviceHandle, // GÜVENLİK YAMASI: Artık güvenli sarmalayıcı kullanılıyor
     block_size: u32,
     inodes_per_group: u32,
     inode_size: u32,
     bgdt_start_block: u32,
 }
-
-unsafe impl Send for ExtMount {}
-unsafe impl Sync for ExtMount {}
 
 pub struct ExtNode {
     mount: Arc<ExtMount>,
@@ -45,9 +42,6 @@ pub struct ExtNode {
     data: ExtInodeData,
     is_dir: bool,
 }
-
-unsafe impl Send for ExtNode {}
-unsafe impl Sync for ExtNode {}
 
 impl ExtMount {
     fn read_inode(&self, ino: u32) -> Option<ExtInodeData> {
@@ -61,7 +55,7 @@ impl ExtMount {
         let bg_offset = (group * bg_desc_size) % 512;
         
         let mut buf =[0u8; 512];
-        let ret = unsafe { disk_cache_read_block(self.dev, target_bg_sector, 1, buf.as_mut_ptr()) };
+        let ret = unsafe { disk_cache_read_block(self.dev.0, target_bg_sector, 1, buf.as_mut_ptr()) };
         if ret != 1 { 
             crate::ffi::debug_print("Error: Failed to read Block Group Descriptor.\n\0");
             return None; 
@@ -76,7 +70,7 @@ impl ExtMount {
         let target_block_lba = (inode_table_block as u64 + block_in_table as u64) * (self.block_size as u64 / 512); 
         let mut inode_buf = vec![0u8; self.block_size as usize];
         
-        let ret2 = unsafe { disk_cache_read_block(self.dev, target_block_lba, self.block_size / 512, inode_buf.as_mut_ptr()) };
+        let ret2 = unsafe { disk_cache_read_block(self.dev.0, target_block_lba, self.block_size / 512, inode_buf.as_mut_ptr()) };
         if ret2 != 1 { 
             crate::ffi::debug_print("Error: Failed to read Inode Table sector.\n\0");
             return None; 
@@ -151,7 +145,7 @@ impl ExtMount {
                 let target_lba = next_phys as u64 * (bs as u64 / 512);
                 let mut new_buf = vec![0u8; bs as usize];
                 
-                let ret = unsafe { disk_cache_read_block(self.dev, target_lba, bs / 512, new_buf.as_mut_ptr()) };
+                let ret = unsafe { disk_cache_read_block(self.dev.0, target_lba, bs / 512, new_buf.as_mut_ptr()) };
                 if ret != 1 {
                     crate::ffi::debug_print("Error: Failed to read Extent Index Block.\n\0");
                     return 0;
@@ -232,7 +226,7 @@ impl FsNode for ExtNode {
                         virt_addr: dest_ptr as *mut c_void,
                         size: bytes_to_transfer as usize,
                     };
-                    let ret = unsafe { disk_cache_read_vector(self.mount.dev, start_lba, &vec, 1) };
+                    let ret = unsafe { disk_cache_read_vector(self.mount.dev.0, start_lba, &vec, 1) };
                     if ret != 1 { 
                         crate::ffi::debug_print("DMA Vector Read Failed.\n\0");
                         return Err(8); 
@@ -244,7 +238,7 @@ impl FsNode for ExtNode {
                     let bounce_buf = unsafe { kmalloc_contiguous(bounce_size) as *mut u8 };
                     if bounce_buf.is_null() { return Err(4); }
 
-                    let ret = unsafe { disk_cache_read_block(self.mount.dev, start_lba, sectors_to_read, bounce_buf) };
+                    let ret = unsafe { disk_cache_read_block(self.mount.dev.0, start_lba, sectors_to_read, bounce_buf) };
                     if ret != 1 {
                         unsafe { kfree_contiguous(bounce_buf as *mut c_void, bounce_size); }
                         crate::ffi::debug_print("Block Read Failed.\n\0");
@@ -281,7 +275,7 @@ impl FsNode for ExtNode {
             let phys = self.mount.get_physical_block(&self.data, block_idx);
             if phys == 0 { break; }
 
-            let ret = unsafe { disk_cache_read_block(self.mount.dev, phys as u64 * (bs as u64 / 512), bs / 512, dir_buf.as_mut_ptr()) };
+            let ret = unsafe { disk_cache_read_block(self.mount.dev.0, phys as u64 * (bs as u64 / 512), bs / 512, dir_buf.as_mut_ptr()) };
             if ret != 1 { 
                 crate::ffi::debug_print("Warning: Directory block read failed.\n\0");
                 continue; 
@@ -334,7 +328,7 @@ impl FsNode for ExtNode {
             let phys = self.mount.get_physical_block(&self.data, block_idx);
             if phys == 0 { break; }
 
-            let ret = unsafe { disk_cache_read_block(self.mount.dev, phys as u64 * (bs as u64 / 512), bs / 512, dir_buf.as_mut_ptr()) };
+            let ret = unsafe { disk_cache_read_block(self.mount.dev.0, phys as u64 * (bs as u64 / 512), bs / 512, dir_buf.as_mut_ptr()) };
             if ret != 1 { continue; }
 
             let mut offset = 0;
@@ -384,7 +378,7 @@ pub unsafe extern "C" fn rust_ext4_mount(dev: *mut c_void) -> *mut c_void {
         let bgdt_start_block = if block_size == 1024 { 2 } else { 1 };
 
         let mount = Arc::new(ExtMount {
-            dev,
+            dev: DeviceHandle(dev),
             block_size,
             inodes_per_group,
             inode_size,
@@ -410,6 +404,6 @@ pub unsafe extern "C" fn rust_ext4_mount(dev: *mut c_void) -> *mut c_void {
 
 impl Drop for ExtMount {
     fn drop(&mut self) {
-        unsafe { crate::ffi::exports::device_release(self.dev); }
+        unsafe { crate::ffi::exports::device_release(self.dev.0); }
     }
 }

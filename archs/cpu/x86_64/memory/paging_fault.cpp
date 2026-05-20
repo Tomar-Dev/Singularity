@@ -39,12 +39,14 @@ extern "C" void page_fault_handler(registers_t* regs) {
     bool reserved = (regs->err_code & 0x08) != 0;
     bool nx_fetch = (regs->err_code & 0x10) != 0;
 
+    // YENİ: Demand Paging (Tembel Tahsis) Yakalayıcısı
+    if (!present) {
+        if (g_Paging && g_Paging->handleDemandFault(addr)) return;
+    }
+
     if (present && write && !user && !nx_fetch)
         if (g_Paging && g_Paging->handleCowFault(addr)) return;
 
-    // GÜVENLİK YAMASI: GWP-ASAN Hook! Donanım tabanlı bellek zafiyeti yakalama.
-    // Eğer taşma Kernel modunda gerçekleştiyse, GWP-ASAN donanımsal adresi
-    // inceleyip Buffer Overflow veya Use-After-Free teşhisini koyar.
     if (!user && gwp_asan_is_managed((void*)addr)) {
         gwp_asan_check_fault(addr);
     }
@@ -58,8 +60,7 @@ extern "C" void page_fault_handler(registers_t* regs) {
                     "Unknown";
 
     char buf[320];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-    snprintf(buf, sizeof(buf),
+    snprintf(buf, sizeof(buf), // NOLINT
              "Fault addr : 0x%016lx\n"
              "RIP        : 0x%016lx\n"
              "Error      : 0x%lx[P:%d W:%d U:%d RSV:%d NX:%d]\n"

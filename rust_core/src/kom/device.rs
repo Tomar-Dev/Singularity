@@ -48,17 +48,21 @@ pub enum DeviceClass {
     Bus,
 }
 
+// GÜVENLİK YAMASI: C++ Device pointer'ı için güvenli sarmalayıcı.
+#[derive(Clone, Copy)]
+pub struct DeviceHandle(pub *mut c_void);
+
+unsafe impl Send for DeviceHandle {}
+unsafe impl Sync for DeviceHandle {}
+
 pub struct DeviceNode {
     pub name: String,
     pub class: DeviceClass,
     pub token: u64,
     pub block_size: u32,
     pub total_blocks: u64,
-    pub native_ptr: *mut c_void, 
+    pub native_ptr: DeviceHandle, 
 }
-
-unsafe impl Send for DeviceNode {}
-unsafe impl Sync for DeviceNode {}
 
 pub struct DeviceTree {
     pub devices: Vec<DeviceNode>,
@@ -78,7 +82,7 @@ pub fn register_device(name: &str, class: DeviceClass, block_size: u32, total_bl
         token,
         block_size,
         total_blocks,
-        native_ptr,
+        native_ptr: DeviceHandle(native_ptr),
     };
     
     let mut tree = DEVICE_TREE.lock();
@@ -95,7 +99,7 @@ pub fn register_device_silent(name: &str, class: DeviceClass, block_size: u32, t
         token,
         block_size,
         total_blocks,
-        native_ptr,
+        native_ptr: DeviceHandle(native_ptr),
     };
     
     let mut tree = DEVICE_TREE.lock();
@@ -244,14 +248,12 @@ pub extern "C" fn rust_device_print_disks() {
 
     let mut base_disks = Vec::new();
 
-    // 1. Collect all base disks (non-partitions)
     while unsafe { ons_enumerate(path.as_ptr(), idx, name_buf.as_mut_ptr(), &mut obj_type) } {
         idx += 1;
         let dev_ptr = unsafe { device_get(name_buf.as_ptr()) };
         if !dev_ptr.is_null() && unsafe { cpp_device_get_type(dev_ptr) } == 4 { 
             let d_name = unsafe { CStr::from_ptr(cpp_device_get_name(dev_ptr)).to_str().unwrap_or("?") }.to_string();
             
-            // If the name contains "_p", it is a partition, not a base disk.
             if !d_name.contains("_p") {
                 let d_cap = unsafe { cpp_device_get_capacity(dev_ptr) };
                 let d_model = unsafe { CStr::from_ptr(cpp_device_get_model(dev_ptr)).to_str().unwrap_or("Generic") }.to_string();
@@ -274,14 +276,11 @@ pub extern "C" fn rust_device_print_disks() {
         }
     }
 
-    // Sort by name (cdrom0, disk0, nvme0, etc.)
     base_disks.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // 2. Find partitions for each base disk and print in Tree format
     for disk in base_disks.iter() {
         let mut partitions = Vec::new();
         
-        // Optical media do not have partitions, skip.
         if !disk.is_optical {
             let mut p_idx = 0u32;
             let mut p_name_buf =[0i8; 64];
@@ -313,7 +312,6 @@ pub extern "C" fn rust_device_print_disks() {
             partitions.sort_by(|a, b| a.name.cmp(&b.name));
         }
 
-        // Calculate base disk free space (Capacity - Sum of Partitions)
         let mut used_capacity = 0u64;
         for p in partitions.iter() {
             used_capacity += p.capacity;
@@ -327,7 +325,6 @@ pub extern "C" fn rust_device_print_disks() {
             format!("{} ({}.{}%)", format_size_dec(disk_free), disk_free_pct_x10 / 10, disk_free_pct_x10 % 10) 
         };
 
-        // Base Disk Row
         let name_color = if disk.is_optical { CONSOLE_COLOR_LIGHT_MAGENTA } else { CONSOLE_COLOR_LIGHT_GREEN };
         let type_str = if disk.is_optical { "Optical" } else { "Disk" };
         
@@ -345,7 +342,6 @@ pub extern "C" fn rust_device_print_disks() {
         
         print_c(&format!("| {}\n", disk.model), CONSOLE_COLOR_LIGHT_GREY);
 
-        // Print partitions
         let total_children = partitions.len();
         for (i, part) in partitions.iter().enumerate() {
             let is_last = i == total_children - 1;
@@ -362,12 +358,10 @@ pub extern "C" fn rust_device_print_disks() {
             print_c(&pad_right(&format!("{}", part.name), 16), CONSOLE_COLOR_LIGHT_CYAN);
             print_c(&pad_right(&format!("| {}", fs_name), 15), CONSOLE_COLOR_WHITE);
             
-            // Partition to disk ratio
             let part_cap_pct_x10 = if disk.capacity > 0 { (part.capacity * 1000) / disk.capacity } else { 0 };
             let part_cap_str = format!("{} ({}.{}%)", format_size_dec(part.capacity), part_cap_pct_x10 / 10, part_cap_pct_x10 % 10);
             print_c(&pad_right(&format!("| {}", part_cap_str), 20), CONSOLE_COLOR_YELLOW);
             
-            // Partition's internal free space
             let free_str = if part.free_space == u64::MAX { 
                 "Unknown".to_string() 
             } else { 

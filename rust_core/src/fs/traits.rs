@@ -12,6 +12,15 @@ pub struct CDirent {
     pub inode: u32,
 }
 
+// GÜVENLİK YAMASI: C++ Device pointer'ı için güvenli sarmalayıcı.
+// C++ tarafındaki Device sınıfı kendi içinde rwlock_t ile korunduğu için
+// bu pointer'ı thread'ler arası taşımak (Send) ve paylaşmak (Sync) güvenlidir.
+#[derive(Clone, Copy)]
+pub struct DeviceHandle(pub *mut c_void);
+
+unsafe impl Send for DeviceHandle {}
+unsafe impl Sync for DeviceHandle {}
+
 pub trait FsNode: Send + Sync {
     fn get_size(&self) -> u64;
     fn is_dir(&self) -> bool;
@@ -48,7 +57,6 @@ pub trait FsNode: Send + Sync {
     }
 }
 
-// STATIC DISPATCH ENUM (Zero-Cost Abstraction)
 pub enum FsBackend {
     Ext4(crate::fs::ext4::ExtNode),
     Fat32(crate::fs::fat32::Fat32Node),
@@ -138,10 +146,6 @@ impl FsNode for FsBackend {
         }
     }
 }
-
-// =====================================================================
-// FLAT C API (Direct Calls from C++ ProviderBlob/ProviderContainer)
-// =====================================================================
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_fs_get_size(node_ptr: *mut c_void) -> u64 {
@@ -278,6 +282,5 @@ pub unsafe extern "C" fn rust_fs_release(node_ptr: *mut c_void) {
         unsafe {
             let _ = Box::from_raw(node_ptr as *mut FsBackend);
         }
-    } else {
     }
 }

@@ -15,6 +15,8 @@ extern "C" {
     
     uint32_t rust_pcie_get_device_count();
     FfiPcieDevice rust_pcie_get_device_info(uint32_t index);
+    
+    extern void* ioremap(uint64_t phys, uint32_t size, uint64_t flags);
 }
 
 PCIeDevice::PCIeDevice(uint8_t b, uint8_t d, uint8_t f, uint16_t vid, uint16_t did, uint8_t cid, uint8_t scid, uint8_t pif)
@@ -55,7 +57,7 @@ void PCIeDevice::writeByte(uint16_t offset, uint8_t value) {
 }
 
 uint32_t PCIeDevice::getBAR(uint8_t index) {
-    if ((header_type & 0x7F) != 0 || index > 5) { return 0; } else { /* Proceed to scan base address */ }
+    if ((header_type & 0x7F) != 0 || index > 5) { return 0; }
     return readDWord(0x10 + (index * 4));
 }
 
@@ -65,7 +67,6 @@ void PCIeDevice::enableBusMaster() {
         cmd |= (1 << 2);
         writeWord(0x04, cmd);
     } else {
-        // DEF-002 FIX: Proper logging output. Do not silently fail or pass over.
         serial_printf("[PCIe] Note: Device %04x:%04x already has Bus Master enabled.\n", vendor_id, device_id);
     }
 }
@@ -90,14 +91,93 @@ void PCIeDevice::enableIOSpace() {
     }
 }
 
+// YENİ: MSI / MSI-X Donanım Konfigürasyonu
+bool PCIeDevice::enable_msi(uint8_t vector, uint8_t cpu_id) {
+    uint16_t status = readWord(0x06);
+    if (!(status & (1 << 4))) return false; // Capabilities list not supported
+
+    uint8_t cap_offset = readByte(0x34);
+    bool msi_found = false;
+    bool msix_found = false;
+    uint8_t msi_ptr = 0;
+    uint8_t msix_ptr = 0;
+
+    while (cap_offset != 0 && cap_offset != 0xFF) {
+        uint8_t cap_id = readByte(cap_offset);
+        if (cap_id == 0x05) { msi_found = true; msi_ptr = cap_offset; }
+        if (cap_id == 0x11) { msix_found = true; msix_ptr = cap_offset; }
+        cap_offset = readByte(cap_offset + 1);
+    }
+
+    // Local APIC Adresi (0xFEE00000) ve Hedef CPU
+    uint64_t apic_addr = 0xFEE00000 | ((uint64_t)cpu_id << 12);
+    uint32_t apic_data = vector;
+
+    if (msix_found) {
+        uint16_t msg_ctrl = readWord(msix_ptr + 2);
+        uint32_t table_info = readDWord(msix_ptr + 4);
+        uint8_t bir = table_info & 0x7;
+        uint32_t table_offset = table_info & ~0x7;
+
+        uint32_t bar_val = getBAR(bir);
+        uint64_t bar_phys = bar_val & 0xFFFFFFF0;
+        if ((bar_val & 0x4) == 0x4) {
+            bar_phys |= ((uint64_t)getBAR(bir + 1) << 32);
+        }
+
+        uint64_t table_phys = bar_phys + table_offset;
+        volatile uint32_t* msix_table = (volatile uint32_t*)ioremap(table_phys, 4096, 0x13); // PAGE_PRESENT | PAGE_WRITE | PAGE_PCD
+        
+        if (msix_table) {
+            msix_table[0] = (uint32_t)(apic_addr & 0xFFFFFFFF);
+            msix_table[1] = (uint32_t)(apic_addr >> 32);
+            msix_table[2] = apic_data;
+            msix_table[3] = 0; // Unmask
+
+            msg_ctrl |= (1 << 15); // Enable MSI-X
+            writeWord(msix_ptr + 2, msg_ctrl);
+            
+            uint16_t cmd = readWord(0x04);
+            writeWord(0x04, cmd | (1 << 10)); // Disable Legacy INTx
+            
+            serial_printf("[PCIe] MSI-X Enabled for %04x:%04x (Vector: %d)\n", vendor_id, device_id, vector);
+            return true;
+        }
+    } 
+    
+    if (msi_found) {
+        uint16_t msg_ctrl = readWord(msi_ptr + 2);
+        bool is_64bit = (msg_ctrl & (1 << 7)) != 0;
+
+        writeDWord(msi_ptr + 4, (uint32_t)(apic_addr & 0xFFFFFFFF));
+        if (is_64bit) {
+            writeDWord(msi_ptr + 8, (uint32_t)(apic_addr >> 32));
+            writeWord(msi_ptr + 12, apic_data);
+        } else {
+            writeWord(msi_ptr + 8, apic_data);
+        }
+
+        msg_ctrl |= 1; // Enable MSI
+        writeWord(msi_ptr + 2, msg_ctrl);
+        
+        uint16_t cmd = readWord(0x04);
+        writeWord(0x04, cmd | (1 << 10)); // Disable Legacy INTx
+
+        serial_printf("[PCIe] MSI Enabled for %04x:%04x (Vector: %d)\n", vendor_id, device_id, vector);
+        return true;
+    }
+
+    return false;
+}
+
 namespace PCIe {
     static PCIeDevice* device_roster[256] = {0};
 
     int getDeviceCount() { return (int)rust_pcie_get_device_count(); }
     
     PCIeDevice* getDevice(int index) {
-        if (index < 0 || index >= 256) { return nullptr; } else { /* Search locally */ }
-        if (device_roster[index]) { return device_roster[index]; } else { /* Probe into FFI domain */ }
+        if (index < 0 || index >= 256) { return nullptr; }
+        if (device_roster[index]) { return device_roster[index]; }
         
         FfiPcieDevice info = rust_pcie_get_device_info((uint32_t)index);
         if (info.valid) {
@@ -108,5 +188,18 @@ namespace PCIe {
         } else {
             return nullptr;
         }
+    }
+}
+
+extern "C" {
+    // Rust xHCI sürücüsü için FFI Köprüsü
+    bool rust_pcie_enable_msi(uint8_t bus, uint8_t dev, uint8_t func, uint8_t vector, uint8_t cpu_id) {
+        for (int i = 0; i < 256; i++) {
+            PCIeDevice* p = PCIe::getDevice(i);
+            if (p && p->bus == bus && p->device == dev && p->function == func) {
+                return p->enable_msi(vector, cpu_id);
+            }
+        }
+        return false;
     }
 }

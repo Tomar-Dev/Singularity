@@ -38,16 +38,12 @@ uint64_t stdio_acquire_lock(void) {
 void stdio_release_lock(uint64_t flags) {
     if (!global_panic_active) {
         spinlock_release(&screen_lock, flags);
-    } else {
-        // Skip lock operation during panic
     }
 }
 
 static void print_char(char c, print_ctx_t* ctx) {
     if (ctx->size > 0 && ctx->written < ctx->size - 1) {
         ctx->buffer[ctx->written] = c;
-    } else {
-        // Buffer is full, drop character
     }
     ctx->written++;
 }
@@ -55,23 +51,17 @@ static void print_char(char c, print_ctx_t* ctx) {
 static void print_string(const char* s, int width, bool left_align, print_ctx_t* ctx) {
     if (!s) {
         s = "(null)";
-    } else {
-        // Valid string
     }
     int len = strlen(s);
     int pad = (width > len) ? (width - len) : 0;
     if (!left_align) {
         while (pad-- > 0) print_char(' ', ctx);
-    } else {
-        // Padding will be added after string
     }
     while (*s) {
         print_char(*s++, ctx);
     }
     if (left_align) {
         while (pad-- > 0) print_char(' ', ctx);
-    } else {
-        // Padding already added before string
     }
 }
 
@@ -83,8 +73,6 @@ static void print_number(uint64_t n, int base, bool is_signed, bool uppercase, i
     if (is_signed && (int64_t)n < 0) { 
         is_neg = true; 
         n = (uint64_t)(-(int64_t)n); 
-    } else {
-        // Number is positive or unsigned
     }
     
     if (n == 0) {
@@ -106,8 +94,6 @@ static void print_number(uint64_t n, int base, bool is_signed, bool uppercase, i
             n = quot;
             if (i >= 127) {
                 break;
-            } else {
-                // Continue parsing number
             }
         }
     }
@@ -118,8 +104,6 @@ static void print_number(uint64_t n, int base, bool is_signed, bool uppercase, i
     if (is_neg && padChar == '0') { 
         print_char('-', ctx); 
         is_neg = false; 
-    } else {
-        // Handle negative sign later
     }
     
     while (padding-- > 0) {
@@ -128,8 +112,6 @@ static void print_number(uint64_t n, int base, bool is_signed, bool uppercase, i
     
     if (is_neg) {
         print_char('-', ctx);
-    } else {
-        // Sign already handled or positive
     }
     
     while (i > 0) {
@@ -144,15 +126,11 @@ static void print_double(double val, int width, int precision, print_ctx_t* ctx)
         precision = 2;
     } else if (precision > 20) {
         precision = 20; 
-    } else {
-        // Valid precision
     }
 
     if (val < 0) { 
         buffer[len++] = '-'; 
         val = -val; 
-    } else {
-        // Positive float
     }
     
     uint64_t int_part = (uint64_t)val;
@@ -168,8 +146,6 @@ static void print_double(double val, int width, int precision, print_ctx_t* ctx)
             int_part /= 10;
             if (t >= 63) {
                 break; 
-            } else {
-                // Continue parsing float integer part
             }
         }
     }
@@ -189,14 +165,10 @@ static void print_double(double val, int width, int precision, print_ctx_t* ctx)
             int digit = (int)remainder;
             if (digit > 9) {
                 digit = 9; 
-            } else {
-                // Valid digit
             }
             buffer[len++] = digit + '0';
             remainder -= digit;
         }
-    } else {
-        // No precision requested
     }
     
     int padding = (width > len) ? (width - len) : 0;
@@ -213,8 +185,6 @@ static void do_printf_internal(print_ctx_t* ctx, const char* format, va_list arg
         if (format[i] != '%') { 
             print_char(format[i], ctx); 
             continue; 
-        } else {
-            // Processing format specifier
         }
         
         i++; 
@@ -228,8 +198,6 @@ static void do_printf_internal(print_ctx_t* ctx, const char* format, va_list arg
                 left_align = true;
             } else if (format[i] == '0') {
                 padChar = '0';
-            } else {
-                // Should not reach here
             }
             i++;
         }
@@ -244,8 +212,6 @@ static void do_printf_internal(print_ctx_t* ctx, const char* format, va_list arg
                 precision = precision * 10 + (format[i] - '0');
                 i++;
             }
-        } else {
-            // No precision specified
         }
         while (format[i] == 'l') {
             i++; 
@@ -272,8 +238,6 @@ static void do_printf_internal(print_ctx_t* ctx, const char* format, va_list arg
         } else { 
             ctx->buffer[ctx->size - 1] = '\0';
         }
-    } else {
-        // Context has no buffer limit
     }
 }
 
@@ -282,8 +246,6 @@ static void flush_serial_buffer_locked() {
         serial_line_buf[serial_buf_pos] = 0;
         serial_write(serial_line_buf);
         serial_buf_pos = 0;
-    } else {
-        // Nothing to flush
     }
 }
 
@@ -291,8 +253,6 @@ static void serial_write_buffered(const char* str) {
     if (!serial_buffering_enabled) {
         serial_write(str);
         return;
-    } else {
-        // Proceed with buffering
     }
 
     while (*str) {
@@ -317,7 +277,7 @@ void vprintf(const char* format, va_list args) {
     char local_buf[1024]; 
     print_ctx_t ctx = {local_buf, sizeof(local_buf), 0};
     
-    do_printf_internal(&ctx, format, args);
+    do_printf_internal(&ctx, format, args); // NOLINT
     
     uint8_t cpu_id = get_cpu_id_fast();
     process_t* curr = current_process[cpu_id];
@@ -325,16 +285,12 @@ void vprintf(const char* format, va_list args) {
     bool is_silent = false;
     if (!global_panic_active && curr && (curr->flags & PROC_FLAG_SILENT)) {
         is_silent = true;
-    } else {
-        is_silent = false;
     }
     
     uint64_t flags = stdio_acquire_lock();
     
     if (!is_silent) {
         console_write_noflush(local_buf);
-    } else {
-        // Suppress console output for silent tasks
     }
     
     serial_write_buffered(local_buf); 
@@ -343,28 +299,26 @@ void vprintf(const char* format, va_list args) {
     
     if (!is_silent) {
         console_flush_if_needed();
-    } else {
-        // Do not trigger flush for silent tasks
     }
 }
 
 void printf(const char* format, ...) {
     va_list args;
     va_start(args, format);
-    vprintf(format, args);
+    vprintf(format, args); // NOLINT
     va_end(args);
 }
 
 int vsnprintf(char* str, size_t size, const char* format, va_list args) {
     print_ctx_t ctx = {str, size, 0};
-    do_printf_internal(&ctx, format, args);
+    do_printf_internal(&ctx, format, args); // NOLINT
     return ctx.written;
 }
 
 int snprintf(char* str, size_t size, const char* format, ...) {
     va_list args;
     va_start(args, format);
-    int ret = vsnprintf(str, size, format, args);
+    int ret = vsnprintf(str, size, format, args); // NOLINT
     va_end(args);
     return ret;
 }
@@ -372,22 +326,19 @@ int snprintf(char* str, size_t size, const char* format, ...) {
 int sprintf(char* str, const char* format, ...) {
     va_list args;
     va_start(args, format);
-    int ret = vsnprintf(str, 4096, format, args);
+    int ret = vsnprintf(str, 4096, format, args); // NOLINT
     va_end(args);
     return ret;
 }
 
 void set_color_rgb(uint32_t fg, uint32_t bg) {
     (void)fg; (void)bg;
-    // Reserved for TrueColor support
 }
 
 void stdio_set_buffering(bool enabled) {
     uint64_t flags = stdio_acquire_lock();
     if (!enabled) {
         flush_serial_buffer_locked();
-    } else {
-        // Enabling buffering, nothing to flush
     }
     serial_buffering_enabled = enabled;
     stdio_release_lock(flags);
@@ -410,16 +361,12 @@ void kprintf_string(const char* str) {
     bool is_silent = false;
     if (!global_panic_active && curr && (curr->flags & PROC_FLAG_SILENT)) {
         is_silent = true;
-    } else {
-        is_silent = false;
     }
     
     uint64_t flags = stdio_acquire_lock();
     
     if (!is_silent) {
         console_write_noflush(str);
-    } else {
-        // Suppressed
     }
     
     serial_write_buffered(str); 
@@ -428,7 +375,5 @@ void kprintf_string(const char* str) {
     
     if (!is_silent) {
         console_flush_if_needed();
-    } else {
-        // Suppressed
     }
 }

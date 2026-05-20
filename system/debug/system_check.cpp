@@ -122,18 +122,16 @@ static int chk_cpu_topo(const char** msg) {
 
 static int chk_cpu_cache(const char** msg) {
     if (cpu_info.l1_cache_size > 0) {
-        static char buf[64];
+        static char buf[32];
         snprintf(buf, sizeof(buf), "L1:%dK L2:%dK L3:%dK", cpu_info.l1_cache_size, cpu_info.l2_cache_size, cpu_info.l3_cache_size / 1024);
         *msg = buf;
         return 1;
+    } else if (cpu_info.is_hypervisor) {
+        *msg = "Masked by Hypervisor";
+        return 1;
     } else {
-        if (cpu_info.is_hypervisor) {
-            *msg = "Masked by Hypervisor";
-            return 1;
-        } else {
-            *msg = "Detection Failed";
-            return 0;
-        }
+        *msg = "Detection Failed";
+        return 0;
     }
 }
 
@@ -309,7 +307,6 @@ static int chk_ram_integrity(const char** msg) {
     bool ok = true;
     for(size_t i=0; i < (size/8); i++) {
         if (p64[i] != 0x55AA55AA55AA55AAULL) { ok = false; break; }
-        else { /* Pattern match */ }
     }
     kfree(ptr);
     if (ok) return 1;
@@ -383,8 +380,6 @@ static int chk_task_list(const char** msg) {
     process_t* curr = process_list_head;
     if (curr) {
         do { count++; curr = curr->next; } while (curr != process_list_head && count < 2048);
-    } else {
-        // Empty list
     }
     rwlock_release_read(task_list_lock);
     if (count > 0 && count < 2048) {
@@ -403,8 +398,6 @@ static int chk_smp_sync(const char** msg) {
         if (cpu_tick_counts[i] == 0) {
             *msg = "Core Dead";
             return 0;
-        } else {
-            // Core is ticking
         }
     }
     static char buf[16];

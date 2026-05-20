@@ -31,10 +31,13 @@ static bool async_mode = false;
 static KInterrupt* serial_irq_obj = nullptr;
 static SerialDriver* g_serial_driver = nullptr; 
 
+static spinlock_t serial_ring_lock = {0, 0, {0}};
+
 extern "C" void serial_irq_handler_wrapper(registers_t* regs) {
     (void)regs;
     if (!serial_hardware_present) { return; }
 
+    uint64_t flags = spinlock_acquire(&serial_ring_lock);
     while (ring_head != ring_tail) {
         if ((hal_io_inb(COM1 + 5) & 0x20)) {
             uint32_t next_tail = (ring_tail + 1) & RING_MASK;
@@ -44,6 +47,7 @@ extern "C" void serial_irq_handler_wrapper(registers_t* regs) {
             break;
         }
     }
+    spinlock_release(&serial_ring_lock, flags);
 }
 
 extern "C" void serial_thread_fn() {
@@ -86,6 +90,7 @@ extern "C" {
         hal_io_outb(COM1 + 2, 0xC7);
         hal_io_outb(COM1 + 4, 0x0B); 
         
+        spinlock_init(&serial_ring_lock);
         serial_hardware_present = true;
     }
 
@@ -109,6 +114,7 @@ extern "C" {
             while ((hal_io_inb(COM1 + 5) & 0x20) == 0) { hal_cpu_relax(); }
             hal_io_outb(COM1, c);
         } else {
+            uint64_t flags = spinlock_acquire(&serial_ring_lock);
             uint32_t next_head = (ring_head + 1) & RING_MASK;
             if (next_head == ring_tail) {
                 ring_tail = (ring_tail + 1) & RING_MASK;
@@ -116,7 +122,10 @@ extern "C" {
             serial_ring[ring_head] = c;
             ring_head = next_head;
             
-            if (hal_io_inb(COM1 + 5) & 0x20) {
+            bool ready = (hal_io_inb(COM1 + 5) & 0x20) != 0;
+            spinlock_release(&serial_ring_lock, flags);
+            
+            if (ready) {
                 serial_irq_handler_wrapper(nullptr);
             }
         }
@@ -142,7 +151,7 @@ extern "C" {
         char buf[1024]; 
         va_list args;
         va_start(args, format);
-        int ret = vsnprintf(buf, sizeof(buf), format, args);
+        int ret = vsnprintf(buf, sizeof(buf), format, args); // NOLINT
         va_end(args);
         
         if (ret > 0) {

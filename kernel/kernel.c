@@ -44,7 +44,6 @@ extern void setup_system_info_nodes(void);
 
 extern void init_pat();
 extern void rtc_init();
-extern void init_speaker();
 extern void init_ahci_early();
 extern void init_ahci_late();
 extern void init_nvme_early(); 
@@ -65,6 +64,7 @@ extern void init_global_constructors();
 extern void init_smbus(); 
 extern void rust_usb_init(); 
 extern void kir_init_c(); 
+extern void console_render_daemon(); // YENİ
 
 #include "system/ffi/ffi.h"
 #define MULTIBOOT_STORAGE_SIZE 32768
@@ -90,7 +90,7 @@ void print_status(const char* prefix, const char* msg, const char* status) {
     char serial_buf[256];
     const char* s_tag = "[ INFO ]";
     if      (strcmp(status, "OK")   == 0) { s_tag = "[  OK  ]"; }
-    else if (strcmp(status, "FAIL") == 0) { s_tag = "[ FAIL ]"; } else { /* Neutral */ }
+    else if (strcmp(status, "FAIL") == 0) { s_tag = "[ FAIL ]"; }
 
     snprintf(serial_buf, sizeof(serial_buf), "%s %s %s\n", s_tag, prefix, msg);
     serial_write(serial_buf);
@@ -119,18 +119,18 @@ void print_status(const char* prefix, const char* msg, const char* status) {
     console_write("\n");
 
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    if (!scheduler_active) { framebuffer_flush(); } else { /* Maintained by daemon */ }
+    if (!scheduler_active) { framebuffer_flush(); }
 
     stdio_release_lock(flags);
 }
 
 void print_section_header(const char* title) {
     static uint64_t last_tsc = 0;
-    if (last_tsc == 0) { last_tsc = kernel_boot_start_tsc; } else { /* Evaluated */ }
+    if (last_tsc == 0) { last_tsc = kernel_boot_start_tsc; }
     
     uint64_t current_tsc = rdtsc_ordered();
     uint64_t freq = get_tsc_freq();
-    if (freq == 0) { freq = 2000000000ULL; } else { /* Synced clock */ }
+    if (freq == 0) { freq = 2000000000ULL; }
     
     uint64_t diff_ms = ((current_tsc - last_tsc) * 1000) / freq;
     uint64_t total_ms = ((current_tsc - kernel_boot_start_tsc) * 1000) / freq;
@@ -162,8 +162,6 @@ void enable_ps2_ports() {
 }
 
 void shell_task_entry() {
-    console_set_auto_flush(true);
-    framebuffer_flush();
     while (1) {
         shell_update_c();
         task_sleep(1);
@@ -177,8 +175,6 @@ void memory_monitor_task() {
             serial_write("[MEM] Low Memory detected! Triggering Reaper...\n");
             reaper_invoke();
             disk_cache_flush_all();
-        } else {
-            // Memory stable
         }
     }
 }
@@ -199,7 +195,6 @@ void gpf_handler(registers_t* regs) {
 
 void svc_audio() { init_intel_hda(); service_signal_finished("Audio"); }
 void svc_usb() { rust_usb_init(); service_signal_finished("USB"); }
-void svc_speaker() { init_speaker(); service_signal_finished("Speaker"); }
 
 __attribute__((no_stack_protector))
 void kmain(void* multiboot_structure_addr) {
@@ -213,6 +208,8 @@ void kmain(void* multiboot_structure_addr) {
     register_fpu_exception_handlers();
     register_interrupt_handler(14, page_fault_handler);
     register_interrupt_handler(13, gpf_handler);
+    
+    register_interrupt_handler(254, hw_watchpoint_sync_handler);
 
     detect_cpu();
     init_rng();
@@ -220,10 +217,12 @@ void kmain(void* multiboot_structure_addr) {
     init_string_optimization();
     init_stack_protector();
 
-    if (multiboot_structure_addr == NULL) { PANIC("Multiboot info structure is NULL!"); } else { /* Intact */ }
+    if (multiboot_structure_addr == NULL) { 
+        PANIC("Multiboot info structure is NULL!"); 
+    }
 
     uint32_t mb_size = *(uint32_t*)multiboot_structure_addr;
-    if (mb_size > MULTIBOOT_STORAGE_SIZE) { mb_size = MULTIBOOT_STORAGE_SIZE; } else { /* Size validated */ }
+    if (mb_size > MULTIBOOT_STORAGE_SIZE) { mb_size = MULTIBOOT_STORAGE_SIZE; }
 
     memcpy(multiboot_storage, multiboot_structure_addr, mb_size);
     safe_multiboot_ptr = (struct multiboot_tag*)(multiboot_storage + 8);
@@ -238,8 +237,6 @@ void kmain(void* multiboot_structure_addr) {
             struct multiboot_tag_string* cmd_tag = (struct multiboot_tag_string*)search_tag;
             boot_cmdline = cmd_tag->string;
             break;
-        } else {
-            // Keep searching
         }
     }
     
@@ -262,8 +259,6 @@ void kmain(void* multiboot_structure_addr) {
     init_framebuffer(multiboot_structure_addr);
     console_init();
     
-    console_set_auto_flush(true); 
-
     show_system_info();
 
     print_section_header("SYSTEM CORE STARTING");
@@ -277,7 +272,7 @@ void kmain(void* multiboot_structure_addr) {
     print_status("[ KOM  ]", "Kernel Object Model & Handle Table", "OK");
     print_status("[ ONS  ]", "Object Namespace Root Directory", "OK");
     print_status("[ SEC  ]", "RNG & Stack Protector",           "OK");
-    if (uefi_available()) { print_status("[ UEFI ]", "Runtime Services", "OK"); } else { /* Deprecated BIOS Mode */ }
+    if (uefi_available()) { print_status("[ UEFI ]", "Runtime Services", "OK"); }
     hardware_integrity_check();
 
     print_section_header("BUS/TIME STARTING");
@@ -302,7 +297,7 @@ void kmain(void* multiboot_structure_addr) {
     init_smbus();
     
     init_ahci_late();       print_status("[ DISK ]", "AHCI Driver (SATA)",               "OK");
-    if (init_nvme_late()) { print_status("[ DISK ]", "NVMe Driver (PCIe SSD)",           "OK"); } else { /* NVMe absent */ }
+    if (init_nvme_late()) { print_status("[ DISK ]", "NVMe Driver (PCIe SSD)",           "OK"); }
     init_virtio();          
 
     struct multiboot_tag* f_tag;
@@ -311,12 +306,10 @@ void kmain(void* multiboot_structure_addr) {
          f_tag->type != 0;
          f_tag = (struct multiboot_tag*)((uint8_t*)f_tag + ((f_tag->size + 7) & ~7)))
     {
-        if ((uint64_t)f_tag >= (uint64_t)multiboot_storage + MULTIBOOT_STORAGE_SIZE) { break; } else { /* Array bounded */ }
+        if ((uint64_t)f_tag >= (uint64_t)multiboot_storage + MULTIBOOT_STORAGE_SIZE) { break; }
         if (f_tag->type == 3) {
             struct multiboot_tag_module* mod = (struct multiboot_tag_module*)f_tag;
             tar_inflater_init((void*)(uint64_t)mod->mod_start, (uint32_t)(mod->mod_end - mod->mod_start));
-        } else {
-            // Not a module tag
         }
     }
     
@@ -389,10 +382,12 @@ void kmain(void* multiboot_structure_addr) {
     service_register("FFI_Logger",    ffi_logger_task,     SERVICE_TYPE_DAEMON,  RESTART_ALWAYS);
     service_register("Audio",         svc_audio,           SERVICE_TYPE_ONESHOT, RESTART_ON_FAILURE);
     service_register("USB",           svc_usb,             SERVICE_TYPE_ONESHOT, RESTART_ON_FAILURE);
-    service_register("Speaker",       svc_speaker,         SERVICE_TYPE_ONESHOT, RESTART_NEVER);
 
     service_start_all();
     create_kernel_task(singd_monitor_entry);
+    
+    // YENİ: 60FPS Render Daemon Başlatılıyor
+    create_kernel_task_prio(console_render_daemon, PRIO_REALTIME);
 
     enable_scheduler();
     hal_interrupts_enable();
@@ -414,13 +409,11 @@ void kmain(void* multiboot_structure_addr) {
     uint64_t end_tsc = rdtsc_ordered();
     uint64_t diff    = end_tsc - kernel_boot_start_tsc;
     uint64_t freq    = get_tsc_freq();
-    if (freq == 0) { freq = 2000000000ULL; } else { /* Synced */ }
+    if (freq == 0) { freq = 2000000000ULL; }
     uint64_t ms      = (diff * 1000) / freq;
 
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     printf("Total Kernel Boot Time: %lu ms (Cycles: %lu)\n", ms, diff);
-
-    console_set_auto_flush(false);
 
     shell_init_c();          
     shell_run_startup_c();   

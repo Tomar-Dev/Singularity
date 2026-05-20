@@ -66,7 +66,7 @@ static const char* get_error_string(kernel_error_t code) {
 static void panic_print_serial(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    vsnprintf(panic_buffer, sizeof(panic_buffer), fmt, args);
+    vsnprintf(panic_buffer, sizeof(panic_buffer), fmt, args); // NOLINT
     va_end(args);
     dbg_direct(panic_buffer); 
 }
@@ -156,15 +156,13 @@ static void dump_exception_details(registers_t* regs, kernel_error_t code) {
             console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_LIGHT_BLUE);
             printf(">>> PROBABLE STACK OVERFLOW (Guard Page Hit) <<<\n");
             console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_LIGHT_BLUE);
-        } else {
-            // General mapped access fault
         }
 
         printf("Access Type     : %s\n", fetch ? "Instruction Fetch" : (write ? "Write" : "Read"));
         printf("Privilege Level : %s\n", user ? "User Mode (Ring 3)" : "Kernel Mode (Ring 0)");
         printf("Reason          : %s\n", present ? "Protection Violation (Page is read-only or no exec)" 
                                          : "Page Not Present (Not mapped in RAM)");
-        if (rsvd) { printf("!!! Reserved Bit Violation in Page Table !!!\n"); } else { /* Clean */ }
+        if (rsvd) { printf("!!! Reserved Bit Violation in Page Table !!!\n"); }
         
         panic_print_serial("\n[PAGE FAULT] CR2: 0x%016lx | %s | %s | %s\n", 
                            cr2, write?"Write":"Read", user?"User":"Kernel", present?"ProtViol":"NotPresent");
@@ -176,12 +174,10 @@ static void dump_exception_details(registers_t* regs, kernel_error_t code) {
             bool idt = (regs->err_code >> 1) & 1;
             uint16_t index = regs->err_code >> 3;
             printf("Segment Selector Index: 0x%04x (Table: %s)\n", index, idt ? "IDT" : "GDT/LDT");
-            if (ext) { printf("Exception originated from an external event.\n"); } else { /* internal */ }
+            if (ext) { printf("Exception originated from an external event.\n"); }
         } else {
             printf("Error Code is 0. Likely an invalid memory reference, unaligned SSE access, or privileged instruction.\n");
         }
-    } else {
-        // Safe skip
     }
 }
 
@@ -189,8 +185,6 @@ static void dump_registers_formatted(registers_t* regs, kernel_error_t code) {
     if (!regs) {
         printf("\n(No Register Context Available)\n");
         return;
-    } else {
-        // Continue formatting
     }
     
     uint64_t offset = 0;
@@ -219,14 +213,10 @@ static void dump_registers_formatted(registers_t* regs, kernel_error_t code) {
     if (rip_phys == 0) {
         printf(" [!] DANGER: RIP is executing UNMAPPED memory!\n");
         panic_print_serial(" [!] DANGER: RIP is executing UNMAPPED memory!\n");
-    } else {
-        // Executing mapped logic
     }
     if (rsp_phys == 0) {
         printf(" [!] DANGER: RSP points to UNMAPPED memory (Stack destroyed)!\n");
         panic_print_serial(" [!] DANGER: RSP points to UNMAPPED memory (Stack destroyed)!\n");
-    } else {
-        // Stack valid
     }
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_LIGHT_BLUE);
 
@@ -253,14 +243,14 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
                                  (code >= KERR_RUST_PANIC && code <= KERR_RUST_SAFE_MEM);
                                  
     bool can_sandbox = true;
-    if (curr == NULL || curr->pid == 0) { can_sandbox = false; } else { /* Valid */ }
-    if (curr && (curr->flags & PROC_FLAG_CRITICAL)) { can_sandbox = false; } else { /* Sandboxable */ }
-    if (code == KERR_DOUBLE_FAULT || code == KERR_DEADLOCK_DETECTED) { can_sandbox = false; } else { /* Recoverable code */ }
-    if (is_fatal_memory_error) { can_sandbox = false; } else { /* Recoverable */ }
+    if (curr == NULL || curr->pid == 0) { can_sandbox = false; }
+    if (curr && (curr->flags & PROC_FLAG_CRITICAL)) { can_sandbox = false; }
+    if (code == KERR_DOUBLE_FAULT || code == KERR_DEADLOCK_DETECTED) { can_sandbox = false; }
+    if (is_fatal_memory_error) { can_sandbox = false; }
     
     if (can_sandbox) {
         char sbox_buf[512];
-        snprintf(sbox_buf, sizeof(sbox_buf), 
+        snprintf(sbox_buf, sizeof(sbox_buf), // NOLINT
                  "\n[SANDBOX] Driver Panic Intercepted!\n"
                  "  Task: PID %lu\n"
                  "  Error: %s\n"
@@ -269,8 +259,6 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
                  curr->pid, message, file, line);
         dbg_direct(sbox_buf);
         process_exit(); 
-    } else {
-        // Dropping into absolute hardware panic state
     }
 
     global_panic_active = true;
@@ -280,8 +268,6 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
     if (depth > 0) {
         dbg_direct("\n[PANIC] RECURSIVE PANIC DETECTED — Halting.\n");
         for(;;) { __asm__ volatile("cli; hlt" ::: "memory"); }
-    } else {
-        // Proceeding smoothly
     }
 
     stdio_force_unlock();
@@ -294,7 +280,7 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
     while (__atomic_test_and_set(&panic_lock, __ATOMIC_ACQUIRE)) {
         hal_cpu_relax();
         start++;
-        if (start > 10000000) { break; } else { /* Await */ }
+        if (start > 10000000) { break; }
     }
     
     console_set_auto_flush(true);
@@ -305,7 +291,7 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
     panic_print_serial("\n\n!!! KERNEL PANIC !!!\n");
     panic_print_serial("Time    : %lu.%lu sec\n", uptime / 1000, uptime % 1000);
     panic_print_serial("CPU     : %d\n", cpu_id);
-    if (curr) { panic_print_serial("Task    : PID %lu\n", curr->pid); } else { /* Ignored */ }
+    if (curr) { panic_print_serial("Task    : PID %lu\n", curr->pid); }
     panic_print_serial("Code    : 0x%02x (%s)\n", code, get_error_string(code));
     panic_print_serial("Message : %s\n", message);
     panic_print_serial("Location: %s:%d\n", file, line);
@@ -321,8 +307,6 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
         uint64_t fn_offset = 0;
         const char* fn_name = ksyms_resolve_symbol((uint64_t)curr->thread_fn, &fn_offset);
         printf("Task    : PID %lu[%s]\n", curr->pid, fn_name ? fn_name : "Unknown");
-    } else {
-        // Blank
     }
     printf("Code    : 0x%02x (%s)\n", code, get_error_string(code));
     printf("Message : %s\n", message);
@@ -352,13 +336,11 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
     for(;;) {
         if (acpi_check_power_button_status()) {
             panic_raw_shutdown();
-        } else {
-            // Ignored
         }
 
         if (hal_io_inb(0x64) & 1) {
             uint8_t sc = hal_io_inb(0x60);
-            if (sc == 0xE0) { continue; } else { /* Read correctly */ }
+            if (sc == 0xE0) { continue; }
             bool is_break = (sc & 0x80) != 0;
             uint8_t key = sc & 0x7F;
             
@@ -381,14 +363,8 @@ void panic_at(const char* file, int line, kernel_error_t code, const char* messa
                 }
                 else if (key == 0x06) { 
                     panic_raw_reboot(); 
-                } else {
-                    // Ignored
                 }
-            } else {
-                // Key unmapped
             }
-        } else {
-            // Unresponsive loop
         }
         hal_cpu_relax();
     }

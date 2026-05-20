@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use alloc::sync::Arc;
 use alloc::boxed::Box;
 use core::ffi::c_void;
-use crate::fs::traits::{FsNode, FsBackend};
+use crate::fs::traits::{FsNode, FsBackend, DeviceHandle};
 use crate::fs::utils::{read_u8, read_u32_le};
 
 unsafe extern "C" {
@@ -26,12 +26,9 @@ fn read_sector(dev: *mut c_void, lba: u64, count: u32) -> Option<Vec<u8>> {
 }
 
 pub struct IsoMount {
-    dev: *mut c_void,
+    dev: DeviceHandle,
     block_size: u32,
 }
-
-unsafe impl Send for IsoMount {}
-unsafe impl Sync for IsoMount {}
 
 pub struct IsoNode {
     mount: Arc<IsoMount>,
@@ -39,9 +36,6 @@ pub struct IsoNode {
     size: u64,
     is_dir: bool,
 }
-
-unsafe impl Send for IsoNode {}
-unsafe impl Sync for IsoNode {}
 
 fn clean_iso_name(raw: &[u8]) -> String {
     let mut s = String::new();
@@ -71,7 +65,7 @@ impl FsNode for IsoNode {
         let sectors = (end_lba - start_lba + 1) as u32;
         let offset_in_sector = (offset % bs) as usize;
         
-        if let Some(data) = read_sector(self.mount.dev, start_lba, sectors) {
+        if let Some(data) = read_sector(self.mount.dev.0, start_lba, sectors) {
             buf[..count].copy_from_slice(&data[offset_in_sector..offset_in_sector + count]);
             Ok(count)
         } else {
@@ -89,7 +83,7 @@ impl FsNode for IsoNode {
         let sectors = (self.size as u32).div_ceil(bs);
         
         for s in 0..sectors {
-            if let Some(data) = read_sector(self.mount.dev, self.lba as u64 + s as u64, 1) {
+            if let Some(data) = read_sector(self.mount.dev.0, self.lba as u64 + s as u64, 1) {
                 let mut offset = 0;
                 while offset < bs as usize {
                     let len = read_u8(&data, offset) as usize;
@@ -127,7 +121,7 @@ impl FsNode for IsoNode {
         let mut curr_idx = 0;
         
         for s in 0..sectors {
-            if let Some(data) = read_sector(self.mount.dev, self.lba as u64 + s as u64, 1) {
+            if let Some(data) = read_sector(self.mount.dev.0, self.lba as u64 + s as u64, 1) {
                 let mut offset = 0;
                 while offset < bs as usize {
                     let len = read_u8(&data, offset) as usize;
@@ -161,7 +155,7 @@ pub unsafe extern "C" fn rust_iso9660_mount(dev: *mut c_void) -> *mut c_void {
             let root_lba = read_u32_le(&data, 156 + 2);
             let root_size = read_u32_le(&data, 156 + 10);
             
-            let mount = Arc::new(IsoMount { dev, block_size: bs });
+            let mount = Arc::new(IsoMount { dev: DeviceHandle(dev), block_size: bs });
             let node = FsBackend::Iso9660(IsoNode {
                 mount,
                 lba: root_lba,
@@ -182,6 +176,6 @@ pub unsafe extern "C" fn rust_iso9660_mount(dev: *mut c_void) -> *mut c_void {
 
 impl Drop for IsoMount {
     fn drop(&mut self) {
-        unsafe { crate::ffi::exports::device_release(self.dev); }
+        unsafe { crate::ffi::exports::device_release(self.dev.0); }
     }
 }

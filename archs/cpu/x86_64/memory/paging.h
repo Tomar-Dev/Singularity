@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "archs/cpu/x86_64/interrupts/isr.h"
-// FIX: PAGE_SIZE is defined as plain 4096 (integer, no ULL suffix) so that
+
 #ifndef PAGE_SIZE
 #define PAGE_SIZE        4096
 #endif
@@ -23,6 +23,7 @@
 #define PAGE_HUGE      0x80ULL
 #define PAGE_GLOBAL    0x100ULL
 #define PAGE_COW       0x200ULL
+#define PAGE_DEMAND    0x400ULL // YENİ: Demand Paging (Tembel Tahsis) Biti
 #define PAGE_NX        (1ULL << 63)
 
 #define PAGE_WRITE_COMBINE PAGE_PWT
@@ -119,7 +120,9 @@ public:
     void  iounmap(void* virt, uint32_t size);
 
     void checkTlbFlush(uint8_t cpu_id);
+    
     bool handleCowFault(uint64_t fault_addr);
+    bool handleDemandFault(uint64_t fault_addr); // YENİ: Demand Paging İşleyicisi
 
     bool isPcidEnabled() const { return pcid_enabled; }
 };

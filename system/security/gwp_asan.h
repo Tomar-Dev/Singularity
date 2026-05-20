@@ -44,8 +44,7 @@ bool gwp_asan_free(void* ptr, uint64_t caller);
 
 bool gwp_asan_is_managed(void* ptr);
 
-size_t gwp_asan_get_allocation_size(void* ptr);
-
+// GÜVENLİK YAMASI: Page Fault işleyicisi için donanım zırhı dışarı açıldı.
 bool gwp_asan_check_fault(uint64_t fault_addr);
 
 void gwp_asan_print_stats(void);

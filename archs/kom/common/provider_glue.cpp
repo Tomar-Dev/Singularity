@@ -4,7 +4,7 @@
 #include "libc/string.h"
 #include "libc/stdio.h"
 #include "system/console/console.h"
-#include "memory/kheap.h" // YENİ: Kmalloc_contiguous için eklendi
+#include "memory/kheap.h" 
 
 static char next_drive_letter = 'D';
 
@@ -35,8 +35,6 @@ ProviderBlob::ProviderBlob(const char* name, void* node)
 ProviderBlob::~ProviderBlob() {
     if (rust_node) {
         rust_fs_release(rust_node);
-    } else {
-        // Safe context clear
     }
 }
 
@@ -91,8 +89,6 @@ ProviderContainer::ProviderContainer(void* node) : KContainer(), rust_node(node)
 ProviderContainer::~ProviderContainer() {
     if (rust_node) {
         rust_fs_release(rust_node);
-    } else {
-        // Unreferenced root memory safe
     }
 }
 
@@ -100,8 +96,6 @@ KObject* ProviderContainer::lookup(const char* name) {
     KObject* cached = KContainer::lookup(name);
     if (cached) {
         return cached;
-    } else {
-        // Request mapped physical hardware
     }
 
     void* child_rust = rust_fs_finddir(rust_node, name);
@@ -138,8 +132,6 @@ bool ProviderContainer::enumerate(uint32_t index, char* out_name, KObjectType* o
             *out_type = KObjectType::BLOB;
         }
         return true;
-    } else {
-        // Enumerate directory structure fallback 
     }
     
     uint32_t rust_count = 0;
@@ -168,13 +160,11 @@ error_t ProviderContainer::create_child(const char* name, KObjectType type) {
 extern "C" {
 
 void kom_mount_provider(const char* dev_name, const char* target_path, const char* provider_type) {
-    (void)target_path; // Future use cases
+    (void)target_path; 
     Device* dev = DeviceManager::getDevice(dev_name);
     if (!dev) {
         printf("[KOM] Device '%s' not found.\n", dev_name);
         return;
-    } else {
-        // Confirmed existing handle mapping
     }
 
     void* rust_root = nullptr;
@@ -262,17 +252,18 @@ uint64_t kom_probe_free_space(void* dev_ptr) {
         struct local_fat32_bpb* bpb = reinterpret_cast<struct local_fat32_bpb*>(buf);
         if (buf[510] == 0x55 && buf[511] == 0xAA && bpb->root_cluster >= 2) {
             if (bpb->fs_info > 0 && bpb->fs_info != 0xFFFF) {
+                uint32_t spc = bpb->sectors_per_cluster;
+                uint32_t bps = bpb->bytes_per_sector;
+                
                 if (dev->readBlock(bpb->fs_info, 1, buf)) {
                     uint32_t free_clusters = *reinterpret_cast<uint32_t*>(buf + 488);
                     if (free_clusters != 0xFFFFFFFF && free_clusters > 0) {
-                        return static_cast<uint64_t>(free_clusters) * bpb->sectors_per_cluster * bpb->bytes_per_sector;
+                        return static_cast<uint64_t>(free_clusters) * spc * bps;
                     } else {
-                        // YENİ: FAT32 Stale FSINFO Fallback (FAT-Walking)
                         uint32_t fat_start = bpb->reserved_sectors;
                         uint32_t fat_sectors = bpb->sectors_per_fat_32;
                         uint32_t counted_free = 0;
                         
-                        // Performans için 4KB (8 sektör) bloklar halinde oku
                         uint8_t* fat_buf = (uint8_t*)kmalloc_contiguous(4096);
                         if (fat_buf) {
                             uint32_t sectors_to_read = fat_sectors;
@@ -286,10 +277,10 @@ uint64_t kom_probe_free_space(void* dev_ptr) {
                                     for (uint32_t j = 0; j < total_entries; j++) {
                                         if ((entries[j] & 0x0FFFFFFF) == 0) {
                                             counted_free++;
-                                        } else { /* Allocated */ }
+                                        }
                                     }
                                 } else {
-                                    break; // Disk read error, abort walk
+                                    break; 
                                 }
                                 current_sector += chunk;
                                 sectors_to_read -= chunk;
@@ -297,23 +288,15 @@ uint64_t kom_probe_free_space(void* dev_ptr) {
                             kfree_contiguous(fat_buf, 4096);
                             
                             if (counted_free > 0) {
-                                return static_cast<uint64_t>(counted_free) * bpb->sectors_per_cluster * bpb->bytes_per_sector;
-                            } else { /* Disk is truly 100% full */ }
-                        } else {
-                            // OOM during fallback, return Unknown
+                                return static_cast<uint64_t>(counted_free) * spc * bps;
+                            } else {
+                                return 0; 
+                            }
                         }
                     }
-                } else {
-                    // Safe return out
                 }
-            } else {
-                // Free parameters not calculated by MBR loader yet
             }
-        } else {
-            // Bad magic sector validation failed 
         }
-    } else {
-        // Disk I/O fault bypassed seamlessly
     }
 
     if (dev->readBlock(2, 2, buf)) {
@@ -324,14 +307,8 @@ uint64_t kom_probe_free_space(void* dev_ptr) {
             if (free_blocks != 0xFFFFFFFF) {
                 uint64_t block_size = 1024ULL << log_block_size;
                 return static_cast<uint64_t>(free_blocks) * block_size;
-            } else {
-                // FS has broken bounds mappings
             }
-        } else {
-            // Ext magic checks dropped
         }
-    } else {
-        // Block bounds ignored
     }
 
     return static_cast<uint64_t>(-1);

@@ -58,7 +58,6 @@ public:
     int cmd_suspend(const char* arg);
     int cmd_power(const char* arg);
     int cmd_turbo(const char* arg);
-    int cmd_beep(const char* arg);
     int cmd_usb(const char* arg);
     int cmd_i2c(const char* arg);
     int cmd_fbtest(const char* arg);
@@ -69,6 +68,14 @@ public:
     int cmd_profile(const char* arg);
     int cmd_reap(const char* arg);
     int cmd_pcie(const char* arg);
+    int cmd_ipc(const char* arg); 
+    
+    int cmd_watch(const char* arg);
+    int cmd_unwatch(const char* arg);
+    
+    int cmd_watchtest(const char* arg);
+    int cmd_porttest(const char* arg);
+    int cmd_demandtest(const char* arg); // YENİ: Demand Paging Testi
 
     // --- Filesystem & Storage Commands ---
     int cmd_ls(const char* arg);

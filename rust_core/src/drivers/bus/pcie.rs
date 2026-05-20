@@ -49,6 +49,11 @@ pub struct FfiPcieDevice {
 
 static PCIE_DEVICES: IrqSpinlock<Vec<PcieDevice>> = IrqSpinlock::new(Vec::new());
 
+// FIX: Rust 2024 Edition requires 'unsafe extern "C"'
+unsafe extern "C" {
+    fn rust_pcie_enable_msi(bus: u8, dev: u8, func: u8, vector: u8, cpu_id: u8) -> bool;
+}
+
 impl PcieDevice {
     pub unsafe fn read_dword(bus: u8, dev: u8, func: u8, offset: u16) -> u32 {
         let backend = *PCIE_BACKEND.lock();
@@ -91,8 +96,6 @@ impl PcieDevice {
                                     | ((offset as u64) & 0xFFFC);
                     let ptr = (ecam_virt + phys_offset) as *mut u32;
                     unsafe { write_volatile(ptr, value); }
-                } else {
-                    // Out of bounds for ECAM segment
                 }
             },
             PcieBackend::Legacy => {
@@ -145,8 +148,6 @@ impl PcieDevice {
                     let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
                     let ptr = (ecam_virt + phys_offset) as *mut u16;
                     unsafe { write_volatile(ptr, value); }
-                } else {
-                    // Ignore write
                 }
             },
             PcieBackend::Legacy => {
@@ -157,8 +158,6 @@ impl PcieDevice {
                         io::outl(CONFIG_ADDRESS, address);
                         io::outw(CONFIG_DATA + (offset & 2), value);
                     }
-                } else {
-                    // Out of bounds
                 }
             }
         }
@@ -199,8 +198,6 @@ impl PcieDevice {
                     let phys_offset = (((bus - start_bus) as u64) << 20) | ((dev as u64) << 15) | ((func as u64) << 12) | (offset as u64);
                     let ptr = (ecam_virt + phys_offset) as *mut u8;
                     unsafe { write_volatile(ptr, value); }
-                } else {
-                    // Valid bounds broken
                 }
             },
             PcieBackend::Legacy => {
@@ -211,8 +208,6 @@ impl PcieDevice {
                         io::outl(CONFIG_ADDRESS, address);
                         io::outb(CONFIG_DATA + (offset & 3), value);
                     }
-                } else {
-                    // Exceeded layout structure
                 }
             }
         }
@@ -234,17 +229,11 @@ impl PcieDevice {
                         if (pmcsr & 0x03) != 0 { 
                             pmcsr &= !0x03; 
                             Self::write_word(self.bus, self.dev, self.func, pmcsr_addr, pmcsr);
-                        } else {
-                            // Already active D0
                         }
                         break;
-                    } else {
-                        // Not a Power Management capability
                     }
                     cap_ptr = next_ptr;
                 }
-            } else {
-                // Capabilities list not supported
             }
         }
     }
@@ -294,6 +283,10 @@ impl PcieDevice {
             Self::write_word(self.bus, self.dev, self.func, 0x04, cmd);
         }
     }
+    
+    pub fn enable_msi(&self, vector: u8, cpu_id: u8) -> bool {
+        unsafe { rust_pcie_enable_msi(self.bus, self.dev, self.func, vector, cpu_id) }
+    }
 }
 
 pub fn find_device(class: u8, subclass: u8, prog_if: Option<u8>) -> Option<PcieDevice> {
@@ -303,14 +296,10 @@ pub fn find_device(class: u8, subclass: u8, prog_if: Option<u8>) -> Option<PcieD
             if let Some(pi) = prog_if {
                 if p.prog_if == pi { 
                     return Some(*p); 
-                } else {
-                    // Interface mismatch
                 }
             } else {
                 return Some(*p);
             }
-        } else {
-            // Class mismatch
         }
     }
     None
@@ -343,11 +332,7 @@ fn scan_bus(bus: u8, devices: &mut Vec<PcieDevice>, dev_count: &mut u32) {
                 let secondary_bus = ((bus_reg >> 8) & 0xFF) as u8;
                 if secondary_bus > bus {
                     scan_bus(secondary_bus, devices, dev_count);
-                } else {
-                    // Circular bridge prevented
                 }
-            } else {
-                // Not a bridge
             }
 
             if (p.header_type & 0x80) != 0 { 
@@ -365,21 +350,11 @@ fn scan_bus(bus: u8, devices: &mut Vec<PcieDevice>, dev_count: &mut u32) {
                             let secondary_bus = ((bus_reg >> 8) & 0xFF) as u8;
                             if secondary_bus > bus {
                                 scan_bus(secondary_bus, devices, dev_count);
-                            } else {
-                                // Circular bridge prevented
                             }
-                        } else {
-                            // Not a bridge
                         }
-                    } else {
-                        // Empty function
                     }
                 }
-            } else {
-                // Not a multi-function device
             }
-        } else {
-            // Empty slot
         }
     }
 }
@@ -389,8 +364,6 @@ pub extern "C" fn rust_pcie_enumerate() {
     let mut devices = PCIE_DEVICES.lock();
     if !devices.is_empty() { 
         return; 
-    } else {
-        // Run Enumeration
     }
     
     let mut dev_count = 0;
@@ -461,7 +434,6 @@ pub extern "C" fn rust_pcie_write_byte(bus: u8, dev: u8, func: u8, offset: u16, 
 
 fn print_c(s: &str, fg: u8) {
     unsafe {
-        // FIX: Replaced obsolete vga_set_color with unified console_set_color API
         crate::ffi::console_set_color(fg, 0); 
         let c_msg = format!("{}\0", s);
         kprintf_string(c_msg.as_ptr() as *const i8);
@@ -546,15 +518,11 @@ pub extern "C" fn pcie_print_all() {
             print_c(&format!("{} ", vendor_padded), 7);
             print_c("| ", 8);
             print_c(&format!("{}\n", dev_str), 15);
-        } else {
-            // Unregistered display omitted for clean topology output
         }
     }
     
     if !device_found {
         print_c(" No PCI/PCIe devices found by this driver.\n", 7);
-    } else {
-        // Displayed successfully
     }
 
     unsafe {

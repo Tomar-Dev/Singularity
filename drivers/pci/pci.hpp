@@ -23,7 +23,6 @@
 #define PCI_SUBCLASS_NVME      0x08 
 #define PCI_SUBCLASS_USB       0x03 
 
-// OPTİMİZASYON YAMASI: FFI Struct Marshalling için eklendi
 struct FfiPcieDevice {
     uint8_t bus, dev, func, class_id, subclass_id, prog_if;
     uint16_t vendor_id, device_id;
@@ -73,6 +72,9 @@ public:
     void enableBusMaster();
     void enableMemorySpace();
     void enableIOSpace();
+    
+    // YENİ: MSI / MSI-X Etkinleştirme Fonksiyonu
+    bool enable_msi(uint8_t vector, uint8_t cpu_id);
 };
 
 namespace PCIe {

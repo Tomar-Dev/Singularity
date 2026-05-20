@@ -74,6 +74,7 @@ CXX_SOURCES := $(filter-out $(ROOT_DIR)/system/fs/%,                   $(CXX_SOU
 CXX_SOURCES := $(filter-out $(ROOT_DIR)/archs/fs/%,                    $(CXX_SOURCES))
 CXX_SOURCES := $(filter-out $(ROOT_DIR)/system/hal/%,                  $(CXX_SOURCES))
 CXX_SOURCES := $(filter-out $(ROOT_DIR)/drivers/pci/pcie.cpp,          $(CXX_SOURCES))
+CXX_SOURCES := $(filter-out $(ROOT_DIR)/archs/cpu/x86_64/drivers/misc/speaker.cpp, $(CXX_SOURCES))
 
 # ---------------------------------------------------------------------------
 # ASM exclusions
@@ -112,6 +113,8 @@ CRITICAL_FILES := \
     archs/kom/common/kblob.o \
     archs/kom/common/ons.o \
     archs/kom/common/kevent.o \
+    archs/kom/common/kchannel.o \
+    archs/kom/common/kport.o \
     system/irq/kir.o \
     archs/kom/common/provider_glue.o \
     system/init/tar_inflater.o \
@@ -198,7 +201,6 @@ pci:
 	$(Q)python3 update_pci_db.py $(PCI_DB)
 	@echo "$(GREEN)[OK]$(RESET) $(PCI_DB) updated. Run 'make all' to embed."
 
-# BUG FIX: Tidy now respects C++ and C files separately to avoid false-positive syntax errors
 tidy:
 	@echo "$(BLUE)[TIDY]$(RESET) Running Clang-Tidy static analysis..."
 	@echo "Checking C files..."

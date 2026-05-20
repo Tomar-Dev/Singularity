@@ -138,8 +138,6 @@ static void guess_microarchitecture() {
         safe_strncpy(cpu_info.codename, "Virtual CPU", sizeof(cpu_info.codename));
         safe_strncpy(cpu_info.socket, "Virtual Socket", sizeof(cpu_info.socket));
         safe_strncpy(cpu_info.lithography, "N/A", sizeof(cpu_info.lithography));
-    } else {
-        // Physical Hardware mapping intact
     }
 }
 
@@ -156,8 +154,6 @@ static void detect_cache_topology() {
                 int type = a & 0x1F;
                 if (type == 0) { 
                     break; 
-                } else { 
-                    // Valid cache level
                 }
 
                 int level = (a >> 5) & 0x7;
@@ -171,10 +167,7 @@ static void detect_cache_topology() {
                 if (level == 1) { cpu_info.l1_cache_size += size_kb; }
                 else if (level == 2) { cpu_info.l2_cache_size = size_kb; }
                 else if (level == 3) { cpu_info.l3_cache_size = size_kb; }
-                else { /* Extraneous cache level */ }
             }
-        } else {
-            // Cache topology not supported by this Intel CPU
         }
     } else if (cpu_info.vendor == VENDOR_AMD) {
         if (cpu_info.max_ext_func >= 0x80000006) {
@@ -184,11 +177,7 @@ static void detect_cache_topology() {
             cpuid(0x80000006, &a, &b, &c, &d);
             cpu_info.l2_cache_size = (c >> 16) & 0xFFFF;
             cpu_info.l3_cache_size = (d >> 18) * 512;
-        } else {
-            // Cache topology not supported by this AMD CPU
         }
-    } else {
-        // Unknown Architecture Topologies
     }
 }
 
@@ -206,15 +195,11 @@ static void detect_core_topology() {
             cpuid_count(0xB, 0, &a, &b, &c, &d);
             if ((c & 0xFF00) >> 8 == 1) { 
                 logical_per_core = b & 0xFFFF;
-            } else {
-                // SMT Thread structure missed
             }
 
             cpuid_count(0xB, 1, &a, &b, &c, &d);
             if ((c & 0xFF00) >> 8 == 2) { 
                 logical_total = b & 0xFFFF;
-            } else {
-                // Logical core thread missed
             }
 
             if (logical_per_core > 0 && logical_total > 0) {
@@ -222,8 +207,6 @@ static void detect_core_topology() {
                 cpu_info.physical_cores = logical_total / logical_per_core;
                 if (cpu_info.physical_cores == 0) { 
                     cpu_info.physical_cores = 1; 
-                } else { 
-                    // Valid physical core count
                 }
             } else {
                 cpuid(1, &a, &b, &c, &d);
@@ -240,8 +223,6 @@ static void detect_core_topology() {
                 }
                 if (cpu_info.physical_cores == 0) { 
                     cpu_info.physical_cores = 1; 
-                } else { 
-                    // Valid fallback core count
                 }
             }
         } else {
@@ -259,8 +240,6 @@ static void detect_core_topology() {
             }
             if (cpu_info.physical_cores == 0) { 
                 cpu_info.physical_cores = 1; 
-            } else { 
-                // Valid fallback core count
             }
         }
 
@@ -273,19 +252,14 @@ static void detect_core_topology() {
             if (cpu_info.max_ext_func >= 0x8000001E) {
                 cpuid(0x8000001E, &a, &b, &c, &d);
                 threads_per_core = ((b >> 8) & 0xFF) + 1;
-            } else {
-                // Single Threading Only or older AMD architecture
             }
 
             cpu_info.physical_cores = nc;
             cpu_info.logical_cores  = nc * threads_per_core;
         } else {
-            // Missing Topology Leaf, fallback to basic assumptions
             cpu_info.physical_cores = 1;
             cpu_info.logical_cores = 1;
         }
-    } else {
-        // Unknown Architecture Core Count
     }
 }
 
@@ -295,7 +269,9 @@ void detect_cpu() {
     cpuid(0, &eax, &ebx, &ecx, &edx);
     cpu_info.max_std_func = eax;
 
-    uint32_t vendor_buf[3];
+    // FIX: Clang-Tidy Out-of-Bounds Read (Garbage Value) Hatası Çözüldü.
+    // vendor_buf dizisi 16 baytlık (4 elemanlı) ve sıfırlanmış olarak tanımlandı.
+    uint32_t vendor_buf[4] = {0};
     vendor_buf[0] = ebx;
     vendor_buf[1] = edx;
     vendor_buf[2] = ecx;
@@ -324,8 +300,6 @@ void detect_cpu() {
         cpu_info.has_cet_ss  = (ecx & (1 << 7)) != 0;
         cpu_info.has_cet_ibt = (edx & (1 << 20)) != 0;
         cpu_info.has_rdseed = (ebx & (1 << 18)) != 0;
-    } else {
-        // Pre-Haswell features only
     }
 
     if (cpu_info.max_std_func >= 1) {
@@ -340,8 +314,6 @@ void detect_cpu() {
             model  += ((eax >> 16) & 0xF) << 4;
         } else if (family == 6) {
             model += ((eax >> 16) & 0xF) << 4;
-        } else {
-            // Unchanged mapped IDs
         }
 
         cpu_info.family   = family;
@@ -370,8 +342,6 @@ void detect_cpu() {
         cpu_info.has_rdrand = (ecx & (1 << 30)) != 0;
 
         cpu_info.is_hypervisor = (ecx & (1U << 31)) != 0;
-    } else {
-        // Obsolete processors
     }
 
     cpuid(0x40000000, &eax, &ebx, &ecx, &edx);
@@ -389,18 +359,12 @@ void detect_cpu() {
         } else if (strcmp(hv_sig, "VMwareVMware") == 0) {
             cpu_info.vendor = VENDOR_VMWARE;
             cpu_info.is_hypervisor = true;
-        } else {
-            // Unmapped hypervisor string
         }
-    } else {
-        // Native Hardware 
     }
 
     if (cpu_info.max_std_func >= 0xD) {
         cpuid_count(0xD, 1, &eax, &ebx, &ecx, &edx);
         cpu_info.has_xsaveopt = (eax & (1 << 0)) != 0;
-    } else {
-        // Safe drop
     }
 
     if (cpu_info.max_ext_func >= 0x80000001) {
@@ -409,11 +373,7 @@ void detect_cpu() {
         cpu_info.has_sse4a    = (ecx & (1 << 6)) != 0;
         if (cpu_info.vendor == VENDOR_AMD) { 
             cpu_info.has_svm = (ecx & (1 << 2)) != 0; 
-        } else { 
-            // Clean Intel 
         }
-    } else {
-        // Unmapped properties
     }
 
     if (cpu_info.max_ext_func >= 0x80000004) {
@@ -431,8 +391,6 @@ void detect_cpu() {
                 cpu_info.brand_string[j++] = cpu_info.brand_string[i++]; 
             }
             cpu_info.brand_string[j] = '\0';
-        } else {
-            // Perfect trimmed alignment
         }
     } else {
         safe_strncpy(cpu_info.brand_string, "Unknown CPU", sizeof(cpu_info.brand_string));
@@ -456,13 +414,10 @@ void detect_cpu() {
 
     if (current_cpu_driver && current_cpu_driver->init) {
         current_cpu_driver->init();
-    } else {
-        // Fallback default logic missing hook
     }
 
     printf("[CPU] Detected: %s\n", cpu_info.brand_string);
 }
 
 void print_cpu_z_info() {
-    // Blank wrapper for future system utilities GUI additions
 }

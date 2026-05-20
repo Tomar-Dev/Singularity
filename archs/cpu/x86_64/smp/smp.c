@@ -42,74 +42,67 @@ static per_cpu_t fallback_cpu_data[MAX_CPUS];
 __attribute__((no_stack_protector))
 void prepare_cpu_data(uint8_t cpu_id, uint32_t lapic_id) {
     if (cpu_id >= MAX_CPUS) {
-        return;
-    } else {
-        if (!per_cpu_data[cpu_id]) {
-            per_cpu_t* cpu_data = (per_cpu_t*)kmalloc_aligned(sizeof(per_cpu_t), 64);
-            if (!cpu_data) {
-                serial_write("[SMP] OOM - Using Fallback CPU Data!\n");
-                cpu_data = &fallback_cpu_data[cpu_id];
-            } else {
-                // Memory allocated successfully
-            }
-            
-            memset(cpu_data, 0, sizeof(per_cpu_t));
-
-            cpu_data->self       = cpu_data;
-            cpu_data->cpu_id     = cpu_id;
-            cpu_data->lapic_id   = lapic_id;
-            cpu_data->stack_canary = __stack_chk_guard;
-
-            if (cpu_id == 0) {
-                cpu_data->kernel_stack = (uint64_t)&stack_top;
-            } else {
-                void* kstack = kmalloc(SMP_STACK_SIZE);
-                if (kstack) {
-                    cpu_data->kernel_stack = (uint64_t)kstack + SMP_STACK_SIZE;
-                } else {
-                    serial_write("[SMP] Stack OOM! Halting AP initialization.\n");
-                    panic_at(__FILE__, __LINE__, KERR_MEM_OOM, "AP Stack Allocation Failed! Cannot boot CPU safely.");
-                }
-            }
-
-            void* sys_stack = vmm_alloc_stack(2); 
-            if (sys_stack) {
-                cpu_data->syscall_stack = (uint64_t)sys_stack + 8192;
-            } else {
-                panic_at(__FILE__, __LINE__, KERR_MEM_OOM, "Syscall Stack OOM!");
-            }
-
-            per_cpu_data[cpu_id] = cpu_data;
-        } else {
-            // CPU data already prepared
+        panic_at("smp.c", __LINE__, KERR_OUT_OF_BOUNDS, "prepare_cpu_data: Invalid CPU ID!");
+    }
+    
+    if (!per_cpu_data[cpu_id]) {
+        per_cpu_t* cpu_data = (per_cpu_t*)kmalloc_aligned(sizeof(per_cpu_t), 64);
+        if (!cpu_data) {
+            serial_write("[SMP] OOM - Using Fallback CPU Data!\n");
+            cpu_data = &fallback_cpu_data[cpu_id];
         }
+        
+        memset(cpu_data, 0, sizeof(per_cpu_t));
+
+        cpu_data->self       = cpu_data;
+        cpu_data->cpu_id     = cpu_id;
+        cpu_data->lapic_id   = lapic_id;
+        cpu_data->stack_canary = __stack_chk_guard;
+
+        if (cpu_id == 0) {
+            cpu_data->kernel_stack = (uint64_t)&stack_top;
+        } else {
+            // GÜVENLİK YAMASI: AP çekirdekleri için yığın ayırırken kmalloc (Tembel) yerine
+            // vmm_alloc_stack (Fiziksel) kullanıyoruz. Triple Fault engellendi.
+            void* kstack = vmm_alloc_stack(SMP_STACK_SIZE / PAGE_SIZE);
+            if (kstack) {
+                cpu_data->kernel_stack = (uint64_t)kstack + SMP_STACK_SIZE;
+            } else {
+                serial_write("[SMP] Stack OOM! Halting AP initialization.\n");
+                panic_at(__FILE__, __LINE__, KERR_MEM_OOM, "AP Stack Allocation Failed! Cannot boot CPU safely.");
+            }
+        }
+
+        void* sys_stack = vmm_alloc_stack(2); 
+        if (sys_stack) {
+            cpu_data->syscall_stack = (uint64_t)sys_stack + 8192;
+        } else {
+            panic_at(__FILE__, __LINE__, KERR_MEM_OOM, "Syscall Stack OOM!");
+        }
+
+        per_cpu_data[cpu_id] = cpu_data;
     }
 }
 
 __attribute__((no_stack_protector))
 void smp_load_gs(uint8_t cpu_id) {
     if (cpu_id >= MAX_CPUS) {
-        return;
-    } else {
-        if (!per_cpu_data[cpu_id]) {
-            return;
-        } else {
-            uint64_t addr = (uint64_t)per_cpu_data[cpu_id];
-            wrmsr(MSR_GS_BASE, addr);
-            wrmsr(MSR_KERNEL_GS_BASE, 0); 
-        }
+        panic_at("smp.c", __LINE__, KERR_OUT_OF_BOUNDS, "smp_load_gs: Invalid CPU ID!");
     }
+    if (!per_cpu_data[cpu_id]) {
+        panic_at("smp.c", __LINE__, KERR_NULL_DEREFERENCE, "smp_load_gs: Uninitialized CPU data!");
+    }
+    
+    uint64_t addr = (uint64_t)per_cpu_data[cpu_id];
+    wrmsr(MSR_GS_BASE, addr);
+    wrmsr(MSR_KERNEL_GS_BASE, 0); 
 }
 
 static void microdelay(int us) {
-    // FIX: Zamanlama uyuşmazlığı (Infinite Loop) engellendi.
-    // hal_timer_get_ticks (4ms) yerine doğrudan donanım TSC döngüleri kullanılıyor.
     uint64_t start = tsc_read_asm();
     uint64_t freq = get_tsc_freq();
     if (freq == 0) {
         freq = SMP_FALLBACK_FREQ; 
-    } else {
-        // Frequency is valid
     }
     
     uint64_t target = start + (freq / 1000000) * us;
@@ -163,8 +156,6 @@ void init_smp() {
 
     if (limit > MAX_CPUS) {
         limit = MAX_CPUS;
-    } else {
-        // Safe limit
     }
     
     int logical_id_counter = 1;
@@ -174,8 +165,6 @@ void init_smp() {
     uint64_t freq = get_tsc_freq();
     if (freq == 0) {
         freq = SMP_FALLBACK_FREQ; 
-    } else {
-        // Frequency is valid
     }
 
     for (int i = 0; i < limit; i++) {
@@ -188,8 +177,6 @@ void init_smp() {
         
         if (apic_id == cpus[0].lapic_id) {
             continue;
-        } else {
-            // Proceed with AP boot
         }
         
         prepare_cpu_data(logical_id_counter, apic_id);
@@ -197,8 +184,6 @@ void init_smp() {
         void* ap_stack = kmalloc_aligned(SMP_STACK_SIZE, 4096);
         if (!ap_stack) {
             continue;
-        } else {
-            // Stack allocated
         }
         
         *target_stack = (uint64_t)ap_stack + SMP_STACK_SIZE;
@@ -252,17 +237,16 @@ void ap_startup() {
     extern void apic_enable_local();
     apic_enable_local();
 
+    extern void paging_enable_write_protect(void);
+    paging_enable_write_protect();
+
     int my_logical_id = -1;
     for (int i = 0; i < MAX_CPUS; i++) {
         if (per_cpu_data[i]) {
             if (per_cpu_data[i]->lapic_id == my_apic) {
                 my_logical_id = i;
                 break;
-            } else {
-                // Not this CPU
             }
-        } else {
-            // Uninitialized slot
         }
     }
 

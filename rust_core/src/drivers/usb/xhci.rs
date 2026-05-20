@@ -78,6 +78,9 @@ pub fn init() -> bool {
         
         dev.enable_bus_master();
         dev.enable_memory_space();
+        
+        // YENİ: xHCI için MSI Aktif (Vector 47, CPU 0)
+        dev.enable_msi(47, 0);
 
         let bar0 = dev.get_bar(0);
         let mut base_phys = (bar0 & 0xFFFFFFF0) as u64;

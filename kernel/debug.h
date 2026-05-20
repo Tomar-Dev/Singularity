@@ -89,6 +89,11 @@ void klog_buffer_dump();
 void klog_buffer_dump_serial();
 void export_crashdump_to_nvram();
 
+// YENİ: Donanımsal Hata Ayıklama (Hardware Watchpoints) API'si
+int hw_watchpoint_set(uint64_t addr, int size, int type);
+void hw_watchpoint_clear(int index);
+void hw_watchpoint_sync_handler(registers_t* regs);
+
 #define PANIC(msg) panic_at(__FILE__, __LINE__, KERR_UNKNOWN, msg)
 #define WARN(msg) kernel_warning(__FILE__, __LINE__, msg)
 
