@@ -25,6 +25,7 @@ static bool is_valid_user_ptr(const void* ptr, size_t size) {
         // Valid base
     }
     
+    // GÜVENLİK YAMASI: Taşma (Wrap-Around) riski engellenmiştir
     if (addr > UINTPTR_MAX - size) {
         return false;
     } else {
@@ -81,7 +82,7 @@ static void sys_write(registers_t* regs) {
                 // Within page bounds
             }
         } else {
-            // Within page bounds
+            // Does not cross page boundary
         }
         
         char c = str[i];

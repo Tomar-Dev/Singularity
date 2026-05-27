@@ -43,7 +43,9 @@ void rwlock_acquire_read(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_acquire_read: called with NULL lock");
         return;
-    } else { /* Valid pointer */ }
+    } else { 
+        // Valid pointer 
+    }
     
     while (true) {
         uint64_t rflags;
@@ -57,7 +59,11 @@ void rwlock_acquire_read(rwlock_t lock) {
         {
             lock->readers++;
             spinlock_release(&lock->lock, flags);
-            if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
+            if (rflags & 0x200) { 
+                __asm__ volatile("sti" ::: "memory"); 
+            } else { 
+                // Interrupts were already disabled
+            }
             return;
         } else {
             process_t* proc = (process_t*)get_current_thread_fast();
@@ -66,22 +72,31 @@ void rwlock_acquire_read(rwlock_t lock) {
                 wait_queue_push(&lock->read_q, proc);
                 spinlock_release(&lock->lock, flags);
                 schedule();
-                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
+                if (rflags & 0x200) { 
+                    __asm__ volatile("sti" ::: "memory"); 
+                } else { 
+                    // Keep interrupts disabled
+                }
             } else {
                 spinlock_release(&lock->lock, flags);
-                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
+                if (rflags & 0x200) { 
+                    __asm__ volatile("sti" ::: "memory"); 
+                } else { 
+                    // Keep interrupts disabled
+                }
                 hal_cpu_relax();
             }
         }
     }
 }
 
-// Bulgu 1.1 & 3.2 FIX: Atomic write_waiters adjustment and consolidated release
 void rwlock_release_read(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_read: called with NULL lock");
         return;
-    } else { /* Valid */ }
+    } else { 
+        // Valid lock reference 
+    }
     
     uint64_t flags = spinlock_acquire(&lock->lock);
 
@@ -97,7 +112,7 @@ void rwlock_release_read(rwlock_t lock) {
         uint32_t skipped = 0;
         process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &skipped);
         
-        // Accurate counter synchronization
+        // GÜVENLİK YAMASI: Sayaç tutarsızlıkları ve taşmaları engellendi
         int total_removed = (next_writer ? 1 : 0) + (int)skipped;
         if (lock->write_waiters >= total_removed) {
             lock->write_waiters -= total_removed;
@@ -108,7 +123,9 @@ void rwlock_release_read(rwlock_t lock) {
         spinlock_release(&lock->lock, flags);
         if (next_writer) {
             sched_wake_task(next_writer);
-        } else { /* All waiters were zombies */ }
+        } else { 
+            // All skipped tasks were cleaned 
+        }
     } else {
         spinlock_release(&lock->lock, flags);
     }
@@ -118,7 +135,9 @@ void rwlock_acquire_write(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_acquire_write: called with NULL lock");
         return;
-    } else { /* Valid */ }
+    } else { 
+        // Valid lock reference 
+    }
     
     while (true) {
         uint64_t rflags;
@@ -129,7 +148,11 @@ void rwlock_acquire_write(rwlock_t lock) {
         if (!lock->writer_active && lock->readers == 0) {
             lock->writer_active = true;
             spinlock_release(&lock->lock, flags);
-            if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
+            if (rflags & 0x200) { 
+                __asm__ volatile("sti" ::: "memory"); 
+            } else { 
+                // Interrupts were already disabled
+            }
             return;
         } else {
             lock->write_waiters++;
@@ -139,11 +162,19 @@ void rwlock_acquire_write(rwlock_t lock) {
                 wait_queue_push(&lock->write_q, proc);
                 spinlock_release(&lock->lock, flags);
                 schedule();
-                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
+                if (rflags & 0x200) { 
+                    __asm__ volatile("sti" ::: "memory"); 
+                } else { 
+                    // Keep interrupts disabled
+                }
             } else {
                 lock->write_waiters--;
                 spinlock_release(&lock->lock, flags);
-                if (rflags & 0x200) { __asm__ volatile("sti" ::: "memory"); } else { /* CLI */ }
+                if (rflags & 0x200) { 
+                    __asm__ volatile("sti" ::: "memory"); 
+                } else { 
+                    // Keep interrupts disabled
+                }
                 hal_cpu_relax();
             }
         }
@@ -154,7 +185,9 @@ void rwlock_release_write(rwlock_t lock) {
     if (!lock) {
         panic_at("RWLOCK", 0, KERR_UNKNOWN, "rwlock_release_write: called with NULL lock");
         return;
-    } else { /* Valid */ }
+    } else { 
+        // Valid lock reference 
+    }
     
     uint64_t flags = spinlock_acquire(&lock->lock);
     lock->writer_active = false;
@@ -163,6 +196,7 @@ void rwlock_release_write(rwlock_t lock) {
         uint32_t skipped = 0;
         process_t* next_writer = wait_queue_pop_safe(&lock->write_q, &skipped);
         
+        // GÜVENLİK YAMASI: Sayaç senkronizasyon garantisi
         int total_removed = (next_writer ? 1 : 0) + (int)skipped;
         if (lock->write_waiters >= total_removed) {
             lock->write_waiters -= total_removed;
@@ -173,14 +207,18 @@ void rwlock_release_write(rwlock_t lock) {
         spinlock_release(&lock->lock, flags);
         if (next_writer) {
             sched_wake_task(next_writer);
-        } else { /* No valid writer found */ }
+        } else { 
+            // All skipped tasks were cleaned 
+        }
     } else {
-        // No writers waiting, wake all readers
         spinlock_release(&lock->lock, flags);
         while (true) {
             process_t* r = wait_queue_pop_safe(&lock->read_q, nullptr);
-            if (!r) break;
-            else { sched_wake_task(r); }
+            if (!r) {
+                break;
+            } else { 
+                sched_wake_task(r); 
+            }
         }
     }
 }

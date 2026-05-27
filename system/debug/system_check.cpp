@@ -68,19 +68,27 @@ static void print_check_end(const char* name, int status, const char* msg) {
     
     if (status == 1) {
         console_set_color(CONSOLE_COLOR_LIGHT_GREEN, CONSOLE_COLOR_BLACK);
+        console_write("[PASS]");
+        console_set_color(CONSOLE_COLOR_LIGHT_GREY, CONSOLE_COLOR_BLACK);
         if (msg && msg[0] != '\0') {
-            printf("[PASS] (%s)", msg);
-            size_t info_len = strlen(msg) + 8;
-            for(size_t i = info_len; i < 25; i++) printf(" ");
+            printf(" (%s)", msg);
+            size_t info_len = strlen(msg) + 9;
+            for(size_t i = info_len; i < 25; i++) {
+                printf(" ");
+            }
             printf("\n");
         } else {
-            printf("[PASS]                   \n");
+            printf("                   \n");
         }
     } else {
         console_set_color(CONSOLE_COLOR_LIGHT_RED, CONSOLE_COLOR_BLACK);
-        printf("[FAIL] ");
+        console_write("[FAIL]");
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-        printf("-> %-20s\n", msg ? msg : "Error");
+        if (msg && msg[0] != '\0') {
+            printf(" -> %-20s\n", msg);
+        } else {
+            printf(" -> Error\n");
+        }
     }
     framebuffer_flush();
 }
@@ -104,8 +112,11 @@ static int chk_cpu_id(const char** msg) {
 
 static int chk_fpu_avx(const char** msg) {
     if (cpu_info.has_fpu && cpu_info.has_sse2) {
-        if (cpu_info.has_avx2) { *msg = "AVX2/SSE2 Active"; }
-        else { *msg = "SSE2 Active"; }
+        if (cpu_info.has_avx2) { 
+            *msg = "AVX2/SSE2 Active"; 
+        } else { 
+            *msg = "SSE2 Active"; 
+        }
         return 1;
     } else {
         *msg = "FPU/SSE2 Missing";
@@ -301,16 +312,32 @@ static int chk_numa_nodes(const char** msg) {
 static int chk_ram_integrity(const char** msg) {
     size_t size = 1024 * 1024; 
     void* ptr = kmalloc(size);
-    if (!ptr) { *msg = "Heap OOM"; return 0; } 
+    if (!ptr) { 
+        *msg = "Heap OOM"; 
+        return 0; 
+    } else {
+        // Allocated raw memory correctly
+    }
     uint64_t* p64 = (uint64_t*)ptr;
-    for(size_t i=0; i < (size/8); i++) p64[i] = 0x55AA55AA55AA55AAULL;
+    for(size_t i = 0; i < (size / 8); i++) {
+        p64[i] = 0x55AA55AA55AA55AAULL;
+    }
     bool ok = true;
-    for(size_t i=0; i < (size/8); i++) {
-        if (p64[i] != 0x55AA55AA55AA55AAULL) { ok = false; break; }
+    for(size_t i = 0; i < (size / 8); i++) {
+        if (p64[i] != 0x55AA55AA55AA55AAULL) { 
+            ok = false; 
+            break; 
+        } else {
+            // Memory is intact
+        }
     }
     kfree(ptr);
-    if (ok) return 1;
-    *msg = "Pattern Mismatch"; return 0;
+    if (ok) {
+        return 1;
+    } else {
+        *msg = "Pattern Mismatch"; 
+        return 0;
+    }
 }
 
 static int chk_wx_enforcement(const char** msg) {
@@ -334,6 +361,7 @@ static int chk_slab_integrity(const char** msg) {
 }
 
 static int chk_gwp_asan(const char** msg) {
+    (void)msg;
     return 1; 
 }
 
@@ -379,7 +407,12 @@ static int chk_task_list(const char** msg) {
     int count = 0;
     process_t* curr = process_list_head;
     if (curr) {
-        do { count++; curr = curr->next; } while (curr != process_list_head && count < 2048);
+        do { 
+            count++; 
+            curr = curr->next; 
+        } while (curr != process_list_head && count < 2048);
+    } else {
+        // Task queue is empty
     }
     rwlock_release_read(task_list_lock);
     if (count > 0 && count < 2048) {
@@ -394,10 +427,12 @@ static int chk_task_list(const char** msg) {
 }
 
 static int chk_smp_sync(const char** msg) {
-    for(int i=0; i < (int)num_cpus; i++) {
+    for(int i = 0; i < (int)num_cpus; i++) {
         if (cpu_tick_counts[i] == 0) {
             *msg = "Core Dead";
             return 0;
+        } else {
+            // Target core synchronized successfully
         }
     }
     static char buf[16];
@@ -407,6 +442,7 @@ static int chk_smp_sync(const char** msg) {
 }
 
 static int chk_rcu_grace(const char** msg) {
+    (void)msg;
     synchronize_rcu();
     return 1;
 }
@@ -421,6 +457,7 @@ static int chk_reaper_daemon(const char** msg) {
 }
 
 static int chk_kom_handles(const char** msg) {
+    (void)msg;
     return 1; 
 }
 
@@ -437,16 +474,44 @@ static int chk_ons_tree(const char** msg) {
 
 static int chk_ons_write(const char** msg) {
     KObject* ramdisk_obj = ons_resolve("/ramdisk");
-    if (!ramdisk_obj) { *msg = "Ramdisk Missing"; return 0; }
+    if (!ramdisk_obj) { 
+        *msg = "Ramdisk Missing"; 
+        return 0; 
+    } else {
+        // Found volatile container root
+    }
+    
+    if (ramdisk_obj->type != KObjectType::CONTAINER) {
+        kobject_unref(ramdisk_obj);
+        *msg = "Invalid Container";
+        return 0;
+    } else {
+        // Valid container instance
+    }
+
     KContainer* ramdisk = (KContainer*)ramdisk_obj;
     const char* test_file = "syschk.tmp";
-    if (ramdisk->create_child(test_file, KObjectType::BLOB) == KOM_OK) {
+    
+    KVolatileBlob* test_blob = new KVolatileBlob(test_file);
+    if (!test_blob) {
+        kobject_unref(ramdisk_obj);
+        *msg = "OOM";
+        return 0;
+    } else {
+        // Volatile node instance successfully prepared
+    }
+    
+    if (ramdisk->bind(test_file, test_blob) == KOM_OK) {
         ramdisk->unbind(test_file);
-        kobject_unref(ramdisk);
+        kobject_unref(test_blob);
+        kobject_unref(ramdisk_obj);
+        *msg = "Read/Write Verified";
         return 1;
     } else {
-        kobject_unref(ramdisk);
-        *msg = "Read-Only Policy"; return 1; 
+        kobject_unref(test_blob);
+        kobject_unref(ramdisk_obj);
+        *msg = "Bind Blocked"; 
+        return 0; 
     }
 }
 
@@ -462,6 +527,7 @@ static int chk_vfs_mounts(const char** msg) {
 }
 
 static int chk_services(const char** msg) {
+    (void)msg;
     return 1; 
 }
 

@@ -6,8 +6,8 @@
 #include <stdbool.h>
 
 #define SINGULARITY_SYS_NAME  "Singularity"
-#define SINGULARITY_SYS_VER   "v6.9.7"
-#define SINGULARITY_SHELL_VER "v1.2"
+#define SINGULARITY_SYS_VER   "v6.9.8"
+#define SINGULARITY_SHELL_VER "v1.3"
 #define SINGULARITY_SYS_ARCH  "x86_64 SMP"
 
 #ifdef __cplusplus
